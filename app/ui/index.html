@@ -7,6 +7,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
 <script>
+// the saved theme has to be on <html> before the first style is computed, otherwise the window starts red
+try { const t = localStorage.getItem('h3-theme'); if (t) document.documentElement.dataset.theme = t; } catch {}
 // the window stays empty until the app has opened the section the user was in: no flash of the video page
 setTimeout(() => document.documentElement.classList.add('booted'), 1500);
 </script>
@@ -162,6 +164,9 @@ setTimeout(() => document.documentElement.classList.add('booted'), 1500);
 [hidden]{display:none!important}
 /* the layout is invisible for the first milliseconds: the app sets .booted once the saved section is opened */
 html:not(.booted) .app{visibility:hidden}
+/* while the window is still hidden nothing animates: otherwise the default red theme fades into the saved one,
+   and the video item's highlight fades out, exactly as the window appears */
+html:not(.booted) *{transition:none!important;animation:none!important}
 /* one look for every scrollbar: slim, with a line-coloured thumb. The standard properties are inherited,
    so the page scrollbar, the sidebar, the chat list and the settings column all match */
 html{scrollbar-width:thin;scrollbar-color:var(--line-2) transparent}
