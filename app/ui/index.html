@@ -537,11 +537,14 @@ details[open] summary::before{content:'－ '}
 .ag-att img{height:56px;border-radius:8px;display:block}
 .ag-att b{position:absolute;left:4px;top:4px;font-size:10px;font-family:var(--mono);background:rgba(var(--ov-rgb),.8);padding:1px 5px;border-radius:5px}
 .ag-att button{position:absolute;right:-6px;top:-6px;width:20px;height:20px;border-radius:50%;background:var(--surface-2);font-size:11px}
+/* the field takes a whole row of its own; every button sits underneath it */
 .ag-comp{display:flex;flex-wrap:wrap;gap:8px 10px;align-items:flex-end;padding:12px 18px 14px}
-.ag-comp textarea{order:-2;min-height:56px;max-height:180px;flex:1 1 0;min-width:0}
+.ag-comp textarea{order:-2;flex:1 1 100%;width:100%;min-height:56px;max-height:180px;min-width:0}
 .ag-comp #agSend{order:-1}
-.ag-comp .ag-clip,.ag-comp #agClear{padding:6px 10px;min-height:0;font-size:12.5px;border-radius:9px}
-.ag-comp .ag-clip svg{width:15px;height:15px}
+.ag-comp .ag-clip,.ag-comp #agClearIn,.ag-comp #agSend{height:38px;min-height:38px;border-radius:10px;font-size:13px}
+.ag-comp .ag-clip{padding:0 11px;min-width:44px}
+.ag-comp #agClearIn{padding:0 14px}
+.ag-comp .ag-clip svg{width:16px;height:16px}
 .ag-clip{padding:12px;display:grid;place-items:center}
 .ag-clip.rec{background:rgba(var(--accent-rgb),.25);border-color:var(--accent);color:#fff;animation:pulse 1s infinite}
 .ag-audio{margin:0 18px;padding:10px 12px;border-radius:12px;background:var(--bg-2);border:1px solid var(--line);display:grid;gap:6px}
@@ -1025,7 +1028,7 @@ details[open] summary::before{content:'－ '}
             <button class="btn ag-clip" type="button" id="agMic" title="Голосовой ввод: нажмите, говорите, нажмите ещё раз">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
             </button>
-            <button class="btn" type="button" id="agClear" title="Очистить поле ввода">Очистить</button>
+            <button class="btn" type="button" id="agClearIn" title="Очистить поле ввода">Очистить</button>
             <textarea id="agIn" rows="2" placeholder="Опишите сцену, сценарий или вставьте реплики… (Enter — отправить, Shift+Enter — новая строка)"></textarea>
             <button class="btn pri" id="agSend">Отправить</button>
           </div>
@@ -4333,7 +4336,7 @@ async function clipText() {
   try { const t = await navigator.clipboard.readText(); if (t) return t; } catch {}
   try { return (await (await fetch('/api/clipboard', { method: 'POST' })).json()).text || ''; } catch { return ''; }
 }
-$('#agClear').onclick = () => { const ta = $('#agIn'); ta.value = ''; ta.dispatchEvent(new Event('input', { bubbles: true })); ta.focus(); };
+$('#agClearIn').onclick = () => { const ta = $('#agIn'); ta.value = ''; ta.dispatchEvent(new Event('input', { bubbles: true })); ta.focus(); };
 
 // right-click menu: copy / cut / paste / select all in every text field, copy on any selectable text
 (() => {
