@@ -117,7 +117,7 @@
 .cw-wide textarea{min-height:110px}
 .qw-slots{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
 .qw-slots.one{grid-template-columns:1fr}
-.qw-slots .drop{height:130px}
+.qw-slots .drop{height:var(--qw-h,130px)}
 .qw-slots .drop .ph svg{width:24px;height:24px}
 .cw-media{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px}
 .cw-file{display:grid;gap:3px;justify-items:center;text-align:center;padding:8px;border:1.5px dashed var(--line-2);border-radius:14px;background:var(--bg-2);cursor:pointer;transition:.15s}
@@ -245,7 +245,8 @@ button{cursor:pointer;border:0;background:none}
 /* scrollbar-gutter keeps the gutter reserved in every view, so the page width never jumps and the tray tab knows its width */
 .main{overflow:auto;scrollbar-gutter:stable;overscroll-behavior:contain}
 /* the agent page never scrolls, so it does not need the reserved gutter: its right column sits on the window edge */
-body.ag-page .main{scrollbar-gutter:auto}
+/* pages that fill the window never scroll, so they do not need the reserved gutter: their right side goes to the edge */
+body.fit-page .main{scrollbar-gutter:auto}
 .view{display:none;padding:22px clamp(20px,2.2vw,44px) 40px}
 .view.active{display:block;animation:fade .25s ease}
 @keyframes fade{from{opacity:0}to{opacity:1}}
@@ -541,6 +542,10 @@ details[open] summary::before{content:'－ '}
 #view-agent .ag-grid{flex:1;min-height:0;align-items:stretch}
 #view-agent .ag-hist,#view-agent .ag-chat,#view-agent .ag-side{height:auto;min-height:0}
 #view-agent .ag-side{padding-right:2px}
+/* "Правка картинки" fills the window as well: the long form scrolls inside its column, the preview stays put */
+#view-qwen.active{display:flex;flex-direction:column;height:100%;padding-right:0}
+#view-qwen .grid{flex:1;min-height:0;align-items:stretch}
+#view-qwen .col{min-height:0;overflow-y:auto;align-content:start;padding-right:6px}
 .ag-grid .gresize{right:calc(var(--aw) - 3px)}
 .ag-hist{display:flex;flex-direction:column;gap:10px;height:calc(calc(var(--vh,1vh)*100) - 150px);min-height:480px;padding:12px}
 .ag-hlist{flex:1;overflow:auto;display:flex;flex-direction:column;gap:4px}
@@ -749,7 +754,13 @@ details[open] summary::before{content:'－ '}
 .toast{position:fixed;bottom:22px;left:50%;transform:translate(-50%,20px);opacity:0;background:var(--surface-2);border:1px solid var(--line-2);padding:11px 18px;border-radius:12px;font-weight:600;font-size:13px;transition:.25s;z-index:60;box-shadow:0 12px 30px rgba(0,0,0,.5);pointer-events:none;max-width:calc(100% - 32px)}
 .toast.on{opacity:1;transform:translate(-50%,0)}
 
-@media (max-width:1100px){.grid{grid-template-columns:1fr}.preview{position:static}.gresize{display:none}}
+@media (max-width:1100px){
+  .grid{grid-template-columns:1fr}.preview{position:static}.gresize{display:none}
+  /* one column: the page scrolls again and keeps its usual padding */
+  #view-qwen.active{display:block;height:auto;padding-right:clamp(20px,2.2vw,44px)}
+  #view-qwen .grid{align-items:start}
+  #view-qwen .col{overflow:visible;padding-right:0}
+}
 @media (max-width:760px){
   .app{grid-template-columns:1fr}
   .topbar{grid-template-columns:1fr}
@@ -1684,8 +1695,9 @@ $$('.nav[data-view]').forEach(b => b.onclick = () => {
   let cur = null;
   const place = () => {
     const view = main.querySelector('.view.active');
-    // the agent page fills the window and never scrolls: drop the reserved scrollbar gutter there
-    document.body.classList.toggle('ag-page', !!view && view.id === 'view-agent');
+    // pages that fill the window never scroll: drop the reserved scrollbar gutter there
+    const fits = !!view && (view.id === 'view-agent' || (view.id === 'view-qwen' && innerWidth > 1100));
+    document.body.classList.toggle('fit-page', fits);
     const head = view && view.querySelector('.head');
     if (!head) { if (cur) { cur._home.prepend(cur); cur = null; } return; }
     if (head === cur) return;
@@ -1698,6 +1710,8 @@ $$('.nav[data-view]').forEach(b => b.onclick = () => {
   new MutationObserver(muts => {
     if (muts.some(m => m.target.classList && m.target.classList.contains('view'))) place();
   }).observe(main, { attributes: true, attributeFilter: ['class'], subtree: true });
+  // the layout switches at 1100px: whether that view fills the window depends on the width
+  addEventListener('resize', place);
 })();
 
 /* ---------- resolution / duration math (from the workflows) ---------- */
@@ -5654,6 +5668,7 @@ const imgSeedForm = (S, fd) => { if (S.seedFixed && S.seed) fd.append('seed', S.
           <label class="drop qw-s2" id="qwDrop2" title="Ещё одна картинка (референс, по желанию)"><input type="file" accept="image/*"><div class="ph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></div><span class="tag" hidden>2</span><button class="x" type="button">✕</button></label>
           <label class="drop qw-s3" id="qwDrop3" title="Ещё одна картинка (референс, по желанию)"><input type="file" accept="image/*"><div class="ph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></div><span class="tag" hidden>3</span><button class="x" type="button">✕</button></label>
         </div>
+        <div class="hresize" id="qwResize" title="Потяните вверх или вниз, чтобы изменить высоту картинок. Двойной клик — вернуть как было"></div>
         <div class="hint qw-morehint" style="margin-top:8px"></div></div>
       <div class="card"><div class="card-h"><h3><span class="n">2</span>Что делаем</h3></div>
         <div class="seg qw-kind" style="grid-template-columns:repeat(3,1fr)"><button data-k="edit">Править картинку<small>изменить по описанию</small></button><button data-k="sheet">Лист персонажа<small>4 или 6 видов с разных сторон</small></button><button data-k="story">Раскадровка<small>история по картинкам героя и места</small></button></div>
@@ -5750,6 +5765,26 @@ const imgSeedForm = (S, fd) => { if (S.seedFixed && S.seed) fd.append('seed', S.
   }
   imgSeedWire(root, S); upd();
   IMG.qwen = { fill: it => { if (it.engine) S.engine = it.engine; if (it.frames !== undefined) S.frames = !!it.frames; if (String(it.sub || '').startsWith('Раскадровка по кадрам')) S.frames = true; else if (String(it.sub || '').startsWith('Раскадровка')) S.frames = false; if (it.kind === 'story' || String(it.sub || '').startsWith('Раскадровка')) { S.kind = 'story'; $('.qw-prompt', root).value = it.prompt || ''; } else if (it.sub === 'Лист персонажа') S.kind = 'sheet'; else { S.kind = 'edit'; $('.qw-prompt', root).value = it.prompt || ''; } upd(); } };
+})();
+
+/* "Правка картинки": a grip under the picture slots changes their height (like the first/last frames), remembered */
+(() => {
+  const root = document.documentElement, KEY = 'h3.qwh', bar = $('#qwResize');
+  const clampH = v => Math.round(Math.min(Math.max(v, 80), 420));
+  try { const v = +localStorage.getItem(KEY); if (v >= 80) root.style.setProperty('--qw-h', v + 'px'); } catch {}
+  bar.addEventListener('pointerdown', e => { e.preventDefault(); bar.setPointerCapture(e.pointerId); bar.classList.add('drag'); });
+  bar.addEventListener('pointermove', e => {
+    if (!bar.hasPointerCapture(e.pointerId)) return;
+    root.style.setProperty('--qw-h', clampH(e.clientY - $('#qwDrop').getBoundingClientRect().top) + 'px');
+  });
+  bar.addEventListener('pointerup', e => {
+    bar.releasePointerCapture(e.pointerId); bar.classList.remove('drag');
+    try { localStorage.setItem(KEY, parseInt(root.style.getPropertyValue('--qw-h'))); } catch {}
+  });
+  bar.addEventListener('dblclick', () => {
+    root.style.removeProperty('--qw-h');
+    try { localStorage.removeItem(KEY); } catch {}
+  });
 })();
 
 
