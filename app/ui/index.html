@@ -156,6 +156,13 @@
 .themes-set button.on{box-shadow:0 0 0 2px var(--surface),0 0 0 4px rgba(var(--accent-rgb),.5)}
 *{box-sizing:border-box;margin:0;padding:0}
 [hidden]{display:none!important}
+/* one look for every scrollbar: slim, with a line-coloured thumb. The standard properties are inherited,
+   so the page scrollbar, the sidebar, the chat list and the settings column all match */
+html{scrollbar-width:thin;scrollbar-color:var(--line-2) transparent}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:99px}
+::-webkit-scrollbar-thumb:hover{background:var(--dim)}
 /* the window itself never scrolls: .main is the only scroll container (no second scrollbar at the window edge) */
 html,body{height:100%;overflow:hidden}
 body{
@@ -549,11 +556,7 @@ details[open] summary::before{content:'－ '}
 .ag-hempty{font-size:12px;color:var(--dim);text-align:center;padding:20px 6px}
 .ag-chat{display:flex;flex-direction:column;height:calc(calc(var(--vh,1vh)*100) - 150px);min-height:480px;padding:0;overflow:hidden}
 /* the right column of the agent is as tall as the chat and scrolls on its own, so the page itself never moves */
-.ag-side{height:calc(calc(var(--vh,1vh)*100) - 150px);min-height:480px;overflow-y:auto;overscroll-behavior:contain;align-content:start;padding-right:6px;scrollbar-width:thin;scrollbar-color:var(--line-2) transparent}
-.ag-side::-webkit-scrollbar{width:8px}
-.ag-side::-webkit-scrollbar-track{background:transparent}
-.ag-side::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:99px}
-.ag-side::-webkit-scrollbar-thumb:hover{background:var(--dim)}
+.ag-side{height:calc(calc(var(--vh,1vh)*100) - 150px);min-height:480px;overflow-y:auto;overscroll-behavior:contain;align-content:start;padding-right:6px}
 .ag-msgs{flex:1;overflow:auto;padding:18px;display:flex;flex-direction:column;gap:14px}
 .ag-empty{margin:auto;display:grid;gap:8px;text-align:center;color:var(--muted);max-width:460px}
 .ag-empty b{color:var(--text);font-size:15px}
