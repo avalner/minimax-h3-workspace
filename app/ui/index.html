@@ -273,15 +273,17 @@ body.nosb-on #sbRs{display:none}
 .opt[data-opt="cloud"],#optCloudShow,#mdCloudBox{display:none!important}
 body.cloud-on #mdCloudBox{display:block!important}
 
-/* pinned bar of all video and image sections: the first row of the header, above the title of the open section */
-#modeBar{grid-column:2;grid-row:1;display:flex;align-items:center;gap:4px;min-width:0;overflow-x:auto;white-space:nowrap;scrollbar-width:none;padding:9px clamp(20px,2.2vw,44px) 0 56px}
+/* the sections are plain links, not buttons: only the text and a thin underline show the current one */
+#modeBar{grid-column:2;grid-row:1;display:flex;align-items:center;gap:2px;min-width:0;overflow-x:auto;white-space:nowrap;scrollbar-width:none;padding:9px clamp(20px,2.2vw,44px) 0 56px}
 .app.nosb #modeBar{grid-column:1/-1}
 #modeBar::-webkit-scrollbar{display:none}
-#modeBar .mb{flex:none;display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 9px;border-radius:8px;border:1px solid var(--line-2);background:var(--surface);color:var(--text);font-size:12px;font-weight:600;cursor:pointer;opacity:.85}
-#modeBar .mb svg{width:14px;height:14px}
-#modeBar .mb:hover{opacity:1;border-color:var(--accent)}
-#modeBar .mb.on{opacity:1;border-color:var(--accent);background:var(--accent-soft,var(--surface-2));color:var(--accent)}
-#modeBar .mb-sep{flex:none;width:1px;height:16px;background:var(--line-2);margin:0 3px}
+#modeBar .mb{flex:none;display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border:0;background:none;color:var(--muted);font-size:12.5px;font-weight:600;cursor:pointer;text-decoration:none;text-underline-offset:4px}
+#modeBar .mb svg{width:14px;height:14px;opacity:.8}
+#modeBar .mb:hover{color:var(--text);text-decoration:underline;text-decoration-thickness:1px}
+#modeBar .mb.on{color:var(--accent)}
+#modeBar .mb.on svg{opacity:1}
+#modeBar .mb.on:hover{text-decoration:none}
+#modeBar .mb-sep{flex:none;width:3px;height:3px;border-radius:50%;background:var(--line-2);margin:0 5px}
 @media (max-width:1000px){#modeBar{display:none}}
 
 /* sidebar */
