@@ -542,10 +542,6 @@ details[open] summary::before{content:'－ '}
 #view-agent .ag-grid{flex:1;min-height:0;align-items:stretch}
 #view-agent .ag-hist,#view-agent .ag-chat,#view-agent .ag-side{height:auto;min-height:0}
 #view-agent .ag-side{padding-right:2px}
-/* "Правка картинки" fills the window as well: the long form scrolls inside its column, the preview stays put */
-#view-qwen.active{display:flex;flex-direction:column;height:100%;padding-right:0}
-#view-qwen .grid{flex:1;min-height:0;align-items:stretch}
-#view-qwen .col{min-height:0;overflow-y:auto;align-content:start;padding-right:6px}
 .ag-grid .gresize{right:calc(var(--aw) - 3px)}
 .ag-hist{display:flex;flex-direction:column;gap:10px;height:calc(calc(var(--vh,1vh)*100) - 150px);min-height:480px;padding:12px}
 .ag-hlist{flex:1;overflow:auto;display:flex;flex-direction:column;gap:4px}
@@ -754,13 +750,7 @@ details[open] summary::before{content:'－ '}
 .toast{position:fixed;bottom:22px;left:50%;transform:translate(-50%,20px);opacity:0;background:var(--surface-2);border:1px solid var(--line-2);padding:11px 18px;border-radius:12px;font-weight:600;font-size:13px;transition:.25s;z-index:60;box-shadow:0 12px 30px rgba(0,0,0,.5);pointer-events:none;max-width:calc(100% - 32px)}
 .toast.on{opacity:1;transform:translate(-50%,0)}
 
-@media (max-width:1100px){
-  .grid{grid-template-columns:1fr}.preview{position:static}.gresize{display:none}
-  /* one column: the page scrolls again and keeps its usual padding */
-  #view-qwen.active{display:block;height:auto;padding-right:clamp(20px,2.2vw,44px)}
-  #view-qwen .grid{align-items:start}
-  #view-qwen .col{overflow:visible;padding-right:0}
-}
+@media (max-width:1100px){.grid{grid-template-columns:1fr}.preview{position:static}.gresize{display:none}}
 @media (max-width:760px){
   .app{grid-template-columns:1fr}
   .topbar{grid-template-columns:1fr}
@@ -1695,9 +1685,8 @@ $$('.nav[data-view]').forEach(b => b.onclick = () => {
   let cur = null;
   const place = () => {
     const view = main.querySelector('.view.active');
-    // pages that fill the window never scroll: drop the reserved scrollbar gutter there
-    const fits = !!view && (view.id === 'view-agent' || (view.id === 'view-qwen' && innerWidth > 1100));
-    document.body.classList.toggle('fit-page', fits);
+    // the agent page fills the window and never scrolls: drop the reserved scrollbar gutter there
+    document.body.classList.toggle('fit-page', !!view && view.id === 'view-agent');
     const head = view && view.querySelector('.head');
     if (!head) { if (cur) { cur._home.prepend(cur); cur = null; } return; }
     if (head === cur) return;
@@ -5767,11 +5756,23 @@ const imgSeedForm = (S, fd) => { if (S.seedFixed && S.seed) fd.append('seed', S.
   IMG.qwen = { fill: it => { if (it.engine) S.engine = it.engine; if (it.frames !== undefined) S.frames = !!it.frames; if (String(it.sub || '').startsWith('Раскадровка по кадрам')) S.frames = true; else if (String(it.sub || '').startsWith('Раскадровка')) S.frames = false; if (it.kind === 'story' || String(it.sub || '').startsWith('Раскадровка')) { S.kind = 'story'; $('.qw-prompt', root).value = it.prompt || ''; } else if (it.sub === 'Лист персонажа') S.kind = 'sheet'; else { S.kind = 'edit'; $('.qw-prompt', root).value = it.prompt || ''; } upd(); } };
 })();
 
-/* "Правка картинки": a grip under the picture slots changes their height (like the first/last frames), remembered */
+/* "Правка картинки": a grip under the picture slots changes their height (like the first/last frames).
+   With no height of the user's own, the slots start small enough for the whole page to fit the window. */
 (() => {
   const root = document.documentElement, KEY = 'h3.qwh', bar = $('#qwResize');
-  const clampH = v => Math.round(Math.min(Math.max(v, 80), 420));
-  try { const v = +localStorage.getItem(KEY); if (v >= 80) root.style.setProperty('--qw-h', v + 'px'); } catch {}
+  const clampH = v => Math.round(Math.min(Math.max(v, 60), 420));
+  const own = () => { try { return +localStorage.getItem(KEY) >= 60; } catch { return false; } };
+  try { const v = +localStorage.getItem(KEY); if (v >= 60) root.style.setProperty('--qw-h', v + 'px'); } catch {}
+  // shrink the slots by exactly the overflow of the page, down to the minimum
+  const fit = () => {
+    if (own()) return;
+    root.style.removeProperty('--qw-h');
+    requestAnimationFrame(() => {
+      if (!$('#view-qwen').classList.contains('active')) return;
+      const main = $('.main'), over = main.scrollHeight - main.clientHeight;
+      if (over > 0) root.style.setProperty('--qw-h', clampH($('#qwDrop').getBoundingClientRect().height - over) + 'px');
+    });
+  };
   bar.addEventListener('pointerdown', e => { e.preventDefault(); bar.setPointerCapture(e.pointerId); bar.classList.add('drag'); });
   bar.addEventListener('pointermove', e => {
     if (!bar.hasPointerCapture(e.pointerId)) return;
@@ -5784,7 +5785,10 @@ const imgSeedForm = (S, fd) => { if (S.seedFixed && S.seed) fd.append('seed', S.
   bar.addEventListener('dblclick', () => {
     root.style.removeProperty('--qw-h');
     try { localStorage.removeItem(KEY); } catch {}
+    fit();
   });
+  $('.nav[data-view="qwen"]').addEventListener('click', fit);
+  addEventListener('resize', () => { if ($('#view-qwen').classList.contains('active')) fit(); });
 })();
 
 
