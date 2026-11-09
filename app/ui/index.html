@@ -1702,11 +1702,13 @@ $$('.nav[data-view]').forEach(b => b.onclick = () => {
     document.body.classList.toggle('fit-page', !!view && view.id === 'view-agent');
     // remember the opened section: a reload (F5 / Ctrl+R) comes back to it instead of the video page
     if (view) { try { localStorage.setItem('h3.view', view.id.replace(/^view-/, '')); } catch {} }
-    const head = view && view.querySelector('.head');
+    // the active section's head is either still inside it or already moved into the top bar
+    const inView = view && view.querySelector('.head');
+    const head = inView || (cur && cur._home === view ? cur : null);
     if (!head) { if (cur) { cur._home.prepend(cur); cur = null; } return; }
     if (head === cur) return;
     if (cur) cur._home.prepend(cur);
-    cur = head; head._home = head.parentElement;
+    cur = head; head._home = view;
     slot.append(head);
   };
   place();
