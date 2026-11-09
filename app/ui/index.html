@@ -1687,6 +1687,8 @@ $$('.nav[data-view]').forEach(b => b.onclick = () => {
     const view = main.querySelector('.view.active');
     // the agent page fills the window and never scrolls: drop the reserved scrollbar gutter there
     document.body.classList.toggle('fit-page', !!view && view.id === 'view-agent');
+    // remember the opened section: a reload (F5 / Ctrl+R) comes back to it instead of the video page
+    if (view) { try { localStorage.setItem('h3.view', view.id.replace(/^view-/, '')); } catch {} }
     const head = view && view.querySelector('.head');
     if (!head) { if (cur) { cur._home.prepend(cur); cur = null; } return; }
     if (head === cur) return;
@@ -1694,6 +1696,8 @@ $$('.nav[data-view]').forEach(b => b.onclick = () => {
     cur = head; head._home = head.parentElement;
     slot.append(head);
   };
+  // what was open before the reload: read before the first place() overwrites it
+  let wasOpen = ''; try { wasOpen = localStorage.getItem('h3.view') || ''; } catch {}
   place();
   // sections are shown by toggling .active, so this catches nav clicks, goTo() and presets alike
   new MutationObserver(muts => {
@@ -1701,6 +1705,9 @@ $$('.nav[data-view]').forEach(b => b.onclick = () => {
   }).observe(main, { attributes: true, attributeFilter: ['class'], subtree: true });
   // the layout switches at 1100px: whether that view fills the window depends on the width
   addEventListener('resize', place);
+  // come back to the section that was open (its own click handlers run, as if the user pressed it)
+  const back = wasOpen && $(`.nav[data-view="${wasOpen}"]`);
+  if (back && !back.hidden && !back.disabled) back.click();
 })();
 
 /* ---------- resolution / duration math (from the workflows) ---------- */
