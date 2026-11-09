@@ -237,6 +237,8 @@ button{cursor:pointer;border:0;background:none}
 /* main */
 /* scrollbar-gutter keeps the gutter reserved in every view, so the page width never jumps and the tray tab knows its width */
 .main{overflow:auto;scrollbar-gutter:stable;overscroll-behavior:contain}
+/* the agent page never scrolls, so it does not need the reserved gutter: its right column sits on the window edge */
+body.ag-page .main{scrollbar-gutter:auto}
 .view{display:none;padding:22px clamp(20px,2.2vw,44px) 40px}
 .view.active{display:block;animation:fade .25s ease}
 @keyframes fade{from{opacity:0}to{opacity:1}}
@@ -528,9 +530,10 @@ details[open] summary::before{content:'－ '}
 .ag-grid{position:relative;display:grid;grid-template-columns:230px minmax(0,1fr) var(--aw);gap:16px;align-items:start}
 /* the agent view fills the window exactly: the three columns share its height and scroll inside themselves,
    so no magic number for the header and no page scrollbar whatever the window size or zoom is */
-#view-agent.active{display:flex;flex-direction:column;height:100%}
+#view-agent.active{display:flex;flex-direction:column;height:100%;padding-right:0}
 #view-agent .ag-grid{flex:1;min-height:0;align-items:stretch}
 #view-agent .ag-hist,#view-agent .ag-chat,#view-agent .ag-side{height:auto;min-height:0}
+#view-agent .ag-side{padding-right:2px}
 .ag-grid .gresize{right:calc(var(--aw) - 3px)}
 .ag-hist{display:flex;flex-direction:column;gap:10px;height:calc(calc(var(--vh,1vh)*100) - 150px);min-height:480px;padding:12px}
 .ag-hlist{flex:1;overflow:auto;display:flex;flex-direction:column;gap:4px}
@@ -607,7 +610,7 @@ details[open] summary::before{content:'－ '}
   .ag-grid>.col{grid-column:1/-1}
   .ag-grid .gresize{display:none}
   /* stacked: the columns no longer share one screen height, the page scrolls instead */
-  #view-agent.active{display:block;height:auto}
+  #view-agent.active{display:block;height:auto;padding-right:clamp(20px,2.2vw,44px)}
   #view-agent .ag-grid{align-items:start}
   #view-agent .ag-chat,#view-agent .ag-hist{height:calc(calc(var(--vh,1vh)*100) - 150px);min-height:480px}
   .ag-side{height:auto;min-height:0;overflow:visible;padding-right:0}
@@ -1678,6 +1681,8 @@ $$('.nav[data-view]').forEach(b => b.onclick = () => {
   let cur = null;
   const place = () => {
     const view = main.querySelector('.view.active');
+    // the agent page fills the window and never scrolls: drop the reserved scrollbar gutter there
+    document.body.classList.toggle('ag-page', !!view && view.id === 'view-agent');
     const head = view && view.querySelector('.head');
     if (!head) { if (cur) { cur._home.prepend(cur); cur = null; } return; }
     if (head === cur) return;
