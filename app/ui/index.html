@@ -173,7 +173,9 @@ button{cursor:pointer;border:0;background:none}
 .app{display:grid;grid-template-columns:248px 1fr;height:100%}
 
 /* sidebar */
-.side{background:rgba(var(--bg2-rgb),.7);border-right:1px solid var(--line);display:flex;flex-direction:column;padding:20px 14px;gap:6px;backdrop-filter:blur(12px);overflow-y:auto;min-height:0}
+.side{background:rgba(var(--bg2-rgb),.7);border-right:1px solid var(--line);display:flex;flex-direction:column;backdrop-filter:blur(12px);overflow:hidden;min-height:0}
+/* the navigation scrolls on its own; the computer panel under it never leaves the screen */
+.side-scroll{display:flex;flex-direction:column;gap:6px;flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:20px 14px 8px}
 .brand{display:flex;align-items:center;gap:12px;padding:4px 8px 22px}
 .brand-mark{width:38px;height:38px;border-radius:12px;background:var(--grad);display:grid;place-items:center;box-shadow:0 8px 24px rgba(var(--accent-rgb),.35)}
 .brand-name{font-weight:800;font-size:17px;letter-spacing:-.01em}
@@ -196,7 +198,17 @@ button{cursor:pointer;border:0;background:none}
 .nav .badge{margin-left:auto;font-size:10.5px;padding:2px 7px;border-radius:99px;background:var(--surface-2);color:var(--dim);font-weight:700}
 .nav[disabled]{opacity:.55;cursor:default}
 .nav[disabled]:hover{background:none;color:var(--muted)}
-.side-foot{margin-top:auto;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:13px 14px;display:grid;gap:8px}
+.side-foot{margin:6px 14px 14px;flex:none;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:11px 13px;display:flex;flex-direction:column;gap:8px}
+.sf-head{display:flex;align-items:center;gap:7px;width:100%;padding:0;text-align:left;font-weight:700;font-size:12.5px;color:var(--muted)}
+.sf-head:hover{color:var(--text)}
+.sf-head .dot{margin:0;flex:none}
+.sf-mini{display:none;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mono);font-size:10.5px;font-weight:500;color:var(--dim)}
+.sf-chev{width:14px;height:14px;flex:none;margin-left:auto;opacity:.65;transition:transform .15s}
+.sf-body{display:grid;gap:8px}
+.side-foot.collapsed .sf-title{display:none}
+.side-foot.collapsed .sf-mini{display:block}
+.side-foot.collapsed .sf-body{display:none}
+.side-foot.collapsed .sf-chev{transform:rotate(-90deg)}
 .stat{display:flex;justify-content:space-between;font-size:12.5px;color:var(--muted)}
 .stat b{color:var(--text);font-weight:700}
 .dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3px rgba(63,209,139,.18);margin-right:7px;vertical-align:1px}
@@ -207,7 +219,7 @@ button{cursor:pointer;border:0;background:none}
 .meter{display:grid;gap:5px}
 .side-foot .stat b{font-variant-numeric:tabular-nums}
 .side-foot .stat small{color:var(--dim);font-size:11px}
-@media (max-height:760px){.side-foot{gap:6px;padding:10px 12px}.side-foot .stat{font-size:11.5px}}
+@media (max-height:760px){.side-foot{gap:6px;padding:9px 11px}.side-foot .stat{font-size:11.5px}}
 
 /* main */
 /* scrollbar-gutter keeps the gutter reserved in every view, so the page width never jumps and the tray tab knows its width */
@@ -708,6 +720,7 @@ details[open] summary::before{content:'－ '}
 <div class="app">
 
   <aside class="side">
+    <div class="side-scroll">
     <div class="brand">
       <div class="brand-mark">
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"><path d="M3 12h2M7 7v10M11 4v16M15 8v8M19 10v4M21 12h0"/></svg>
@@ -795,16 +808,26 @@ details[open] summary::before{content:'－ '}
       Настройки
     </button>
 
-    <div class="side-foot" id="sysBox" title="Нагрузка компьютера, обновляется каждые 2 секунды">
-      <div class="stat"><span><span class="dot" id="engDot"></span>Движок</span><b id="engTxt">запущен</b></div>
-      <div class="stat"><span>Видеокарта</span><b id="gpuName">—</b></div>
-      <div class="meter"><div class="stat"><span>Нагрузка GPU</span><b id="gpuLoad">—</b></div><div class="vram"><i id="gpuBar"></i></div></div>
-      <div class="meter"><div class="stat"><span>Видеопамять</span><b id="vramTxt">—</b></div><div class="vram"><i id="vramBar"></i></div></div>
-      <div class="meter"><div class="stat"><span>Процессор</span><b id="cpuTxt">—</b></div><div class="vram"><i id="cpuBar"></i></div></div>
-      <div class="meter"><div class="stat"><span>Память (ОЗУ)</span><b id="ramTxt">—</b></div><div class="vram"><i id="ramBar"></i></div></div>
-      <div class="stat" id="tempRow" hidden><span>Температура GPU</span><b id="gpuTemp">—</b></div>
-      <div class="stat" id="powerRow" hidden><span>Питание GPU</span><b id="gpuPower">—</b></div>
-      <div class="stat"><span>Диск <small id="diskName"></small></span><b id="diskTxt">—</b></div>
+    </div><!-- /side-scroll -->
+
+    <div class="side-foot" id="sysBox">
+      <button class="sf-head" id="sfToggle" type="button" aria-expanded="true" aria-label="Нагрузка компьютера — свернуть или развернуть">
+        <span class="dot" id="engDot"></span>
+        <span class="sf-title">Компьютер</span>
+        <span class="sf-mini" id="sfMini">GPU —</span>
+        <svg class="sf-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+      </button>
+      <div class="sf-body">
+        <div class="stat"><span>Движок</span><b id="engTxt">запущен</b></div>
+        <div class="stat"><span>Видеокарта</span><b id="gpuName">—</b></div>
+        <div class="meter"><div class="stat"><span>Нагрузка GPU</span><b id="gpuLoad">—</b></div><div class="vram"><i id="gpuBar"></i></div></div>
+        <div class="meter"><div class="stat"><span>Видеопамять</span><b id="vramTxt">—</b></div><div class="vram"><i id="vramBar"></i></div></div>
+        <div class="meter"><div class="stat"><span>Процессор</span><b id="cpuTxt">—</b></div><div class="vram"><i id="cpuBar"></i></div></div>
+        <div class="meter"><div class="stat"><span>Память (ОЗУ)</span><b id="ramTxt">—</b></div><div class="vram"><i id="ramBar"></i></div></div>
+        <div class="stat" id="tempRow" hidden><span>Температура GPU</span><b id="gpuTemp">—</b></div>
+        <div class="stat" id="powerRow" hidden><span>Питание GPU</span><b id="gpuPower">—</b></div>
+        <div class="stat"><span>Диск <small id="diskName"></small></span><b id="diskTxt">—</b></div>
+      </div>
     </div>
   </aside>
 
@@ -1578,9 +1601,23 @@ async function pollSystem() {
     meter('#cpuTxt', '#cpuBar', s.cpu, s.cpu != null ? `${Math.round(s.cpu)} %` : '—');
     meter('#ramTxt', '#ramBar', s.ram.used_gb / s.ram.total_gb * 100, `${g1(s.ram.used_gb)} / ${g1(s.ram.total_gb)} ГБ`);
     if (s.disk) { $('#diskName').textContent = s.disk.drive; $('#diskTxt').textContent = `свободно ${s.disk.free_gb} ГБ`; }
+    // one line of numbers for the collapsed panel: the card folds to a strip on short windows
+    $('#sfMini').textContent = gpu && gpu.util != null
+      ? `GPU ${Math.round(gpu.util)}% · ${g1(gpu.vram_used_gb)}/${g1(gpu.vram_total_gb)} ГБ`
+      : `ЦП ${s.cpu != null ? Math.round(s.cpu) + '%' : '—'}`;
   } catch { /* the server is restarting; try again on the next tick */ }
 }
 setInterval(pollSystem, 2000);
+
+/* the computer panel is pinned under the scrolling navigation; on short windows it starts folded */
+(() => {
+  const box = $('#sysBox'), head = $('#sfToggle'), KEY = 'h3-sysbox';
+  let open = innerHeight >= 800;
+  try { const v = localStorage.getItem(KEY); if (v !== null) open = v === '1'; } catch {}
+  const paint = () => { box.classList.toggle('collapsed', !open); head.setAttribute('aria-expanded', String(open)); };
+  head.onclick = () => { open = !open; paint(); try { localStorage.setItem(KEY, open ? '1' : '0'); } catch {} };
+  paint();
+})();
 const normItem = it => ({ ...it, date: new Date(it.date) });
 
 /* ---------- navigation ---------- */
