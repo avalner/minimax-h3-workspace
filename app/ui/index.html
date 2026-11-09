@@ -238,13 +238,13 @@ button{cursor:pointer;border:0;background:none}
 .app.nosb .side{display:none}
 body.sb-drag{user-select:none;cursor:col-resize}
 
-/* one header for the whole window: brand + section title, and the pinned bar of all sections under them */
+/* one header for the whole window: the brand on the left, then the pinned bar of all sections over the section title */
 .topbar{grid-column:1/-1;grid-row:1;display:grid;grid-template-columns:var(--sbw,248px) minmax(0,1fr);grid-template-rows:auto auto;align-items:center;border-bottom:1px solid var(--line);background:rgba(var(--bg2-rgb),.86);backdrop-filter:blur(14px);z-index:20}
-.topbar .brand{padding:8px 12px;gap:8px}
+.topbar .brand{grid-column:1;grid-row:1/3;padding:8px 12px;gap:8px}
 .topbar .brand-name{line-height:1.2}
 .topbar .brand-sub{font-size:11px;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .topbar .brand>div:last-child{min-width:0}
-.tb-head{min-width:0;padding:9px clamp(20px,2.2vw,44px) 9px 56px}
+.tb-head{grid-column:2;grid-row:2;min-width:0;padding:4px clamp(20px,2.2vw,44px) 10px 56px}
 .tb-head .head{display:flex;align-items:center;justify-content:space-between;gap:24px;width:100%;margin:0;padding:0}
 .tb-head .head>div{min-width:0}
 .tb-head .head>div:first-child{flex:1 1 auto}
@@ -258,10 +258,10 @@ body.sb-drag{user-select:none;cursor:col-resize}
 .tb-head .pr-head p{margin-top:2px;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .app.nosb .topbar{grid-template-columns:minmax(0,1fr)}
 .app.nosb .topbar .brand{display:none}
-.app.nosb .tb-head{padding-left:56px}
+.app.nosb .tb-head{grid-column:1/-1;padding-left:56px}
 
-/* the menu button floats at the left edge of the header; the thin line on the sidebar edge changes its width */
-#sbToggle{position:fixed;left:calc(var(--sbw,248px) + 8px);top:14px;z-index:36;width:30px;height:30px;padding:0;border-radius:9px;border:1px solid var(--line-2);background:var(--surface);color:var(--text);font-weight:800;font-size:15px;line-height:1;cursor:pointer;opacity:.75;display:grid;place-items:center}
+/* the menu button floats at the left edge of the header, level with the section bar; the thin line on the sidebar edge changes its width */
+#sbToggle{position:fixed;left:calc(var(--sbw,248px) + 8px);top:9px;z-index:36;width:28px;height:28px;padding:0;border-radius:9px;border:1px solid var(--line-2);background:var(--surface);color:var(--text);font-weight:800;font-size:15px;line-height:1;cursor:pointer;opacity:.75;display:grid;place-items:center}
 #sbToggle:hover{opacity:1;border-color:var(--accent)}
 body.nosb-on #sbToggle{left:12px}
 #sbRs{position:fixed;top:0;bottom:0;left:calc(var(--sbw,248px) - 3px);width:7px;z-index:35;cursor:col-resize}
@@ -273,8 +273,8 @@ body.nosb-on #sbRs{display:none}
 .opt[data-opt="cloud"],#optCloudShow,#mdCloudBox{display:none!important}
 body.cloud-on #mdCloudBox{display:block!important}
 
-/* pinned bar of all video and image sections: switch without going back to «Главная» */
-#modeBar{grid-column:2;grid-row:2;display:flex;align-items:center;gap:4px;min-width:0;overflow-x:auto;white-space:nowrap;scrollbar-width:none;padding:0 clamp(20px,2.2vw,44px) 8px 56px}
+/* pinned bar of all video and image sections: the first row of the header, above the title of the open section */
+#modeBar{grid-column:2;grid-row:1;display:flex;align-items:center;gap:4px;min-width:0;overflow-x:auto;white-space:nowrap;scrollbar-width:none;padding:9px clamp(20px,2.2vw,44px) 0 56px}
 .app.nosb #modeBar{grid-column:1/-1}
 #modeBar::-webkit-scrollbar{display:none}
 #modeBar .mb{flex:none;display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 9px;border-radius:8px;border:1px solid var(--line-2);background:var(--surface);color:var(--text);font-size:12px;font-weight:600;cursor:pointer;opacity:.85}
@@ -961,7 +961,7 @@ img.pr-media{object-position:center 38%}
   .side{display:none}
   /* the window is too narrow for a menu: the section title takes the whole header */
   #sbToggle,#sbRs{display:none}
-  .tb-head{padding:9px 16px}
+  .tb-head{grid-column:1/-1;padding:9px 16px}
   .view{padding:20px 16px}
   .choose{grid-template-columns:1fr}
   .m{grid-template-columns:1fr}
