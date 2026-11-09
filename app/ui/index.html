@@ -6,6 +6,10 @@
 <title>Minimax H3 Workspace</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<script>
+// the window stays empty until the app has opened the section the user was in: no flash of the video page
+setTimeout(() => document.documentElement.classList.add('booted'), 1500);
+</script>
 <style>
 :root{
   --bg:#12070a;
@@ -156,6 +160,8 @@
 .themes-set button.on{box-shadow:0 0 0 2px var(--surface),0 0 0 4px rgba(var(--accent-rgb),.5)}
 *{box-sizing:border-box;margin:0;padding:0}
 [hidden]{display:none!important}
+/* the layout is invisible for the first milliseconds: the app sets .booted once the saved section is opened */
+html:not(.booted) .app{visibility:hidden}
 /* one look for every scrollbar: slim, with a line-coloured thumb. The standard properties are inherited,
    so the page scrollbar, the sidebar, the chat list and the settings column all match */
 html{scrollbar-width:thin;scrollbar-color:var(--line-2) transparent}
@@ -1540,6 +1546,8 @@ equirements.txt</code><br>
 <script>
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+// the section that was open before the reload: read before anything overwrites it
+const START_VIEW = (() => { try { return localStorage.getItem('h3.view') || ''; } catch { return ''; } })();
 
 /* ---------- local server (real ComfyUI) or offline demo ---------- */
 const API = location.protocol.startsWith('http');
@@ -1696,8 +1704,6 @@ $$('.nav[data-view]').forEach(b => b.onclick = () => {
     cur = head; head._home = head.parentElement;
     slot.append(head);
   };
-  // what was open before the reload: read before the first place() overwrites it
-  let wasOpen = ''; try { wasOpen = localStorage.getItem('h3.view') || ''; } catch {}
   place();
   // sections are shown by toggling .active, so this catches nav clicks, goTo() and presets alike
   new MutationObserver(muts => {
@@ -1705,9 +1711,6 @@ $$('.nav[data-view]').forEach(b => b.onclick = () => {
   }).observe(main, { attributes: true, attributeFilter: ['class'], subtree: true });
   // the layout switches at 1100px: whether that view fills the window depends on the width
   addEventListener('resize', place);
-  // come back to the section that was open (its own click handlers run, as if the user pressed it)
-  const back = wasOpen && $(`.nav[data-view="${wasOpen}"]`);
-  if (back && !back.hidden && !back.disabled) back.click();
 })();
 
 /* ---------- resolution / duration math (from the workflows) ---------- */
@@ -6147,6 +6150,15 @@ addEventListener('keydown', e => {
   const r = (e.ctrlKey || e.metaKey) && String(e.key).toLowerCase() === 'r';
   if (e.key === 'F5' || r) { e.preventDefault(); location.reload(); }
 });
+
+/* come back to the section that was open before the reload: the click runs its usual handlers,
+   and only then the window is shown (html.booted), so the default video page never flashes */
+if (START_VIEW) {
+  const back = $(`.nav[data-view="${START_VIEW}"]`);
+  if (back && !back.disabled) back.click();
+}
+// show the window on the next frame, once the header of the restored section has moved up as well
+requestAnimationFrame(() => document.documentElement.classList.add('booted'));
 </script>
 </body>
 </html>
