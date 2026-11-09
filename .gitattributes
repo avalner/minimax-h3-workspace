@@ -1,0 +1,3 @@
+# Batch files are run by cmd.exe, so every clone gets CRLF regardless of the
+# user's core.autocrlf; the blob itself stays LF (normalised on commit).
+*.bat text eol=crlf

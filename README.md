@@ -53,6 +53,8 @@ pip install aiohttp pywebview
 python app/main.py
 ```
 
+Проще — двойной щелчок по `run.bat` в корне: если `aiohttp`, `pywebview` и `certifi` не установлены, он поставит их сам и запустит `app/main.py`; при ошибке окно консоли не закроется и покажет, что доустановить.
+
 Сборка установщика: PyInstaller (`app/build/h3studio.spec`) и Inno Setup (`app/build/h3studio.iss`).
 
 ## Что скачивается и откуда
