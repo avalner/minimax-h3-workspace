@@ -5929,6 +5929,12 @@ applyZoom();
   render();
 })();
 ['#vPrompt', '#lPrompt', '.kr-prompt', '.qw-prompt'].forEach(sel => $$(sel).forEach(attachRu));   // every prompt field gets «Показать по-русски»
+
+/* reload the interface without restarting the app: pywebview turns WebView2's own F5/Ctrl+R accelerators off (AreBrowserAcceleratorKeysEnabled = debug) */
+addEventListener('keydown', e => {
+  const r = (e.ctrlKey || e.metaKey) && String(e.key).toLowerCase() === 'r';
+  if (e.key === 'F5' || r) { e.preventDefault(); location.reload(); }
+});
 </script>
 </body>
 </html>
