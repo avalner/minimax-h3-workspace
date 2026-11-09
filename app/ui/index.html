@@ -144,6 +144,16 @@
 .themes button{width:22px;height:22px;border-radius:50%;border:2px solid var(--line-2);transition:.15s;padding:0}
 .themes button:hover{transform:scale(1.15)}
 .themes button.on{border-color:var(--text);box-shadow:0 0 0 2px var(--surface)}
+/* settings: the theme palette and the interface size live here instead of the sidebar */
+.set-wrap{display:grid;gap:16px;max-width:860px}
+.set-row{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:12px 0}
+.set-row+.set-row{border-top:1px solid var(--line)}
+.set-lbl b{display:block;font-size:13.5px;font-weight:700}
+.set-lbl small{display:block;margin-top:3px;font-size:12px;color:var(--dim)}
+.set-acts{display:flex;align-items:center;gap:12px;padding-top:12px;border-top:1px solid var(--line)}
+.themes-set{padding:0;gap:10px}
+.themes-set button{width:30px;height:30px}
+.themes-set button.on{box-shadow:0 0 0 2px var(--surface),0 0 0 4px rgba(var(--accent-rgb),.5)}
 *{box-sizing:border-box;margin:0;padding:0}
 [hidden]{display:none!important}
 /* the window itself never scrolls: .main is the only scroll container (no second scrollbar at the window edge) */
@@ -197,12 +207,6 @@ button{cursor:pointer;border:0;background:none}
 .meter{display:grid;gap:5px}
 .side-foot .stat b{font-variant-numeric:tabular-nums}
 .side-foot .stat small{color:var(--dim);font-size:11px}
-.rep-btn{display:flex;align-items:center;justify-content:center;gap:8px;margin:0 0 12px;padding:9px 10px;border-radius:11px;border:1px solid rgba(var(--accent-rgb),.45);background:var(--accent-soft);color:var(--text);font-weight:700;font-size:12.5px;width:100%;transition:.15s;flex:none}
-.rep-btn svg{width:16px;height:16px}
-.rep-btn:hover{color:var(--text);border-color:var(--accent)}
-.rep-btn[disabled]{opacity:.6;cursor:default}
-.sup-btn{display:block;margin:-4px 0 12px;padding:4px 10px;width:100%;text-align:center;font-size:12px;color:var(--muted);font-weight:600;border-radius:9px;flex:none}
-.sup-btn:hover{color:var(--text)}
 @media (max-height:760px){.side-foot{gap:6px;padding:10px 12px}.side-foot .stat{font-size:11.5px}}
 
 /* main */
@@ -711,20 +715,6 @@ details[open] summary::before{content:'－ '}
       <div><div class="brand-name">Minimax H3</div><div class="brand-sub">Workspace · локальная генерация</div><div class="brand-sub" id="appVer" style="opacity:.75"></div></div>
     </div>
 
-    <button class="rep-btn" id="repBtn" title="Если что-то не работает, нажмите: приложение соберёт файл с данными о компьютере и ошибках. Отправьте этот файл автору.">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/></svg>
-      Отчёт для разработчика
-    </button>
-    <button class="sup-btn" id="supBtn" type="button" title="Программа бесплатная. Если она вам помогла, можно поддержать автора: откроется страница оплаты в браузере. Ничего вводить в самой программе не нужно.">♥ Поддержать проект</button>
-    <div class="zoom-btns" id="uiZoom" title="Размер интерфейса (или Ctrl + колесо мыши)" style="margin:0 0 8px 4px"><button class="btn" id="uiSm" type="button">А−</button><small id="uiPct">100%</small><button class="btn" id="uiLg" type="button">А+</button></div>
-    <div class="themes" id="themes" title="Тема оформления">
-      <button data-t="" style="background:#e8264f" title="Бордо"></button>
-      <button data-t="light" style="background:#f3f4f6" title="Светлая"></button>
-      <button data-t="gray" style="background:#b7bcc4" title="Серая"></button>
-      <button data-t="graphite" style="background:#272a30" title="Графит"></button>
-      <button data-t="night" style="background:#2fb5a8" title="Ночь"></button>
-      <button data-t="forest" style="background:#d4a24c" title="Лес"></button>
-    </div>
     <div class="nav-label">Создать</div>
     <button class="nav" data-view="presets" hidden>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="2"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="2"/></svg>
@@ -797,6 +787,12 @@ details[open] summary::before{content:'－ '}
     <button class="nav" data-view="models">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8 12 3 3 8l9 5 9-5Z"/><path d="m3 13 9 5 9-5M3 18l9 5 9-5" opacity=".5"/></svg>
       Модели <span class="badge" id="modelsBadge" hidden></span>
+    </button>
+
+    <div class="nav-label">Программа</div>
+    <button class="nav" data-view="settings">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.11-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.55-1.11 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34H9a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87V9a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.51 1z"/></svg>
+      Настройки
     </button>
 
     <div class="side-foot" id="sysBox" title="Нагрузка компьютера, обновляется каждые 2 секунды">
@@ -1374,6 +1370,53 @@ equirements.txt</code><br>
           <div class="card-h"><h3>Модели</h3><span><span id="mdAdd"></span> <button class="btn pri" id="mdFix" hidden>Докачать недостающие</button> <button class="btn pri" id="mdFixExt" hidden>Скачать недостающие</button></span></div>
           <label class="hint" style="display:flex;gap:8px;align-items:flex-start;margin:0 0 10px;cursor:pointer" title="Те же файлы, но с другого сервера. Помогает, когда Hugging Face грузит медленно или не открывается."><input type="checkbox" id="mdMirror" style="margin-top:3px"><span>Если Hugging Face грузит медленно: скачивать через зеркало <b>hf-mirror.com</b>. Файлы те же. Скачивание можно закрыть и продолжить позже, оно докачается с того же места.</span></label>
           <div class="mlist" id="mlist"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ SETTINGS ============ -->
+    <section class="view" id="view-settings">
+      <div class="head">
+        <div>
+          <h1>Настройки</h1>
+          <p>Тема и размер интерфейса. Применяется сразу и запоминается на этом компьютере</p>
+        </div>
+      </div>
+
+      <div class="set-wrap">
+        <div class="card">
+          <div class="card-h"><h3>Оформление</h3><span class="hint" id="themeName">Бордо</span></div>
+          <div class="set-row">
+            <div class="set-lbl"><b>Тема</b><small>цвет кнопок, подсветки и фона</small></div>
+            <div class="themes themes-set" id="themes" title="Тема оформления">
+              <button data-t="" style="background:#e8264f" title="Бордо"></button>
+              <button data-t="light" style="background:#f3f4f6" title="Светлая"></button>
+              <button data-t="gray" style="background:#b7bcc4" title="Серая"></button>
+              <button data-t="graphite" style="background:#272a30" title="Графит"></button>
+              <button data-t="night" style="background:#2fb5a8" title="Ночь"></button>
+              <button data-t="forest" style="background:#d4a24c" title="Лес"></button>
+            </div>
+          </div>
+          <div class="set-row">
+            <div class="set-lbl"><b>Размер интерфейса</b><small>подписи, кнопки и отступы целиком</small></div>
+            <div class="zoom-btns" id="uiZoom" title="Размер интерфейса (или Ctrl + колесо мыши)"><button class="btn" id="uiSm" type="button">А−</button><small id="uiPct">100%</small><button class="btn" id="uiLg" type="button">А+</button></div>
+          </div>
+          <div class="set-acts">
+            <button class="btn" id="setReset" type="button">Вернуть по умолчанию</button>
+            <span class="hint">тема «Бордо», масштаб 100 %</span>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-h"><h3>Помощь</h3><span class="hint">если что-то не работает</span></div>
+          <div class="set-row">
+            <div class="set-lbl"><b>Отчёт для разработчика</b><small>приложение соберёт файл с данными о компьютере и ошибках — отправьте его автору</small></div>
+            <button class="btn" id="repBtn" type="button" title="Если что-то не работает, нажмите: приложение соберёт файл с данными о компьютере и ошибках. Отправьте этот файл автору.">Собрать отчёт</button>
+          </div>
+          <div class="set-row">
+            <div class="set-lbl"><b>Поддержать проект</b><small>программа бесплатная; если она помогла, можно поддержать автора</small></div>
+            <button class="btn" id="supBtn" type="button" title="Программа бесплатная. Если она вам помогла, можно поддержать автора: откроется страница оплаты в браузере. Ничего вводить в самой программе не нужно.">♥ Поддержать</button>
+          </div>
         </div>
       </div>
     </section>
@@ -2882,7 +2925,8 @@ $('#mdNodes').addEventListener('click', e => {
   navigator.clipboard?.writeText(b.dataset.copyurl).then(() => toast('Ссылка скопирована'), () => toast(b.dataset.copyurl));
 });
 function setNavLocked(lock) {
-  $$('.nav[data-view]').forEach(n => { if (n.dataset.view !== 'models') n.disabled = lock; });
+  // the appearance settings stay reachable while the engine is not set up yet
+  $$('.nav[data-view]').forEach(n => { if (n.dataset.view !== 'models' && n.dataset.view !== 'settings') n.disabled = lock; });
 }
 $('.nav[data-view="models"]').addEventListener('click', async () => {
   if (!API) return;
@@ -5819,9 +5863,11 @@ if (API) {
 // theme switcher
 (() => {
   const KEY = 'h3-theme', root = document.documentElement, box = document.getElementById('themes');
+  const NAMES = { '': 'Бордо', light: 'Светлая', gray: 'Серая', graphite: 'Графит', night: 'Ночь', forest: 'Лес' };
   const apply = t => {
     if (t) root.setAttribute('data-theme', t); else root.removeAttribute('data-theme');
     box.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.t === (t || '')));
+    const nm = document.getElementById('themeName'); if (nm) nm.textContent = NAMES[t] || NAMES[''];
     if (typeof drawWave === 'function' && typeof peaks !== 'undefined' && peaks && peaks.length) { try { drawWave(); } catch {} }
   };
   let cur = ''; try { cur = localStorage.getItem(KEY) || ''; } catch {}
@@ -5865,6 +5911,12 @@ window.addEventListener('wheel', e => {
   applyZoom();
 }, { passive: false });
 applyZoom();
+// "Вернуть по умолчанию" in Настройки: the default theme and 100 %
+$('#setReset').onclick = () => {
+  const def = $('#themes button[data-t=""]'); if (def) def.click();
+  UI_Z.ui = 1; UI_Z.lib = 230; applyZoom();
+  toast('Оформление вернулось к исходному');
+};
 
 /* ---------- MONTAGE: join library clips in a chosen order (ComfyUI does the work, no ffmpeg) ---------- */
 (function mountMontage() {
