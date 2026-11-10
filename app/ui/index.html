@@ -3694,7 +3694,7 @@ function cmpSet(on, it) {
 }
 /* the slider itself; `full`: in the big window over the whole screen */
 function cmpMount(box, it, full) {
-  const pic = it.kind === 'image', tag = pic ? 'img' : 'video', at = pic ? '' : ' muted loop autoplay playsinline';
+  const pic = it.kind === 'image', at = pic ? '' : ' muted loop autoplay playsinline preload="auto"';
   const mk = (cls, src) => pic ? `<img class="${cls}" src="${src}" alt="">` : `<video class="${cls}" src="${src}"${at}></video>`;
   box.innerHTML = `<div class="cmp-in">${mk('cmp-b', '/api/srcfile/' + it.id)}${mk('cmp-a', it.url)}<div class="cmp-h"><i>⇄</i></div><span class="cmp-l l">До</span><span class="cmp-l r">После</span><button class="cmp-fs" type="button" title="${full ? 'Закрыть (Esc)' : 'Открыть на весь экран'}">${full ? '✕' : '⛶'}</button></div><div class="cmp-hint">${full ? 'Esc или ✕: закрыть. ' : ''}Потяните ползунок влево и вправо: слева до увеличения, справа после</div>`;
   const wrap = $('.cmp-in', box), a = $('.cmp-a', box), b = $('.cmp-b', box);
@@ -3704,7 +3704,38 @@ function cmpMount(box, it, full) {
   wrap.onpointerdown = e => { wrap.setPointerCapture(e.pointerId); move(e.clientX); wrap.onpointermove = ev => move(ev.clientX); };
   wrap.onpointerup = () => { wrap.onpointermove = null; };
   const fs = $('.cmp-fs', box); fs.onpointerdown = e => e.stopPropagation(); fs.onclick = () => full ? cmpCloseFull() : cmpOpenFull(it);
-  return pic ? 0 : setInterval(() => { if (a.readyState > 1 && b.readyState > 1 && Math.abs(a.currentTime - b.currentTime) > .12) b.currentTime = a.currentTime; if (a.paused && !b.paused) b.pause(); else if (!a.paused && b.paused) b.play().catch(() => {}); }, 300);
+  return pic ? 0 : cmpLock(a, b);
+}
+/* «До» and «После» run as one clip: the same frame at the same moment, and one loop for both.
+   The result («после») is the clock; «до» keeps in step by a slightly different speed and is
+   jumped only when the two are far apart. Jumping it every 300 ms (the earlier version) flushed
+   the decoder each time, so the clip looked frozen — and with a server answer that had no byte
+   ranges every jump restarted the download from the beginning, which looked like a loop. */
+function cmpLock(a, b) {
+  let base = 1, prev = 0, lastJump = 0;
+  const dur = v => (Number.isFinite(v.duration) && v.duration > 0 ? v.duration : 0);
+  const ready = () => dur(a) > 0 && dur(b) > 0 && a.readyState > 1 && b.readyState > 1;
+  const put = (v, t) => { try { v.currentTime = Math.max(0, Math.min(t, dur(v) - .05)); } catch (_) {} };
+  const play = v => { const p = v.play(); if (p && p.catch) p.catch(() => {}); };
+  return setInterval(() => {
+    if (!ready()) return;
+    const da = dur(a), db = dur(b), k = db / da, now = performance.now();
+    base = Math.min(4, Math.max(.25, k));   // clips of a different length finish together
+    if (a.currentTime + .3 < prev) {        // «после» started over: «до» at its own start too
+      if (b.currentTime > .2) put(b, 0);
+      b.playbackRate = base; lastJump = now;
+    }
+    prev = a.currentTime;
+    if (a.paused || a.ended) { if (!b.paused) b.pause(); return; }
+    if (b.paused || b.ended) {
+      if (now - lastJump > 500) { put(b, a.currentTime * k); lastJump = now; }
+      b.playbackRate = base; play(b); return;
+    }
+    const err = a.currentTime * k - b.currentTime;   // + «до» lags behind
+    if (Math.abs(err) > .25 && now - lastJump > 700) { put(b, a.currentTime * k); b.playbackRate = base; lastJump = now; }
+    else if (Math.abs(err) > .008) b.playbackRate = base * (1 + Math.max(-.25, Math.min(.25, err * 3)));   // close: catch up by speed
+    else if (b.playbackRate !== base) b.playbackRate = base;
+  }, 50);
 }
 let CMP_TIMER2 = 0;
 function cmpOpenFull(it) {

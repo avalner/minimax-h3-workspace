@@ -2762,11 +2762,35 @@ class App:
         f = item.get("src_file")
         if not f:
             raise web.HTTPNotFound()
-        async with self.session.get(self.comfy + "/view", params=f) as r:
-            if r.status != 200:
-                raise web.HTTPNotFound(text="Исходный файл не найден")
-            body = await r.read()
-            return web.Response(body=body, content_type=r.headers.get("Content-Type", "application/octet-stream"))
+        # ComfyUI's own copy: keep one of our own next to the app and serve that, because a player
+        # can only seek (and so stay in step with the result) a file that answers byte-range
+        # requests. A plain body without ranges makes every jump restart the download.
+        ext = Path(f.get("filename") or "").suffix or item.get("ext") or (".png" if item.get("kind") == "image" else ".mp4")
+        cached = DATA_DIR / "cache" / "src" / f'{item["id"]}{ext}'
+        try:
+            have = cached.stat().st_size > 0
+        except OSError:
+            have = False
+        if not have:
+            try:
+                cached.parent.mkdir(parents=True, exist_ok=True)
+                async with self.session.get(self.comfy + "/view", params=f) as r:
+                    if r.status != 200:
+                        raise web.HTTPNotFound(text="Исходный файл не найден")
+                    part = cached.with_name(f'{cached.name}.{uuid.uuid4().hex[:8]}.part')
+                    with open(part, "wb") as out:
+                        async for chunk in r.content.iter_chunked(1 << 20):
+                            out.write(chunk)
+                part.replace(cached)
+            except web.HTTPException:
+                raise
+            except (OSError, aiohttp.ClientError):   # no room for a copy: play it through, as before
+                async with self.session.get(self.comfy + "/view", params=f) as r:
+                    if r.status != 200:
+                        raise web.HTTPNotFound(text="Исходный файл не найден")
+                    body = await r.read()
+                    return web.Response(body=body, content_type=r.headers.get("Content-Type", "video/mp4"))
+        return web.FileResponse(cached)
 
     async def h_events(self, req):
         ws = web.WebSocketResponse(heartbeat=20)
