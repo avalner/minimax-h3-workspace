@@ -146,6 +146,11 @@ VARIANTS = {
     "pika_lora": {
         "hd8": _m("Pika-Labs/Pika-H3-Flex-Turbo-LoRA", "pika_h3_flex_turbo_8step_hd_ref2va.safetensors", 3.91, "loras"),
     },
+    # DMAD: distillation LoRA that makes the 4-step draft of the video studio (LCM sampler, shift 12 in the workflow)
+    "draft_lora": {
+        "bf16": _m("Kijai/MiniMax-H3-experimental", "loras/minimax_h3_DMAD_4step_full_lora_avg_rank_39_bf16.safetensors",
+                   0.366647, "loras"),
+    },
     # improve quality of a finished video (SeedVR2, plain ComfyUI nodes)
     "seedvr_unet": {
         "int8": _m("Comfy-Org/SeedVR2", "diffusion_models/seedvr2_3b_int8_convrot.safetensors", 3.46,
@@ -215,6 +220,7 @@ ROLE_MARKS = {
     "upscaler": ["upscaler"], "preview": ["taeh3"], "action_unet": ["hybrid", "fl2va"],
     "speed_slider_lora": ["speed"], "action_upscaler": ["upscaler"], "vocal_model": ["melband"],
     "realism_lora": ["realism"], "motion_repair_lora": ["motion"], "pika_lora": ["pika"], "swap_lora": ["swap"], "sla_lora": ["sla"],
+    "draft_lora": ["dmad"],
     "seedvr_unet": ["seedvr"], "seedvr_vae": ["seedvr"], "relayvsr_unet": ["relayvsr"], "relayvsr_vae": ["relayvsr"], "krea_clip": ["qwen3vl", "qwen3-vl"],
     "krea_vae": ["qwen_image", "qwen-image"], "kreareal_unet": ["krea"], "kreareal_lora": ["realism"],
     "qwen_unet": ["qwen"], "qwen_clip": ["qwen3vl", "qwen3-vl"], "qwen_vae": ["qwen"],
@@ -241,7 +247,8 @@ VARIANT_LABELS = {
     "action_unet": {"int8": "обычная (int8)", "lite": "лёгкая (меньше памяти, чуть слабее)"},
 }
 
-# LoRA from the original action workflow that has no public download; used when the user has it
+# LoRA of the original action-scene workflow (a different DMAD file from the studio draft above): it has no public
+# download, so it is used only when the user already has it
 ACTION_DMAD_LORA = "minimax_h3_dmad_full_dareties_v4_step600_comfy_fro"
 
 ROLE_TITLES = {
@@ -261,6 +268,7 @@ ROLE_TITLES = {
     "motion_repair_lora": "LoRA «Исправление движения» (по желанию)",
     "swap_lora": "LoRA «Замена персонажа» (akatz-ai)",
     "pika_lora": "LoRA Pika H3 Flex Turbo (ускорение для Референсов, хороший звук)",
+    "draft_lora": "LoRA DMAD — быстрый черновик Видеостудии (4 шага вместо 8)",
     "sla_lora": "LoRA Turbo-SLA (быстрое ускорение для Image-to-Video)",
     "seedvr_unet": "Увеличение видео и изображений — модель SeedVR2 (3B)",
     "seedvr_vae": "Увеличение видео и изображений — VAE SeedVR2",
@@ -310,7 +318,7 @@ MODE_OPTIONAL = {
     "actor": ["realism_lora"],
     "swap": ["pika_lora", "realism_lora", "motion_repair_lora"],
     "action": ["speed_slider_lora", "action_upscaler"],
-    "long": ["vocal_model"],
+    "long": ["vocal_model", "draft_lora"],
 }
 ALL_ROLES = list(VARIANTS)
 
@@ -319,6 +327,7 @@ DEFAULT_CHOICE = {"fast_unet": "int8", "lipsync_unet": "full", "text_encoder": "
                   "audio_vae": "fp32", "ref2v_turbo_lora": "bf16", "upscaler": "bf16", "preview": "taeh3",
                   "action_unet": "int8", "speed_slider_lora": "v1.1", "action_upscaler": "lms", "vocal_model": "fp16",
                   "realism_lora": "v1", "motion_repair_lora": "v1", "pika_lora": "hd8", "swap_lora": "v15", "sla_lora": "bf16",
+                  "draft_lora": "bf16",
                   "krea_unet": "int8", "krea_clip": "fp8", "krea_vae": "bf16", "kreareal_unet": "fp8", "kreareal_lora": "v2",
                   "qwen_unet": "int8", "qwen_clip": "int8", "qwen_vae": "bf16",
                   "flux_unet": "fp8", "flux_clip": "bf16", "flux_vae": "bf16",
