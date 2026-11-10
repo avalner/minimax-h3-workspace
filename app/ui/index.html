@@ -446,6 +446,8 @@ textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft
 .seg button small{font-weight:500;font-size:11px;color:var(--dim)}
 .seg button.on{background:var(--grad);color:#fff;box-shadow:0 6px 18px rgba(var(--accent-rgb),.3)}
 .seg button.on small{color:rgba(255,255,255,.8)}
+.seg button:disabled{opacity:.45;cursor:not-allowed}
+.seg button:disabled small{color:var(--dim)}
 input[type=range]{-webkit-appearance:none;width:100%;height:6px;border-radius:9px;background:linear-gradient(90deg,var(--accent) var(--p,15%),var(--surface-2) var(--p,15%));outline:none}
 input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:20px;height:20px;border-radius:50%;background:#fff;border:4px solid var(--accent);box-shadow:0 2px 10px rgba(0,0,0,.4)}
 .ticks{display:flex;justify-content:space-between;font-size:11px;color:var(--dim);font-family:var(--mono)}
@@ -4315,7 +4317,11 @@ function makeRefMode(cfg) {
         const sec = +$('input[type=range]', c).value, done = sigOk(c), draft = root._q === 'draft', old = !done && !!(c._old || {})[root._q];
         return `<div class="tl-b${i === root._sel ? ' sel' : ''}${done ? (draft ? ' draft' : ' done') : old ? ' stale' : ''}${fr[i] ? ' cut' : ''}" data-i="${i}" style="flex:0 0 ${sec * TL_PPS}px" title="${fr[i] ? 'Новый план (смена кадра). ' : ''}Потяните правый край, чтобы изменить длину"><div><b>${i + 1}</b> · ${sec} с</div><div class="hint" style="font-size:11px;white-space:nowrap;overflow:hidden">${done ? (draft ? 'черновик ✓' : 'готово ✓') : old ? 'старая версия' : ''}${fr[i] ? ' ✂ новый план' : ''}</div><i class="tl-h"></i></div>`;
       }).join('') + '<div class="tl-b tl-add" data-add="1" style="flex:0 0 56px;align-items:center;justify-content:center" title="Добавить фрагмент">+</div>';
-      $('.lm-q button[data-mq="draft"]', root).disabled = root._dmad === false;
+      const db = $('.lm-q button[data-mq="draft"]', root);
+      if (db) {   // a dead switch must look dead and say why (it is dead when the 4-step draft LoRA is not in the loras folder)
+        db.disabled = root._dmad === false;
+        db.title = root._dmad === false ? 'Черновик недоступен: в папке loras нет файла minimax_h3_DMAD_4step_full_lora. Скачайте его в разделе «Модели» — кнопка включится сама.' : '4 шага вместо 8: быстро посмотреть, что получится';
+      }
     }
     root._renderTL = renderTL;
     function showClip() {
@@ -4365,7 +4371,9 @@ function makeRefMode(cfg) {
       $('.lm-q button[data-mq="draft"] small', root).textContent = `${szOf('draft')} · 4 шага, быстро`;
       $('.lm-q button[data-mq="final"] small', root).textContent = `${szOf('final')} · 8 шагов, итог`;
       const qn = $('.lm-qnote', root); if (qn) qn.textContent = root._q === 'draft' ? 'Размер ниже выбирается для ЧЕРНОВИКА (режим переключается кнопками в блоке «Сцены»).' : 'Размер ниже выбирается для ХОРОШЕГО КАЧЕСТВА (режим переключается кнопками в блоке «Сцены»).';
-      $('.lm-q-hint', root).textContent = root._dmad === false ? 'Черновик недоступен: нет файла minimax_h3_DMAD_4step_full_lora в папке loras. Сцены считаются в хорошем качестве.' : Q_HINT(root._q);
+      const qh = $('.lm-q-hint', root);
+      qh.textContent = root._dmad === false ? 'Черновик недоступен: нет файла minimax_h3_DMAD_4step_full_lora (0,37 ГБ). Он есть в разделе «Модели» — скачайте, и кнопка включится сама. Пока сцены считаются в хорошем качестве.' : Q_HINT(root._q);
+      qh.style.color = root._dmad === false ? 'var(--pink)' : '';
       $$('.sc-tq', root).forEach(sel => { if (!sel._touched) sel.value = S.q; });
     };
     root._qBy = { draft: S.q, final: S.q };
@@ -4378,12 +4386,29 @@ function makeRefMode(cfg) {
     root._setQ = setQ;
     $('.lm-q', root).onclick = e => { const b = e.target.closest('button'); if (b && !b.disabled) setQ(b.dataset.mq); };
     $('.lm-final', root).onclick = () => { setQ('final'); $('.lm-chain', root).click(); };
+    const dmadNow = async (announce) => {   // ask ComfyUI again: the file may have just been downloaded in «Модели»
+      let has = null;
+      try { has = !!(await (await fetch('/api/loras/custom')).json()).files?.some(f => /DMAD_4step/i.test(f)); } catch { has = null; }
+      if (has == null) return null;
+      const was = root._dmad; root._dmad = has;
+      if (has && !was) { renderTL(); root._paintQ(); if (announce) toast('Черновик включён: 4 шага, быстро'); }
+      else if (!has) { if (root._q === 'draft') setQ('final'); else { renderTL(); root._paintQ(); } }
+      return has;
+    };
+    root._dmadCheck = () => dmadNow(true);
+    function dmadRetry(n) {   // the window may open before ComfyUI answers: ask again, do not keep the draft locked for the whole session
+      if (n > 3) return;
+      setTimeout(async () => { if (!(await dmadNow(n === 1))) dmadRetry(n + 1); }, 15000 * n);
+    }
+    // coming back to the section after downloading the file in «Модели»: check again, no reload needed
+    new MutationObserver(() => { if (root.classList.contains('active') && root._dmad === false) dmadNow(true); })
+      .observe(root, { attributes: true, attributeFilter: ['class'] });
     fetch('/api/loras/custom').then(r => r.json()).then(r => {
       root._dmad = !!(r.files || []).some(f => /DMAD_4step/i.test(f));
-      if (!root._dmad) setQ('final');
+      if (!root._dmad) { setQ('final'); dmadRetry(1); }   // ComfyUI may still be starting: ask again instead of locking the switch for good
       else if (!root._restoring && !readyUpTo()) setQ('draft');
       renderTL();
-    }).catch(() => { root._dmad = false; setQ('final'); });
+    }).catch(() => { root._dmad = false; setQ('final'); dmadRetry(1); });
     queueMicrotask(() => { setQ('final'); });
     queueMicrotask(() => queueMicrotask(() => {   /* the order of the page: main settings, pictures, scenes; the rare things are folded */
       const col = $('.col', root), top = $('.rm-params', root), refsCard = $('.rm-imgs', root).closest('.card'), musCard = $('.lm-snd', root).closest('.card'), scCard = $('.lm-scenes', root).parentElement;
