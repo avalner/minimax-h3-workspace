@@ -501,6 +501,29 @@ details[open] summary::before{content:'－ '}
 .ctxm button{display:block;width:100%;text-align:left;padding:8px 12px;border-radius:8px;font-size:13px;color:var(--text)}
 .ctxm button:hover{background:var(--accent-soft)}
 .ctxm button:disabled{opacity:.4;pointer-events:none}
+/* picture menu: opens right at the cursor instead of a window in the middle of the screen */
+.picmenu{position:fixed;z-index:99999;width:max-content;min-width:238px;max-width:calc(100vw - 16px);background:var(--surface-2);border:1px solid var(--line-2);border-radius:13px;padding:6px;box-shadow:0 18px 48px rgba(0,0,0,.55);animation:pmIn .1s ease-out}
+.picmenu.pm-lib{width:min(560px,calc(100vw - 16px));padding:8px}
+@keyframes pmIn{from{opacity:0;transform:scale(.97)}}
+.pm-i{display:flex;align-items:center;gap:10px;text-align:left;padding:9px 10px;border-radius:9px;font-size:13px;font-weight:600;color:var(--text);white-space:nowrap}
+.pm-i:hover{background:var(--accent-soft)}
+.pm-i svg{width:17px;height:17px;flex:none;color:var(--muted)}
+.pm-i:hover svg{color:var(--accent)}
+.pm-i:disabled{opacity:.45;pointer-events:none}
+.pm-i .pm-k{margin-left:auto;padding-left:14px;font-size:11px;font-weight:500;color:var(--dim)}
+.pm-i .pm-arrow{margin-left:auto;width:13px;height:13px;color:var(--dim)}
+.pm-sep{height:1px;margin:5px 8px;background:var(--line)}
+.pm-lib-h{display:flex;align-items:center;gap:8px;padding:0 2px 8px}
+.pm-lib-h b{font-size:13px;white-space:nowrap}
+.pm-count{font-size:11.5px;color:var(--dim);font-variant-numeric:tabular-nums;margin-left:2px}
+.pm-search{margin-left:auto;width:150px;min-width:0;padding:6px 9px;border-radius:8px;border:1px solid var(--line-2);background:var(--bg-2);color:var(--text);font-size:12px;outline:none}
+.pm-search:focus{border-color:var(--accent)}
+.pm-back{width:28px;height:28px;flex:none;border-radius:8px;background:var(--surface);border:1px solid var(--line);display:grid;place-items:center;color:var(--muted)}
+.pm-back:hover{color:var(--text);border-color:var(--line-2)}
+.pm-back svg{width:15px;height:15px}
+.pm-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(92px,1fr));gap:8px;max-height:min(calc(var(--vh,1vh)*56),440px);overflow:auto;padding:2px}
+.pm-empty{grid-column:1/-1;padding:26px 6px;text-align:center;color:var(--muted);font-size:12.5px}
+.drop.pic-open,.ref.pic-open{border-color:var(--accent)!important;box-shadow:0 0 0 2px var(--accent-soft)}
 .wave{position:relative;height:110px;border-radius:12px;background:var(--bg-2);border:1px solid var(--line);overflow:hidden;touch-action:none;user-select:none}
 .wave canvas{position:absolute;inset:0;width:100%;height:100%}
 .wave .sel{position:absolute;top:0;bottom:0;background:rgba(var(--accent-rgb),.13);border-left:2px solid var(--accent);border-right:2px solid var(--accent-2);cursor:grab}
@@ -6056,79 +6079,152 @@ function cwPick(key) {
     } catch { toast('Не удалось взять файл'); }
   };
 }
-/* ---------- picture slots: from the library, from the computer, paste from the clipboard, copy back ---------- */
+/* ---------- picture slots: "where from?" opens right at the cursor, not in the middle of the screen ----------
+   A menu at the click point: из Библиотеки / с компьютера / вставить / копировать.
+   The library opens in the same place (with a search field), so the mouse never has to travel to the centre. */
+const PIC = { el: null, label: null, input: null, ax: 0, ay: 0 };
+const PIC_IC = {
+  lib: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="m21 15-5-5L6 20"/></svg>',
+  pc: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4l2 2.5h9A1.5 1.5 0 0 1 21 10v8.5a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z"/></svg>',
+  paste: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4.5" width="12" height="16.5" rx="2"/><path d="M9 4.5v-.7A1.3 1.3 0 0 1 10.3 2.5h3.4A1.3 1.3 0 0 1 15 3.8v.7z"/><path d="M9.5 10h5M9.5 13.5h3.5"/></svg>',
+  copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h7"/></svg>',
+  back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 4.5 7.5 12 15 19.5"/></svg>',
+  next: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 5 7 7-7 7"/></svg>',
+};
+const picFile = () => PIC.label?._file || PIC.input?.files?.[0] || null;
+
+function picClose() {
+  if (!PIC.el) return;
+  PIC.el.remove();
+  PIC.el = null;
+  PIC.label?.classList.remove('pic-open');
+  PIC.label = null; PIC.input = null;
+}
+// put the menu next to the click point; near an edge it flips to the other side of the cursor
+function picPlace() {
+  const el = PIC.el; if (!el) return;
+  const pad = 8, gap = 4;
+  el.style.left = '0px'; el.style.top = '0px';
+  const w = el.offsetWidth, h = el.offsetHeight;
+  let left = PIC.ax + gap, top = PIC.ay + gap, ox = 'left', oy = 'top';
+  if (left + w > innerWidth - pad) { left = Math.max(pad, PIC.ax - w - gap); ox = 'right'; }
+  if (top + h > innerHeight - pad) { top = Math.max(pad, PIC.ay - h - gap); oy = 'bottom'; }
+  el.style.left = Math.round(left) + 'px';
+  el.style.top = Math.round(top) + 'px';
+  el.style.transformOrigin = `${oy} ${ox}`;
+}
+function picSourceStep() {
+  const el = PIC.el; if (!el) return;
+  el.className = 'picmenu';
+  const filled = !!picFile();
+  el.innerHTML = `<button class="pm-i" type="button" role="menuitem" data-s="lib">${PIC_IC.lib}<span>Из Библиотеки</span><i class="pm-arrow">${PIC_IC.next}</i></button>`
+    + `<button class="pm-i" type="button" role="menuitem" data-s="pc">${PIC_IC.pc}<span>С компьютера</span></button>`
+    + `<button class="pm-i" type="button" role="menuitem" data-s="paste" disabled>${PIC_IC.paste}<span>Вставить</span><em class="pm-k">…</em></button>`
+    + (filled ? `<div class="pm-sep"></div><button class="pm-i" type="button" role="menuitem" data-s="copy">${PIC_IC.copy}<span>Копировать</span></button>` : '');
+  picPlace();
+  const pb = $('[data-s="paste"]', el), k = $('.pm-k', pb);
+  fetch('/api/clipboard/has-image', { cache: 'no-store' }).then(r => r.json()).then(j => {
+    if (!pb.isConnected) return;
+    const have = !!(j && j.have);
+    pb.disabled = !have;
+    if (have) k.remove(); else k.textContent = 'нет картинки';
+    pb.title = have ? 'Картинка из буфера обмена попадёт в это место как файл' : 'В буфере обмена нет картинки. Скопируйте её в любой программе — и откройте меню снова.';
+    picPlace();
+  }).catch(() => { if (pb.isConnected) { k.textContent = ''; pb.title = 'Не удалось проверить буфер обмена'; } });
+}
+function picLibraryStep() {
+  const el = PIC.el; if (!el) return;
+  const items = LIB.filter(it => !it.missing && it.url).sort((a, b) => b.date - a.date);
+  el.className = 'picmenu pm-lib';
+  el.innerHTML = `<div class="pm-lib-h"><button class="pm-back" type="button" data-s="back" title="Назад — выбор источника" aria-label="Назад">${PIC_IC.back}</button><b>Из Библиотеки</b><span class="pm-count"></span>`
+    + (items.length > 9 ? '<input class="pm-search" type="search" placeholder="Поиск" aria-label="Поиск по Библиотеке">' : '') + '</div><div class="pm-grid"></div>';
+  const grid = $('.pm-grid', el), count = $('.pm-count', el);
+  const paint = q => {
+    const s = (q || '').trim().toLowerCase();
+    const list = s ? items.filter(it => `${it.label || ''} ${it.prompt || ''} ${it.sub || ''} ${it.mode || ''}`.toLowerCase().includes(s)) : items;
+    count.textContent = list.length === items.length ? String(items.length) : `${list.length} из ${items.length}`;
+    grid.innerHTML = list.length ? list.map(it => `<button class="cw-th" type="button" data-id="${it.id}" title="${esc(((it.label ? it.label + ' · ' : '') + (it.prompt || '')).slice(0, 90))}">`
+      + (it.kind === 'image' ? `<img src="${it.url}" alt="" loading="lazy">` : `<video src="${it.url}#t=0.5" preload="metadata" muted></video><span class="cw-lb">последний кадр</span>`)
+      + '</button>').join('') : `<div class="pm-empty">${s ? 'Ничего не нашлось' : 'В Библиотеке пока нет файлов'}</div>`;
+  };
+  paint('');
+  const inp = $('.pm-search', el);
+  if (inp) { inp.oninput = () => paint(inp.value); inp.focus(); }
+  picPlace();
+}
+function picOpen(label, input, e) {
+  picClose();
+  const r = label.getBoundingClientRect();
+  const hasPoint = e.clientX || e.clientY;   // Enter/Space on a label has no point: aim at the slot itself
+  PIC.ax = hasPoint ? e.clientX : r.left + 12;
+  PIC.ay = hasPoint ? e.clientY : r.top + 12;
+  PIC.label = label; PIC.input = input;
+  const el = document.createElement('div');
+  el.className = 'picmenu'; el.setAttribute('role', 'menu');
+  el.onclick = picAction;
+  document.body.append(el);
+  PIC.el = el;
+  label.classList.add('pic-open');
+  picSourceStep();
+}
+async function picAction(ev) {
+  const b = ev.target.closest('[data-s]');
+  if (b) {
+    const kind = b.dataset.s;
+    if (kind === 'back') { picSourceStep(); return; }
+    if (kind === 'lib') { picLibraryStep(); return; }
+    if (kind === 'pc') { const input = PIC.input; picClose(); input.click(); return; }
+    if (kind === 'paste') {
+      if (b.disabled) return;
+      const k = $('.pm-k', b), was = k ? k.textContent : '', input = PIC.input;
+      b.disabled = true; if (k) k.textContent = '…';
+      try {
+        await setDropFile(input, await pasteFromClipboard());
+        picClose(); toast('Картинка вставлена из буфера обмена');
+      } catch (err) {
+        b.disabled = false; if (k) k.textContent = was;
+        toast(err && err.message ? err.message : 'Не удалось вставить картинку');
+      }
+      return;
+    }
+    if (kind === 'copy') {
+      const file = picFile(); if (!file) return;
+      b.disabled = true;
+      try { await copyToClipboard(file); picClose(); toast('Картинка скопирована — вставьте её в другую программу'); }
+      catch (err) { b.disabled = false; toast(err && err.message ? err.message : 'Не удалось скопировать картинку'); }
+      return;
+    }
+  }
+  const th = ev.target.closest('.cw-th'); if (!th) return;
+  const it = LIB.find(x => x.id === th.dataset.id); if (!it) return;
+  const input = PIC.input;
+  th.classList.add('on');
+  try {
+    await setDropFile(input, await libToFile(it));
+    picClose();
+    toast(it.kind === 'image' ? 'Картинка взята из Библиотеки' : 'Кадр видео взят из Библиотеки');
+  } catch { th.classList.remove('on'); toast('Не удалось взять файл'); }
+}
 document.addEventListener('click', e => {
   const lb = e.target.closest('label.drop, label.ref'); if (!lb || e.target.closest('.x, select, input')) return;
   const input = $('input[type=file]', lb); if (!input) return;
   e.preventDefault(); e.stopPropagation();
-  let m = $('#picSrc');
-  if (!m) { m = document.createElement('div'); m.className = 'modal'; m.id = 'picSrc'; document.body.append(m); }
-  m.hidden = false;
-  const slotFile = lb._file || null;  // a filled slot can also give its picture back to the clipboard
-  const showSrc = () => {
-    m.innerHTML = '<div class="box" style="padding:20px;max-width:380px"><div class="card-h"><h3>Откуда взять картинку?</h3><button class="btn" data-x type="button">Закрыть</button></div>'
-      + '<div style="display:grid;gap:10px">'
-      + (slotFile ? '<button class="btn pri" data-s="copy" type="button">Копировать</button>' : '')
-      + `<button class="btn${slotFile ? '' : ' pri'}" data-s="lib" type="button">Из Библиотеки</button>`
-      + '<button class="btn" data-s="pc" type="button">С компьютера</button>'
-      + '<button class="btn" data-s="paste" type="button" disabled>Вставить</button>'
-      + '</div><div class="hint" id="picPasteHint" style="margin-top:10px">Проверяем буфер обмена…</div></div>';
-    const paste = $('[data-s="paste"]', m), hint = $('#picPasteHint', m);
-    fetch('/api/clipboard/has-image', { cache: 'no-store' }).then(r => r.json()).then(j => {
-      if (!paste.isConnected) return;
-      paste.disabled = !(j && j.have);
-      hint.textContent = paste.disabled ? 'В буфере обмена нет картинки. Скопируйте её в любой программе — и нажмите сюда снова.'
-        : 'Вставка: картинка из буфера обмена попадёт в это место как файл.';
-    }).catch(() => { hint.textContent = ''; });
-  };
-  const showLib = () => {
-    const items = LIB.filter(it => !it.missing && it.url).sort((a, b) => b.date - a.date);
-    m.innerHTML = '<div class="box" style="padding:20px"><div class="card-h"><h3>Из Библиотеки</h3><button class="btn" data-x type="button">Закрыть</button></div>'
-      + (items.length ? `<div class="cw-pickgrid">${items.map(it => `<button class="cw-th" data-id="${it.id}" type="button" title="${esc((it.label ? it.label + ' · ' : '') + (it.prompt || '').slice(0, 80))}">${it.kind === 'image' ? `<img src="${it.url}" alt="" loading="lazy">` : `<video src="${it.url}#t=0.5" preload="metadata" muted></video><span class="cw-lb">последний кадр видео</span>`}</button>`).join('')}</div>`
-        : '<div class="hint" style="padding:20px 4px">В Библиотеке пока ничего нет.</div>') + '</div>';
-  };
-  showSrc();
-  m.onclick = async ev => {
-    if (ev.target === m || ev.target.closest('[data-x]')) { m.hidden = true; return; }
-    const s = ev.target.closest('[data-s]');
-    if (s) {
-      const kind = s.dataset.s;
-      if (kind === 'pc') { m.hidden = true; input.click(); return; }
-      if (kind === 'lib') { showLib(); return; }
-      if (kind === 'paste') {
-        if (s.disabled) return;
-        const was = s.textContent; s.disabled = true; s.textContent = 'Вставляем…';
-        try {
-          const data = await pasteFromClipboard();
-          await setDropFile(input, data);
-          m.hidden = true; toast('Картинка вставлена из буфера обмена');
-        } catch (err) {
-          s.disabled = false; s.textContent = was;
-          toast(err && err.message ? err.message : 'Не удалось вставить картинку');
-        }
-        return;
-      }
-      if (kind === 'copy') {
-        if (!slotFile) return;
-        const was = s.textContent; s.disabled = true; s.textContent = 'Копируем…';
-        try {
-          await copyToClipboard(slotFile);
-          m.hidden = true; toast('Картинка скопирована — вставьте её в другую программу');
-        } catch (err) {
-          s.disabled = false; s.textContent = was;
-          toast(err && err.message ? err.message : 'Не удалось скопировать картинку');
-        }
-        return;
-      }
-    }
-    const th = ev.target.closest('.cw-th'); if (!th) return;
-    const it = LIB.find(x => x.id === th.dataset.id); if (!it) return;
-    try {
-      await setDropFile(input, await libToFile(it));
-      m.hidden = true; toast('Изображение взята из Библиотеки');
-    } catch { toast('Не удалось взять файл'); }
-  };
+  if (PIC.el && PIC.label === lb) { picClose(); return; }   // a second click on the same slot closes the menu
+  picOpen(lb, input, e);
 }, true);
+addEventListener('pointerdown', e => {
+  if (!PIC.el || PIC.el.contains(e.target)) return;
+  if (e.target.closest && e.target.closest('label.drop, label.ref')) return;   // the slot's own click moves or closes the menu
+  picClose();
+}, true);
+// the × of the slot the menu points at: the menu has nothing left to copy, so it goes away too
+document.addEventListener('click', e => {
+  if (PIC.el && PIC.label && e.target.closest('.x') && PIC.label.contains(e.target)) picClose();
+}, true);
+addEventListener('scroll', e => { if (PIC.el && !PIC.el.contains(e.target)) picClose(); }, true);
+addEventListener('resize', picClose);
+addEventListener('blur', picClose);
+addEventListener('keydown', e => { if (e.key === 'Escape' && PIC.el) { e.stopPropagation(); picClose(); } }, true);
 
 /* the picture clipboard is the server's job: the web view is not allowed to touch it */
 const PIC_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/bmp': 'bmp', 'image/gif': 'gif', 'image/avif': 'avif' };
