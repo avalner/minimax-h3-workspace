@@ -932,6 +932,10 @@ img.pr-media{object-position:center 38%}
 .frame .live-img.dim{filter:blur(6px) brightness(.45);transform:scale(1.05)}
 .frame video.result{object-fit:contain;background:#000}
 .frame .wait{position:absolute;left:0;right:0;bottom:16px;text-align:center;font-size:12.5px;color:var(--muted)}
+/* a finished clip plays with sound; if the browser refuses an unmuted autoplay, this chip turns it back on */
+.frame .snd,.cw-frame .snd{position:absolute;right:10px;top:10px;z-index:3;display:inline-flex;align-items:center;gap:7px;padding:8px 12px;border-radius:10px;border:1px solid rgba(var(--accent-rgb),.55);background:rgba(var(--ov-rgb),.84);backdrop-filter:blur(6px);color:var(--text);font-weight:700;font-size:12.5px;cursor:pointer}
+.frame .snd:hover,.cw-frame .snd:hover{background:rgba(var(--accent-rgb),.28)}
+.frame .snd[hidden],.cw-frame .snd[hidden]{display:none}
 .dot.off{background:var(--warn);box-shadow:0 0 0 3px rgba(255,181,71,.18)}
 
 /* library */
@@ -2380,6 +2384,41 @@ function renderLive(ctx, W, H, src, p, t) {
 }
 const fmtTime = s => { s = Math.round(s); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
 
+/* A finished clip plays with sound. Browsers (and WebView2) sometimes refuse an unmuted autoplay:
+   then the clip starts muted and a «Включить звук» chip appears over it — one click puts the sound back. */
+function playWithSound(v) {
+  v.muted = false;
+  try { v.volume = 1; } catch (_) {}
+  const p = v.play();
+  if (p && p.catch) p.catch(() => {
+    v.muted = true;
+    const q = v.play(); if (q && q.catch) q.catch(() => {});
+    soundChip(v);
+  });
+}
+function soundChip(v) {
+  const host = v.closest('.frame, .cw-frame') || v.parentElement;
+  if (!host) return;
+  let b = host.querySelector('.snd');
+  if (!b) {
+    b = document.createElement('button');
+    b.type = 'button'; b.className = 'snd'; b.textContent = '🔊 Включить звук';
+    host.append(b);
+  }
+  b.hidden = false;
+  b.onclick = e => {
+    e.stopPropagation(); e.preventDefault();
+    b.hidden = true; v.muted = false;
+    try { v.volume = 1; } catch (_) {}
+    const p = v.play(); if (p && p.catch) p.catch(() => {});
+  };
+  if (!v.dataset.sndHook) {   // the sound turned on by hand in the player: the chip is no longer needed
+    v.dataset.sndHook = '1';
+    v.addEventListener('volumechange', () => { if (!v.muted) hideSoundChip(host); });
+  }
+}
+function hideSoundChip(host) { host?.querySelector?.('.snd')?.remove(); }
+
 function previewPanel(el, st, opts) {
   el.innerHTML = `
     <div class="screen"><div class="frame">
@@ -2444,6 +2483,7 @@ function previewPanel(el, st, opts) {
     pbox.hidden = true;
     [live, hud, liveImg, liveVid, result, wait].forEach(x => x.hidden = true);
     result.pause(); result.removeAttribute('src');
+    hideSoundChip(frame);
     $('.res', frame).hidden = false; frame.classList.remove('done');
   }
 
@@ -2562,7 +2602,7 @@ function previewPanel(el, st, opts) {
     run = null;
     if (kind === 'done') {
       [liveImg, liveVid, wait].forEach(x => x.hidden = true);
-      result.src = data.url; result.dataset.dragid = data.id; result.draggable = true; result.hidden = false; result.muted = true; result.play().catch(() => {});
+      result.src = data.url; result.dataset.dragid = data.id; result.draggable = true; result.hidden = false; playWithSound(result);
       frame.classList.add('done'); $('.hud-t', el).textContent = 'Готово'; $('.hud-s', el).textContent = took;
       status.innerHTML = `Готово за ${took} — видео в библиотеке. Seed: <b style="font-family:var(--mono)">${esc(String(data.seed ?? '—'))}</b> `
         + (data.seed != null ? '<button class="btn" id="keepSeed" type="button" style="padding:4px 10px;font-size:12px">Зафиксировать</button>' : '');
@@ -7351,10 +7391,11 @@ function cwFit(w, h) {  // the window takes the shape of the picture, never tall
 function cwShow(it) {
   const f = $('#cwFrame'); if (!f || !it) return;
   CW.shown = it.id;
+  hideSoundChip(f);
   const pic = it.kind === 'image', v = $('#cwVideo'), im = $('#cwImage');
   $('#cwWait').hidden = true; $('#cwLive').hidden = true; v.hidden = pic; im.hidden = !pic;
   if (pic) { v.removeAttribute('src'); im.onload = () => cwFit(im.naturalWidth, im.naturalHeight); im.src = it.url; }
-  else { v.onloadedmetadata = () => cwFit(v.videoWidth, v.videoHeight); v.src = it.url; v.muted = true; v.play().catch(() => {}); }
+  else { v.onloadedmetadata = () => cwFit(v.videoWidth, v.videoHeight); v.src = it.url; playWithSound(v); }
   $('#cwActs').hidden = false; $('#cwActs [data-a="restore"]').hidden = !it.cw_values;
   if (!CW.run) { $('#cwBar').style.width = '0'; $('#cwTime').innerHTML = `<b>${pic ? 'Изображение' : 'Видео'}${it.label ? ' · ' + esc(it.label) : ''}</b> · ${fmtDate(it.date)}`; $('#cwStatus').textContent = [it.res, it.sub].filter(Boolean).join(' · '); }
   $('#cwZoomBtn').hidden = !pic;
@@ -7690,6 +7731,7 @@ $('#setReset').onclick = () => {
     P.mode = m; const n = MT.ids.length, seq = m === 'seq' && n > 0, res = m === 'res' && MT.res;
     if (!seq) setPlaying(false);
     pv.hidden = !seq; bar.hidden = !seq; $('.mt-res', root).hidden = !res; $('.mt-empty', root).hidden = seq || res;
+    if (!res) hideSoundChip($('.mt-res', root)?.parentElement);
     const tabs = $('.mt-tabs', root); tabs.hidden = !MT.res; $$('[data-pv]', tabs).forEach(b => b.classList.toggle('on', b.dataset.pv === m));
     if (m === 'seq' && !$('.mt-res', root).paused) $('.mt-res', root).pause();
   }
@@ -7783,7 +7825,7 @@ $('#setReset').onclick = () => {
   window.mtPipePaint = pipePaint;
   function showDone(item) {
     const st = $('.mt-status', root), v = $('.mt-res', root);
-    v.src = item.url; v.muted = true; MT.res = true; showMode('res');
+    v.src = item.url; MT.res = true; showMode('res'); playWithSound(v);
     st.innerHTML = 'Склейка завершена: ролик лежит в Библиотеке. <button class="btn pri" id="mtSave" type="button" style="padding:4px 12px;font-size:12px" title="Сохранить готовый ролик целиком на компьютер">Сохранить на компьютер</button> <button class="btn" id="mtUp" type="button" style="padding:4px 12px;font-size:12px" title="Увеличить разрешение (долго)">Увеличить</button>';
     $('#mtSave', root).onclick = () => saveItems([byId(item.id) || normItem(item)]);
     $('#mtUp', root).onclick = () => openUpscale(byId(item.id) || normItem(item));
