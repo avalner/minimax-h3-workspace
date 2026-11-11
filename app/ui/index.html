@@ -169,6 +169,7 @@ setTimeout(() => document.documentElement.classList.add('booted'), 1500);
 .qj-result .hint{font-size:11.5px;margin:2px 0 6px}
 .qj-f{display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:12px 22px;border-top:1px solid var(--line);background:var(--bg-2)}
 .qj-f .sp{flex:1}
+.qj-f .btn:disabled{opacity:.45;cursor:not-allowed}
 .qj-prompt{max-height:280px;font-size:12.5px;line-height:1.5;margin:0}
 @media (max-width:900px){.qj-h{flex-wrap:wrap}.qj-ttl{flex-basis:100%}.qj-body{grid-template-columns:1fr;padding:14px 16px}.qj-h,.qj-f{padding-left:16px;padding-right:16px}.qj-state{max-width:100%}}
 .cw-cols{display:grid;grid-template-columns:minmax(0,1fr) 10px var(--cw-rw,520px);gap:6px;align-items:start}
@@ -1908,6 +1909,7 @@ equirements.txt</code><br>
     </div>
     <div class="qj-f">
       <button class="btn mini" id="qjCopy" type="button">Скопировать промпт</button>
+      <button class="btn mini" id="qjEdit" type="button" disabled title="Откроет раздел этого задания с его промптом, форматом, длиной, seed и файлами — там их можно поправить и запустить снова">Изменить параметры</button>
       <button class="btn mini" id="qjStop" type="button" hidden>Остановить</button>
       <button class="btn mini pri" id="qjOpen" type="button" hidden>Открыть результат</button>
       <span class="sp"></span>
@@ -3793,6 +3795,7 @@ function qJobPaint() {
   $('#qjPrompt').scrollTop = 0;
   $('#qjCopy').disabled = !prompt;
   $('#qjResult').dataset.id = '';
+  qjEditPaint(mode);
   qJobFormatPaint(meta, mode);
   qJobMediaPaint(meta, mode);
   qJobTick();
@@ -3910,6 +3913,164 @@ $('#qjStop').onclick = () => {
   j.stopping = true; fetch('/api/interrupt', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt_id: j.id }) });
   qJobTick(); qRender();
 };
+
+/* ---------- из подробностей задания: экран правки того же режима с теми же настройками ---------- */
+const JOB_EDITOR = {   // у этих разделов есть форма, в которую переносятся параметры задания
+  video: 'Видео', lipsync: 'Lipsync', refs: 'Референсы', actor: 'Актёрская игра', action: 'Экшн-сцены',
+  swap: 'Замена персонажа', krea: 'Изображение по тексту', qwen: 'Правка изображения', long: 'Видеостудия',
+};
+const JOB_NO_FORM = {   // а у этих параметров задания нет: результат собирается иначе
+  montage: 'Монтаж собирается на своём экране из клипов, а не из параметров задания',
+  upscale: 'Увеличение начинается с файла, а не с параметров задания',
+  relayvsr: 'Увеличение начинается с файла, а не с параметров задания',
+  custom: 'Настройки своего workflow правятся в файле workflow, а не в задании',
+};
+function qjEditPaint(mode) {
+  const b = $('#qjEdit'); if (!b) return;
+  const name = JOB_EDITOR[mode], ready = !!(QJ && QJ.data);
+  b.disabled = !ready || !name;
+  b.title = !ready ? 'Подробности задания ещё загружаются: без них переносить нечего'
+    : name ? `Откроет раздел «${name}» с промптом, форматом, длиной, seed и файлами этого задания — там их можно поправить и запустить снова`
+    : JOB_NO_FORM[mode] || 'У этого задания нет формы с настройками';
+}
+// файлы задания (картинки, референс-видео, звук) -> File для формы: тем же порядком, что в «Что использовалось»
+async function jobFiles(meta) {
+  const list = (Array.isArray(meta.inputs) ? meta.inputs : []).filter(x => x && x.url);
+  let lost = 0;
+  const got = await Promise.all(list.map(async x => {
+    try {
+      const r = await fetch(x.url, { cache: 'no-store' });
+      if (!r.ok) throw new Error(String(r.status));
+      const blob = await r.blob();
+      const kind = x.kind === 'video' || x.kind === 'audio' ? x.kind : 'image';
+      const type = blob.type || (kind === 'image' ? 'image/png' : kind === 'video' ? 'video/mp4' : 'audio/wav');
+      const file = new File([blob], x.file || ('job.' + { image: 'png', video: 'mp4', audio: 'wav' }[kind]), { type });
+      return { role: x.role || '', kind, file };
+    } catch { lost++; return null; }
+  }));
+  const out = { image: [], video: [], audio: [], lost };
+  got.filter(Boolean).forEach(f => out[f.kind].push(f));
+  return out;
+}
+// в слоте картинка появляется сразу, а формат подстраивается под неё после загрузки: дождёмся этого,
+// чтобы потом поставить формат задания, а не подобранный
+function jobImgReady(input) {
+  const img = input && input.parentElement && input.parentElement.querySelector('img');
+  if (!img || (img.complete && img.naturalWidth)) return Promise.resolve();
+  return new Promise(ok => { img.addEventListener('load', ok, { once: true }); img.addEventListener('error', ok, { once: true }); setTimeout(ok, 2000); });
+}
+async function jobPut(input, f) { if (!input || !f) return; await setDropFile(input, f); await jobImgReady(input); }
+
+async function jobEditVideo(meta, files) {
+  const loop = /зацикл/i.test(meta.sub || '') || files.image.some(f => /зацикл/i.test(f.role));
+  const first = files.image.find(f => /перв/i.test(f.role)) || files.image[0] || null;
+  const last = loop ? null : (files.image.find(f => /послед/i.test(f.role)) || (first && files.image.find(f => f !== first)) || null);
+  const put = async (zone, f) => {
+    if (f) { await jobPut($(zone + ' input'), f.file); return; }
+    if ($(zone).classList.contains('filled')) $(zone + ' .x').click();   // этого кадра в задании не было
+  };
+  await put('#dFirst', first);
+  await put('#dLast', last);
+  $('#vLoop').checked = loop; $('#vLoop').onchange();
+  $('#vPrompt').value = String(meta.prompt || '');
+  $('#vPrompt').oninput({ target: $('#vPrompt') });
+  if (ASPECTS.some(a => a.id === meta.aspect)) V.aspect = meta.aspect;
+  if (QUALITY_ALL.some(q => q.id === meta.q)) V.q = meta.q;
+  if (meta.len > 0) V.dur = Math.min(25, Math.max(3, Math.round(meta.len)));
+  if (meta.seed != null && meta.seed !== '') useSeed(V, meta.seed);
+  vUpd(); vPrev(); vMode();
+}
+async function jobEditLipsync(meta, files) {
+  $('#lPrompt').value = String(meta.prompt || '');
+  $$('#refs .ref.filled .x').forEach(x => x.click());
+  const slots = $$('#refs .ref input');
+  for (let i = 0; i < Math.min(slots.length, files.image.length); i++) await jobPut(slots[i], files.image[i].file);
+  if (ASPECTS.some(a => a.id === meta.aspect)) L.aspect = meta.aspect;
+  if (QUALITY_ALL.some(q => q.id === meta.q)) L.q = meta.q;
+  if (meta.ref_size) L.refSize = meta.ref_size;
+  if (meta.seed != null && meta.seed !== '') useSeed(L, meta.seed);
+  if (files.audio[0]) {   // голос задания: тот же фрагмент встаёт в аудиоредактор
+    if (L.dur0) $('#aRemove').click();
+    await setDropFile($('#aFile'), files.audio[0].file);
+    const t0 = performance.now();
+    while (!L.dur0 && performance.now() - t0 < 6000) await new Promise(r => setTimeout(r, 80));
+    if (L.dur0) {
+      const end = meta.len > 0 ? Math.min(L.dur0, +meta.len) : Math.min(L.dur0, REC_LEN);
+      $('#aStart').value = '0'; $('#aStart').onchange({ target: $('#aStart') });
+      $('#aEnd').value = String(end); $('#aEnd').onchange({ target: $('#aEnd') });
+    }
+  }
+  lUpd();
+}
+async function jobEditRef(meta, mode, files) {
+  const r = RM[mode], S = r.S;
+  $$('.ref.filled .x', r.root).forEach(x => x.click());
+  $$('.rm-vids .slot.filled .x', r.root).forEach(x => x.click());
+  $$('.rm-auds .slot.filled .x', r.root).forEach(x => x.click());
+  const imgs = $$('.ref input', r.root), vids = $$('.rm-vids .slot input', r.root), auds = $$('.rm-auds .slot input', r.root);
+  for (let i = 0; i < Math.min(imgs.length, files.image.length); i++) await jobPut(imgs[i], files.image[i].file);
+  for (let i = 0; i < Math.min(vids.length, files.video.length); i++) await jobPut(vids[i], files.video[i].file);
+  for (let i = 0; i < Math.min(auds.length, files.audio.length); i++) await jobPut(auds[i], files.audio[i].file);
+  if (ASPECTS.some(a => a.id === meta.aspect)) S.aspect = meta.aspect;
+  if (QUALITY_ALL.some(q => q.id === meta.q)) S.q = meta.q;
+  if (meta.len > 0) S.dur = Math.min(15, Math.max(3, Math.round(meta.len)));
+  if (meta.steps != null && meta.steps !== '') S.steps = +meta.steps;
+  if (meta.ref_size) S.refSize = meta.ref_size;
+  if (meta.seed != null && meta.seed !== '') useSeed(S, meta.seed);
+  const ta = r.prompt(); if (ta) ta.value = String(meta.prompt || '');
+  r.upd();
+}
+async function jobEditImage(meta, mode, files) {
+  if (IMG[mode] && IMG[mode].fillJob) IMG[mode].fillJob(meta);
+  if (mode === 'qwen') {
+    for (const [i, sel] of ['#qwDrop', '#qwDrop2', '#qwDrop3'].entries()) {
+      if ($(sel).classList.contains('filled')) $(sel + ' .x').click();
+      if (files.image[i]) await jobPut($(sel + ' input'), files.image[i].file);
+    }
+  }
+}
+async function jobEditFill(meta, mode, files) {
+  if (mode === 'video') await jobEditVideo(meta, files);
+  else if (mode === 'lipsync') await jobEditLipsync(meta, files);
+  else if (RM[mode]) await jobEditRef(meta, mode, files);
+  else if (mode === 'krea' || mode === 'qwen') await jobEditImage(meta, mode, files);
+}
+async function jobEditOpen() {
+  const d = QJ && QJ.data; if (!d) { toast('Подробности задания ещё загружаются'); return; }
+  const meta = { ...(d.meta || {}) };
+  const mode = meta.mode || (QUEUE.find(x => x.id === QJ.id) || {}).mode || '';
+  const name = JOB_EDITOR[mode];
+  if (!name) { toast(JOB_NO_FORM[mode] || 'У этого задания нет формы с настройками'); return; }
+  const btn = $('#qjEdit'), label = btn.textContent, jid = QJ.id;
+  btn.disabled = true; btn.textContent = 'Открываем…';
+  try {
+    if (mode === 'long') {   // у Видеостудии открывается сам проект: в нём сцены и референсы
+      const run = meta.long && meta.long.run;
+      const ok = run && await RM.long.root._openRun(run);
+      if (!QJ || QJ.id !== jid) return;   // окно закрыли, пока открывался проект
+      if (!ok) {
+        toast('Проект этого задания не сохранился: «Видеостудия» помнит последние восемь проектов');
+        return;
+      }
+      qJobClose(); goTo('long'); $('.main').scrollTop = 0;
+      toast('Проект задания открыт в «Видеостудии»: сцены, референсы и размер на месте');
+      return;
+    }
+    const files = await jobFiles(meta);
+    if (!QJ || QJ.id !== jid) return;   // окно закрыли, пока грузились файлы
+    qJobClose();
+    goTo(mode); $('.main').scrollTop = 0;
+    await jobEditFill(meta, mode, files);
+    toast(`Параметры задания перенесены в «${name}»: поправьте и запустите снова`
+      + (files.lost ? ' · часть файлов не удалось открыть: ComfyUI их уже не хранит' : ''));
+  } catch (e) {
+    toast('Не удалось открыть экран правки: ' + (e && e.message || e));
+  } finally {
+    btn.disabled = false; btn.textContent = label;
+    qjEditPaint(mode);
+  }
+}
+$('#qjEdit').onclick = jobEditOpen;
 
 function addToLib(item, date = new Date()) {
   LIB.push({ id: Math.random().toString(36).slice(2), date, fav: false, ...item });
@@ -6773,6 +6934,14 @@ function imgSeedWire(root, S) {
   paint();
 }
 const imgSeedForm = (S, fd) => { if (S.seedFixed && S.seed) fd.append('seed', S.seed); };
+// seed из задания в очереди: тот же вариант повторится, если не менять промпт и настройки
+function imgJobSeed(root, S, seed) {
+  if (seed == null || seed === '') return;
+  S.seedFixed = true; S.seed = String(seed);
+  $('[data-sf="1"]', root)?.click();   // переключатель «Фиксированный» и поле
+  const inp = $('[data-seedin]', root);
+  if (inp) { inp.value = S.seed; inp.dispatchEvent(new Event('input')); }
+}
 
 /* --- Krea 2: by text --- */
 (() => {
@@ -6923,6 +7092,19 @@ const imgSeedForm = (S, fd) => { if (S.seedFixed && S.seed) fd.append('seed', S.
   const fillList = text => { kbMode(true); $('.kr-prompt', root).value = text; $('.kr-prompt', root).oninput({ target: $('.kr-prompt', root) }); K.removed.clear(); kbRender(); };
   imgSeedWire(root, S); upd();
   IMG.krea = { fillList, fill: it => { if (it.engine) S.engine = it.engine; else if (/^(Картинка|Изображение) \(FLUX/.test(it.sub || '')) S.engine = 'flux'; else if (/^(Картинка|Изображение) \(Qwen/.test(it.sub || '')) S.engine = 'qwen'; else S.engine = 'krea'; $('.kr-prompt', root).value = it.prompt || ''; $('.kr-prompt', root).oninput({ target: $('.kr-prompt', root) }); if (IMG_SIZES[it.aspect]) S.aspect = it.aspect; upd(); } };
+  // задание из очереди: промпт, модель, стиль, формат, размер и seed — всё, что записано в его параметрах
+  IMG.krea.fillJob = m => {
+    const sub = String(m.sub || '');
+    S.engine = /FLUX\.2/i.test(sub) ? 'flux' : /Qwen/i.test(sub) ? 'qwen' : 'krea';
+    S.style = S.engine === 'krea' && /реализм/i.test(sub) ? 'real' : 'plain';
+    if (S.style === 'real') S.scale = /^4K$/i.test(m.q || '') ? '4k' : '2k';
+    if (IMG_SIZES[m.aspect]) S.aspect = m.aspect;
+    kbMode(false);
+    $('.kr-prompt', root).value = m.prompt || '';
+    $('.kr-prompt', root).oninput({ target: $('.kr-prompt', root) });
+    imgJobSeed(root, S, m.seed);
+    upd();
+  };
 })();
 
 /* --- Qwen Image 2.1: edit a picture, character sheet --- */
@@ -7035,6 +7217,14 @@ const imgSeedForm = (S, fd) => { if (S.seedFixed && S.seed) fd.append('seed', S.
   }
   imgSeedWire(root, S); upd();
   IMG.qwen = { fill: it => { if (it.engine) S.engine = it.engine; if (it.frames !== undefined) S.frames = !!it.frames; if (String(it.sub || '').startsWith('Раскадровка по кадрам')) S.frames = true; else if (String(it.sub || '').startsWith('Раскадровка')) S.frames = false; if (it.kind === 'story' || String(it.sub || '').startsWith('Раскадровка')) { S.kind = 'story'; $('.qw-prompt', root).value = it.prompt || ''; } else if (it.sub === 'Лист персонажа') S.kind = 'sheet'; else { S.kind = 'edit'; $('.qw-prompt', root).value = it.prompt || ''; } upd(); } };
+  // задание из очереди: что делали (правка, лист, раскадровка), по какому промпту, модель, формат и seed
+  IMG.qwen.fillJob = m => {
+    const sub = String(m.sub || '');
+    IMG.qwen.fill({ ...m, engine: /FLUX\.2/i.test(sub) ? 'flux' : 'qwen' });
+    if (m.aspect && IMG_SIZES[m.aspect]) S.aspect = m.aspect;
+    imgJobSeed(root, S, m.seed);
+    upd();
+  };
 })();
 
 /* "Правка картинки": a grip under the picture slots changes their height (like the first/last frames).
