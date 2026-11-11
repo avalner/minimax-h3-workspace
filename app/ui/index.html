@@ -373,6 +373,12 @@ body.cloud-on #mdCloudBox{display:block!important}
 .side-foot.collapsed .sf-chev{transform:rotate(-90deg)}
 .stat{display:flex;justify-content:space-between;font-size:12.5px;color:var(--muted)}
 .stat b{color:var(--text);font-weight:700}
+#watchRow{display:grid;gap:1px}
+#watchRow[hidden]{display:none}
+#watchRow span{font-size:11.5px}
+#watchRow b{overflow-wrap:anywhere}
+#watchRow[data-state="warn"] b{color:var(--warn)}
+#watchRow[data-state="bad"] b{color:var(--accent)}
 .dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3px rgba(63,209,139,.18);margin-right:7px;vertical-align:1px}
 .vram{height:5px;border-radius:9px;background:var(--surface-2);overflow:hidden}
 .vram i{display:block;height:100%;width:0;background:var(--grad);transition:width .6s,background .3s}
@@ -1166,6 +1172,7 @@ img.pr-media{object-position:center 38%}
       </button>
       <div class="sf-body">
         <div class="stat"><span>Движок</span><b id="engTxt">запущен</b></div>
+        <div class="stat" id="watchRow" hidden><span>Сторож</span><b id="watchTxt">—</b></div>
         <div class="stat"><span>Видеокарта</span><b id="gpuName">—</b></div>
         <div class="meter"><div class="stat"><span>Нагрузка GPU</span><b id="gpuLoad">—</b></div><div class="vram"><i id="gpuBar"></i></div></div>
         <div class="meter"><div class="stat"><span>Видеопамять</span><b id="vramTxt">—</b></div><div class="vram"><i id="vramBar"></i></div></div>
@@ -1816,6 +1823,19 @@ equirements.txt</code><br>
           </div>
           <div class="set-acts"><span class="hint" id="agentApiFile"></span></div>
         </div>
+
+        <div class="card">
+          <div class="card-h"><h3>Движок и видеокарта</h3><span class="hint" id="watchStateTxt"></span></div>
+          <div class="set-row">
+            <div class="set-lbl"><b>Следить за видеокартой</b>
+              <small>во время генерации программа раз в десять секунд смотрит нагрузку, температуру и потребление карты. Если шаги встали, а карта при этом простаивает (или показывает нагрузку, но остаётся холодной), ComfyUI перезапускается сам — ваш собственный тоже, тем же способом, каким он был запущен. Что было — записывается в watchdog.log в папке данных</small></div>
+            <label class="hint" style="display:flex;gap:8px;align-items:flex-start;cursor:pointer" title="Выключите, если хотите сами решать, когда перезапускать движок"><input type="checkbox" id="setWatchdog" style="margin-top:2px;accent-color:var(--accent)" checked><span>Следить</span></label>
+          </div>
+          <div class="set-acts">
+            <button class="btn" id="engRestart" type="button" title="Запустить ComfyUI заново: помогает, когда движок завис, а очередь стоит">Перезапустить ComfyUI</button>
+            <span class="hint">незаконченные задания при этом пропадут</span>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -2074,6 +2094,9 @@ async function pollSystem() {
       $('#powerRow').hidden = gpu.power == null;
       if (gpu.power != null) $('#gpuPower').textContent = `${Math.round(gpu.power)}` + (gpu.power_limit ? ` / ${Math.round(gpu.power_limit)}` : '') + ' Вт';
     } else $('#gpuName').textContent = 'не найдена';
+    const w = s.watch;
+    $('#watchRow').hidden = !w || !w.text;
+    if (w && w.text) { $('#watchRow').dataset.state = w.state; $('#watchTxt').textContent = w.text; }
     meter('#cpuTxt', '#cpuBar', s.cpu, s.cpu != null ? `${Math.round(s.cpu)} %` : '—');
     meter('#ramTxt', '#ramBar', s.ram.used_gb / s.ram.total_gb * 100, `${g1(s.ram.used_gb)} / ${g1(s.ram.total_gb)} ГБ`);
     if (s.disk) { $('#diskName').textContent = s.disk.drive; $('#diskTxt').textContent = `свободно ${s.disk.free_gb} ГБ`; }
@@ -3428,6 +3451,31 @@ $('#setAgents').onchange = async e => {
   } catch (err) { e.target.checked = !e.target.checked; toast(err.message); }
 };
 loadAgents();
+/* the video card watch (Settings → Движок и видеокарта) */
+async function loadWatch() {
+  try {
+    const s = await (await fetch('/api/system')).json();
+    const w = s.watch || {};
+    $('#setWatchdog').checked = s.watchdog !== false;
+    $('#watchStateTxt').textContent = s.watchdog === false ? 'выключено'
+      : w.state === 'off' ? 'только для ComfyUI на этом компьютере' : (w.text || 'следим');
+  } catch {}
+}
+$('#setWatchdog').onchange = async e => {
+  try {
+    const j = await postJSON('/api/settings/watchdog', { on: e.target.checked });
+    $('#watchStateTxt').textContent = j.on ? 'следим' : 'выключено';
+    toast(j.on ? 'Следим за видеокартой: зависший движок перезапустится сам' : 'Наблюдение выключено: движок перезапускаете вы сами');
+  } catch (err) { e.target.checked = !e.target.checked; toast(err.message); }
+};
+$('#engRestart').onclick = async e => {
+  const b = e.currentTarget, was = b.textContent;
+  b.disabled = true; b.textContent = 'Перезапускаю…';
+  try { await postJSON('/api/engine/restart', {}); toast('ComfyUI перезапущен'); loadStatus(); }
+  catch (err) { toast(err.message); }
+  finally { b.disabled = false; b.textContent = was; }
+};
+loadWatch();
 $('#mdFix').onclick = async () => {
   if (!setupInfo) setupInfo = await (await fetch('/api/setup/info')).json();
   const c = setupInfo.config;

@@ -15,6 +15,7 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.parse
 import zipfile
 from pathlib import Path
 
@@ -324,19 +325,25 @@ class Installer:
 
 # ---------- managed ComfyUI process ----------
 
+def utf8_env():
+    """The user's own environment, but with UTF-8 printing.
+    On Russian Windows (cp1251) ComfyUI's log cannot print emoji (the upscaler node prints a check mark):
+    the error handler itself then crashes, the worker thread dies and Lipsync hangs forever."""
+    env = dict(os.environ)
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
+    return env
+
+
 def local_env(root):
     """Environment that keeps caches and temp files inside the install folder instead of the Windows profile."""
     cache = Path(root) / "cache"
     dirs = {"PIP_CACHE_DIR": "pip", "TRITON_CACHE_DIR": "triton", "TORCHINDUCTOR_CACHE_DIR": "inductor",
             "HF_HOME": "huggingface", "TORCH_HOME": "torch", "XDG_CACHE_HOME": "xdg", "TEMP": "temp", "TMP": "temp"}
-    env = dict(os.environ)
+    env = utf8_env()
     for var, sub in dirs.items():
         (cache / sub).mkdir(parents=True, exist_ok=True)
         env[var] = str(cache / sub)
-    # On Russian Windows (cp1251) ComfyUI's log cannot print emoji (the upscaler node prints a check mark):
-    # the error handler itself then crashes, the worker thread dies and Lipsync hangs forever.
-    env["PYTHONUTF8"] = "1"
-    env["PYTHONIOENCODING"] = "utf-8"
     return env
 
 
@@ -396,8 +403,109 @@ class ComfyProcess:
                 pass
         self.proc = None
 
+    def restart(self):
+        """Replace a hung engine with a fresh one (the stop is forced: it does not answer any more)."""
+        self.stop()
+        time.sleep(1)
+        self.start()
+
     def log_tail(self, n=15):
-        try:
-            return "\n".join(self.log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-n:])
-        except OSError:
-            return ""
+        return log_tail(self.log_path, n)
+
+
+def log_tail(path, n=15):
+    """The last lines of a log file, or nothing when it is not there yet."""
+    try:
+        return "\n".join(Path(path).read_text(encoding="utf-8", errors="replace").splitlines()[-n:])
+    except OSError:
+        return ""
+
+
+# ---------- the user's own ComfyUI ----------
+#
+# In "external" mode the app does not start ComfyUI, but a hung engine can still be replaced: ComfyUI
+# reports its own command line in /system_stats, so it can be started again exactly as it was started.
+# Only ever for a ComfyUI on this computer, and only when the user's window is frozen anyway.
+
+def listening_pid(port):
+    """PID of the process listening on this local port (None when nobody does or the port is remote)."""
+    try:
+        out = subprocess.run(["netstat", "-ano", "-p", "TCP"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                             text=True, timeout=10, creationflags=CREATE_NO_WINDOW, errors="replace").stdout
+    except Exception:
+        return None
+    tail = f":{int(port)}"
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) >= 5 and parts[0].upper() == "TCP" and parts[1].endswith(tail) and parts[3].upper() == "LISTENING":
+            try:
+                return int(parts[4])
+            except ValueError:
+                return None
+    return None
+
+
+def kill_pid(pid):
+    """Stop the process tree and wait for it to go. Returns (ok, why) - Windows may refuse (elevated process)."""
+    try:
+        done = subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], stdout=subprocess.PIPE,
+                              stderr=subprocess.STDOUT, text=True, timeout=30, errors="replace",
+                              creationflags=CREATE_NO_WINDOW)
+    except Exception as e:
+        return False, f"{type(e).__name__}: {e}"
+    if done.returncode != 0:
+        said = (done.stdout or "").strip().replace("\r", "").splitlines()
+        low = " ".join(said).lower()
+        if "отказано" in low or "access is denied" in low:
+            return False, "Windows не разрешила остановить процесс (ComfyUI запущен от администратора)"
+        return False, said[-1] if said else f"taskkill код {done.returncode}"
+    time.sleep(2)
+    return True, ""
+
+
+def launch_again(argv):
+    """(python, arguments, working folder) that start this ComfyUI again, from the command line it reports.
+
+    The portable build keeps its interpreter in python_embeded next to ComfyUI; other installs (a venv
+    or the system python) are looked for nearby. A python somewhere else cannot be found that way, and
+    then the app can only ask the user to start ComfyUI by hand.
+    """
+    argv = [str(a) for a in (argv or [])]
+    main = next((Path(a) for a in argv if a.lower().endswith("main.py")), None)
+    if main is None or not main.is_absolute():
+        raise RuntimeError("ComfyUI не сообщил, откуда он запущен")
+    root = main.parent.parent
+    for py in (root / "python_embeded" / "python.exe", root / "python" / "python.exe",
+               root / ".venv" / "Scripts" / "python.exe", root / "venv" / "Scripts" / "python.exe"):
+        if py.exists():
+            break
+    else:
+        raise RuntimeError("рядом с ComfyUI не нашёлся его Python — запустите ComfyUI сами, как обычно")
+    flags = [a for a in argv[1:] if a not in ("-s", "-u")]  # already given below
+    return py, [str(py), "-s", "-u", str(main)] + flags, root
+
+
+def restart_external(stats, log_path, url=""):
+    """Stop the user's own ComfyUI and start it again the same way. Returns the new process.
+
+    `stats` is the last /system_stats answer (it carries the command line), `url` the address the app
+    talks to. Raises RuntimeError with something the user can act on.
+    """
+    parsed = urllib.parse.urlparse(url or "")
+    if parsed.hostname not in (None, "", "127.0.0.1", "localhost"):
+        raise RuntimeError("ComfyUI работает на другом компьютере — оттуда его перезапустить нельзя")
+    py, args, cwd = launch_again(((stats or {}).get("system") or {}).get("argv"))
+    port = parsed.port or 8188
+    pid = listening_pid(port)
+    if pid:
+        ok, why = kill_pid(pid)
+        if not ok:
+            raise RuntimeError(why)
+    log_path = Path(log_path)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log = open(log_path, "a", encoding="utf-8", errors="replace")
+    log.write(f"\n=== {time.strftime('%Y-%m-%d %H:%M:%S')} запуск заново после зависания ===\n{py} {' '.join(args[1:])}\n"
+              f"рабочая папка: {cwd}\n")
+    log.flush()
+    return subprocess.Popen(args, cwd=cwd, stdout=log, stderr=subprocess.STDOUT,
+                            creationflags=CREATE_NO_WINDOW, env=utf8_env())

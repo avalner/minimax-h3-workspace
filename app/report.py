@@ -168,6 +168,11 @@ def build(info):
     for e in info.get("toasts") or ["нет"]:
         L.append("- " + str(e))
 
+    sec("СТОРОЖ ВИДЕОКАРТЫ (зависания движка)")
+    L.append("Включён: " + ("да" if info.get("guard_on", True) else "НЕТ"))
+    for line in (info.get("guard") or "срабатываний не было").splitlines():
+        L.append("- " + line)
+
     sec("ЖУРНАЛ ДВИЖКА (последние строки)")
     L.append(info.get("comfy_log") or "журнала нет (свой ComfyUI пишет его сам в своём окне)")
 

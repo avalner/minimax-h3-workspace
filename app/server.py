@@ -20,6 +20,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import time
 import uuid
 import urllib.parse
 import webbrowser
@@ -39,6 +40,7 @@ import monitor
 import report
 import speech
 import updater
+import watchdog
 from version import APP_VERSION
 
 def split_frames(text):
@@ -393,6 +395,14 @@ class App:
         self.rh_models = None  # model paths found in the user's RunningHub workflow
         self.monitor = monitor.Monitor()
         self.recent_errors = []  # last problems, for the report to the author
+        self.guard = watchdog.GpuWatchdog()  # the video card watch: slow render or hung engine
+        self.guard_task = None
+        self.guard_gpu = None    # the last reading the watch took
+        self.guard_last = None   # the last restart it made because of a hang
+        self.stats = None        # last /system_stats: it carries the command line of the user's own ComfyUI
+        self.ext_proc = None     # the user's own ComfyUI, when we had to start it again
+        self.ext_log = DATA_DIR / "comfyui-external.log"
+        self._restarting = False
 
     def llm_root(self):
         if self.config.get("llm_dir"):
@@ -488,6 +498,7 @@ class App:
             else:
                 self.start_managed()
         self.ws_task = asyncio.create_task(self.comfy_ws_loop())
+        self.guard_task = asyncio.create_task(self.guard_loop())
         self.agents.publish()
 
     def prune_input_cache(self, days=30):
@@ -528,6 +539,8 @@ class App:
     async def stop(self, _app):
         self.agents.unpublish()
         self.ws_task.cancel()
+        if self.guard_task:
+            self.guard_task.cancel()
         if self.installer:
             self.installer.cancelled = True
         if self.process:
@@ -546,8 +559,10 @@ class App:
         loop = asyncio.get_running_loop()
         end = loop.time() + timeout
         while loop.time() < end:
-            if self.process and not self.process.alive():
-                tail = self.process.log_tail()
+            died = (self.process and not self.process.alive()) or (
+                not self.process and self.ext_proc is not None and self.ext_proc.poll() is not None)
+            if died:
+                tail = self.process.log_tail() if self.process else engine.log_tail(self.ext_log, 20)
                 hint = ("\n\nПохоже, проблема в драйвере видеокарты. Обновите драйвер NVIDIA (nvidia.com/drivers), "
                         "перезагрузите компьютер и нажмите «Продолжить».") if re.search(r"cuda|nvidia|driver", tail, re.I) else ""
                 raise RuntimeError("ComfyUI не запустился:\n" + tail + hint)
@@ -556,7 +571,8 @@ class App:
                 return
             except Exception:
                 await asyncio.sleep(2)
-        raise RuntimeError("ComfyUI долго не отвечает:\n" + (self.process.log_tail() if self.process else ""))
+        raise RuntimeError("ComfyUI долго не отвечает:\n"
+                           + (self.process.log_tail() if self.process else engine.log_tail(self.ext_log, 20)))
 
     async def resolve_models(self):
         """Match the chosen model files against what ComfyUI sees (any subfolder)."""
@@ -612,6 +628,7 @@ class App:
         argv = data["system"].get("argv", [])
         if "--output-directory" in argv:
             self.output_dir = Path(argv[argv.index("--output-directory") + 1])
+        self.stats = data  # the command line in it is how the user's own ComfyUI can be started again
         return data
 
     async def reconcile_jobs(self):
@@ -697,6 +714,160 @@ class App:
             self.note_error(text)
             await self.broadcast({"type": "notice", "text": text})
 
+    # ---------- the video card watch ----------
+    #
+    # A percentage that does not move looks the same whether a step is heavy or ComfyUI is gone. The card
+    # tells them apart (see watchdog.py), so while a job runs the app looks at it every ten seconds and
+    # replaces an engine that has stopped working. Everything it decides goes to watchdog.log, and the
+    # sidelist shows "нет шагов N мин" before anything is touched.
+
+    def watchdog_on(self):
+        return self.config.get("gpu_watchdog") is not False
+
+    def watchdog_local(self):
+        """A rented or otherwise remote ComfyUI cannot be started again from here, and its card is not ours."""
+        return urllib.parse.urlparse(self.comfy).hostname in (None, "", "127.0.0.1", "localhost")
+
+    def running_jobs(self):
+        return [j for j in self.jobs.values() if j.get("state") == "running" and not j.get("task")]
+
+    async def guard_loop(self):
+        while True:
+            await asyncio.sleep(watchdog.PERIOD)
+            try:
+                await self.guard_tick()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # the watch must never take the app down with it
+                self.note_error(f"Сторож видеокарты: {type(e).__name__}: {e}")
+
+    async def guard_tick(self):
+        """One look at the card. Cheap when nothing runs: nvidia-smi is asked only while a job is going."""
+        if not self.watchdog_on() or not self.watchdog_local() or not self.running_jobs():
+            self.guard.paused()
+            return
+        gpu = await asyncio.to_thread(self.monitor.gpu)
+        self.guard_gpu = gpu
+        verdict = self.guard.observe(gpu, busy=True, online=self.comfy_online)
+        if verdict:
+            await self.on_stuck(verdict)
+
+    async def on_stuck(self, verdict):
+        """The engine looks hung: say why, restart it, and tell the user what that costs."""
+        line = watchdog.describe(verdict)
+        self.guard_log(line)
+        self.note_error("Сторож видеокарты: " + line)
+        await self.broadcast({"type": "notice", "text": watchdog.verdict_text(verdict)})
+        ok, why = await self.restart_engine()
+        self.guard_last = {"at": time.time(), "kind": verdict["kind"], "ok": ok, "why": why}
+        if ok:
+            await self.drop_engine_jobs("Задание прервано: движок завис, ComfyUI перезапущен")
+            self.guard.reset()
+            return
+        if not why:  # another restart is already under way
+            return
+        text = (f"Перезапустить ComfyUI не получилось: {why}. Закройте окно ComfyUI и запустите его снова. "
+                "Если это повторяется, перезагрузите компьютер и обновите драйвер NVIDIA.")
+        self.note_error(text)
+        await self.broadcast({"type": "notice", "text": text})
+
+    async def restart_engine(self):
+        """Start ComfyUI again: our own engine, or the user's own one from the command line it reports.
+        Returns (ok, why); an empty `why` means another restart was already running, which is not a problem."""
+        if not self.watchdog_local():
+            return False, "это ComfyUI на другом компьютере: перезапустите его там, где он запущен"
+        if self._restarting:
+            return False, ""
+        self._restarting = True
+        try:
+            if self.process:
+                await asyncio.to_thread(self.process.restart)
+            else:
+                if self.ext_proc is not None and self.ext_proc.poll() is not None:
+                    self.ext_proc = None  # an old copy of it is already gone
+                self.ext_proc = await asyncio.to_thread(engine.restart_external, self.stats, self.ext_log, self.comfy)
+            await self.wait_comfy(timeout=240)
+            return True, ""
+        except Exception as e:
+            why = str(e) or type(e).__name__
+            if not self.process:
+                tail = engine.log_tail(self.ext_log, 6)
+                why = f"{why}. Журнал: {tail}" if tail else why
+            return False, why
+        finally:
+            self._restarting = False
+
+    async def drop_engine_jobs(self, message=None, kind="error"):
+        """The engine was replaced, so its queue is gone: nothing of what it had will finish now."""
+        for jid in [j for j, job in self.jobs.items() if not job.get("task")]:
+            self.keep_meta(self.jobs.get(jid))
+            self.jobs.pop(jid, None)
+            await self.broadcast({"type": kind, "prompt_id": jid, **({"message": message} if message else {})})
+
+    def guard_log(self, line):
+        """One line about the card, for the report and for the developer. The window never reads it."""
+        try:
+            path = DATA_DIR / "watchdog.log"
+            if path.exists() and path.stat().st_size > 400_000:
+                path.replace(path.with_suffix(".old"))
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(f"{datetime.now():%Y-%m-%d %H:%M:%S} {line}\n")
+        except OSError:
+            pass
+
+    def guard_log_tail(self, n=12):
+        try:
+            return "\n".join((DATA_DIR / "watchdog.log").read_text(encoding="utf-8", errors="replace").splitlines()[-n:])
+        except OSError:
+            return ""
+
+    def watch_state(self):
+        """What the sidebar shows about the watch: nothing while all is well."""
+        if not self.watchdog_on() or not self.watchdog_local():
+            return {"state": "off", "text": ""}
+        last = self.guard_last
+        if last and time.time() - last["at"] < 600:
+            if last.get("ok"):
+                when = time.strftime("%H:%M", time.localtime(last["at"]))
+                return {"state": "warn", "text": f"перезапущен в {when}"}
+            return {"state": "bad", "text": "перезапуск не удался"}
+        if not self.running_jobs():
+            return {"state": "ok", "text": ""}
+        stall = self.guard.stall()
+        if stall < 120:
+            return {"state": "ok", "text": ""}
+        g = self.guard_gpu or {}
+        card = ""
+        if g.get("util") is not None:
+            card = f" · {round(g['util'])} %"
+            if g.get("temp") is not None:
+                card += f" · {round(g['temp'])} °C"
+        return {"state": "warn", "text": f"нет шагов {int(stall // 60)} мин{card}"}
+
+    async def h_watchdog_set(self, req):
+        on = bool((await req.json()).get("on"))
+        self.config.update(gpu_watchdog=on)
+        if not on:
+            self.guard.reset()
+        self.guard_log("сторож выключен" if not on else "сторож включён")
+        return web.json_response({"ok": True, "on": on})
+
+    async def h_engine_restart(self, _req):
+        """Settings → «Движок»: start ComfyUI again by hand."""
+        if self.installer:
+            return web.json_response({"error": "Сначала дождитесь установки"}, status=409)
+        if self._restarting:
+            return web.json_response({"error": "Перезапуск уже идёт"}, status=409)
+        self.guard_log("перезапуск по кнопке")
+        ok, why = await self.restart_engine()
+        if not ok:
+            if not why:
+                return web.json_response({"error": "Перезапуск уже идёт"}, status=409)
+            self.note_error(f"Не удалось перезапустить движок по кнопке: {why}")
+            return web.json_response({"error": f"Не удалось перезапустить ComfyUI: {why}"}, status=500)
+        await self.drop_engine_jobs("Задание остановлено: движок перезапущен вручную")
+        return web.json_response({"ok": True, "url": self.comfy})
+
     async def on_comfy_binary(self, data):
         if len(data) < 8:
             return
@@ -713,6 +884,7 @@ class App:
             return
         if not any(j["state"] == "running" for j in self.jobs.values()):
             return
+        self.guard.note_progress()  # a live preview is the strongest sign of a working render
         for b in list(self.browsers):
             try:
                 await b.send_bytes(image)
@@ -731,6 +903,7 @@ class App:
         if not job:
             return
         pid = job["prompt_id"]
+        self.guard.note_progress()  # any event of our job means ComfyUI is alive and working on it
         if t == "execution_start":
             job["state"] = "running"
             await self.send_stage(job, "load")
@@ -1225,9 +1398,12 @@ class App:
         return web.json_response({"ok": True})
 
     async def h_system(self, _req):
-        """CPU / RAM / GPU / disk readings for the sidebar."""
+        """CPU / RAM / GPU / disk readings for the sidebar, and what the video card watch sees."""
         where = self.output_dir or self.config.get("install_dir") or HOME
-        return web.json_response(await asyncio.to_thread(self.monitor.sample, where))
+        data = await asyncio.to_thread(self.monitor.sample, where)
+        data["watch"] = self.watch_state()
+        data["watchdog"] = self.watchdog_on()
+        return web.json_response(data)
 
     # ---------- first-run setup ----------
 
@@ -1431,6 +1607,7 @@ class App:
             "home": HOME, "data_dir": DATA_DIR, "hw": hw, "page": page.get("page"), "comfy": comfy, "models": models,
             "config": self.config.data, "errors": self.recent_errors, "toasts": page.get("toasts"),
             "comfy_log": self.process.log_tail(60) if self.process else "",
+            "guard": self.guard_log_tail(), "guard_on": self.watchdog_on(),
             "llm_log": self.llm.log_tail(12)})
         folder = DATA_DIR / "reports"
         folder.mkdir(parents=True, exist_ok=True)
@@ -2912,31 +3089,25 @@ class App:
             await self.comfy_json("POST", "/interrupt", json={})
 
     async def interrupt_watch(self, pid, wait=15):
-        """ComfyUI sometimes ignores «Cancel» (stuck on a heavy step). If the job is still there after `wait` seconds:
-        managed engine - restart it; the user's own ComfyUI - only tell the user."""
+        """ComfyUI sometimes ignores «Cancel» (stuck on a heavy step). If the job is still there after `wait`
+        seconds the engine is not answering us any more, so it is replaced: our own process, or the user's
+        own ComfyUI started again from the command line it reports (only when that is possible)."""
         await asyncio.sleep(wait)
         if pid not in self.jobs:
             return
-        if not self.process:
-            text = ("ComfyUI не отвечает на «Отмена» уже больше 15 секунд. Это ваш собственный ComfyUI: "
-                    "закройте его окно и запустите заново.")
-            self.note_error(text)
-            await self.broadcast({"type": "notice", "text": text})
-            return
-        text = "ComfyUI не отвечает на «Отмена». Перезапускаем движок, это займёт около минуты."
+        text = "ComfyUI не отвечает на «Отмена». Перезапускаю движок, это займёт около минуты."
         self.note_error(text)
         await self.broadcast({"type": "notice", "text": text})
-        try:
-            await asyncio.to_thread(self.process.stop)
-            await asyncio.to_thread(self.process.start)
-            await self.wait_comfy()
-        except Exception as e:
-            self.note_error(f"Не удалось перезапустить движок после отмены: {e}")
+        ok, why = await self.restart_engine()
+        if not ok:
+            if why:
+                text = ("ComfyUI не отвечает на «Отмена», и перезапустить его не получилось: " + why +
+                        (" Закройте окно ComfyUI и запустите его снова." if self.watchdog_local() else ""))
+                self.note_error(text)
+                await self.broadcast({"type": "notice", "text": text})
+            return
         # the restarted engine has an empty queue: nothing of what was running or waiting is there any more
-        for jid in [j for j, job in self.jobs.items() if not job.get("task")]:
-            self.keep_meta(self.jobs.get(jid))
-            self.jobs.pop(jid, None)
-            await self.broadcast({"type": "interrupted", "prompt_id": jid})
+        await self.drop_engine_jobs(kind="interrupted")
 
     async def h_library(self, _req):
         return web.json_response([self.public(x) for x in self.library.items])
@@ -3485,6 +3656,8 @@ def build_app(comfy_override=None, port=None):
         web.post("/api/setup/install", state.h_setup_install),
         web.post("/api/mode/add", state.h_mode_add),
         web.post("/api/settings/mirror", state.h_mirror),
+        web.post("/api/settings/watchdog", state.h_watchdog_set),
+        web.post("/api/engine/restart", state.h_engine_restart),
         web.post("/api/mode/offered", state.h_mode_offered),
         web.post("/api/setup/cancel", state.h_setup_cancel),
         web.post("/api/open-driver-page", state.h_open_driver),
