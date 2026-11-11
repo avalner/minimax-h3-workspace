@@ -768,12 +768,32 @@ class App:
             msg.update(scene=job["scene_now"], scenes=sc["n"])
         await self.broadcast(msg)
 
+    async def job_outputs(self, pid, asks=4, delay=0.6):
+        """What a finished job produced.
+
+        ComfyUI announces «execution_success» before the history entry is written, so a single question
+        right after the event can honestly answer "nothing yet" while the video is already on disk. That
+        is how a finished render used to end up as «ComfyUI не вернул ни видео, ни изображение»: ask
+        again for a few seconds before believing it.
+        """
+        for n in range(asks):
+            try:
+                _, hist = await self.comfy_json("GET", f"/history/{pid}", timeout=aiohttp.ClientTimeout(total=10))
+            except Exception:
+                hist = None
+            outputs = ((hist or {}).get(pid) or {}).get("outputs") or {}
+            if any(isinstance(values, list) and values for out in outputs.values() if isinstance(out, dict)
+                   for values in out.values()):  # outputs is node id -> {"images": [...], "animated": [...]}
+                return outputs
+            if n < asks - 1:
+                await asyncio.sleep(delay * (n + 1))
+        return {}
+
     async def finish_job(self, job):
         pid = job["prompt_id"]
         self.keep_meta(job)
         self.jobs.pop(pid, None)
-        _, hist = await self.comfy_json("GET", f"/history/{pid}")
-        outputs = (hist or {}).get(pid, {}).get("outputs", {})
+        outputs = await self.job_outputs(pid)
         tagged = [(nid, f) for nid, out in outputs.items() for lst in out.values() if isinstance(lst, list)
                   for f in lst if isinstance(f, dict) and "filename" in f]
         files = [f for _, f in tagged]
@@ -800,8 +820,9 @@ class App:
         images = [f for f in files if f["filename"].lower().endswith((".png", ".jpg", ".jpeg", ".webp"))
                   and f.get("type", "output") == "output"]
         if not videos and not images:
-            self.note_error("ComfyUI закончил работу, но не вернул ни видео, ни изображение")
-            await self.broadcast({"type": "error", "prompt_id": pid, "message": "ComfyUI не вернул ни видео, ни изображение"})
+            self.note_error(f"ComfyUI закончил работу, но в истории нет файлов (папка {self.output_dir or 'output'})")
+            await self.broadcast({"type": "error", "prompt_id": pid,
+                                  "message": "ComfyUI не вернул ни видео, ни изображение: проверьте папку output"})
             return
         if videos:
             picked = [videos[-1] if job.get("last_output") else videos[0]]
