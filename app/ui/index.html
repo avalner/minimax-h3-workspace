@@ -123,6 +123,54 @@ setTimeout(() => document.documentElement.classList.add('booted'), 1500);
 .st-more[open]>summary{margin-bottom:10px}
 .q-row.ok .q-s{color:var(--ok)}.q-row.err .q-s{color:var(--pink)}
 .q-empty{color:var(--muted);padding:30px 6px}
+.q-btns{display:flex;gap:8px;align-items:center;justify-content:flex-end;flex-wrap:wrap}
+.q-row{cursor:pointer}
+.q-row:hover{border-color:var(--line-2)}
+.q-row:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+/* задание: окно подробностей (что использовалось, формат, промпт, параметры) */
+.qj{width:min(1100px,100%);display:flex;flex-direction:column;max-height:calc(var(--vh,1vh)*100 - 40px);overflow:hidden}
+.qj-h{display:flex;gap:14px;align-items:center;padding:18px 22px 14px;border-bottom:1px solid var(--line)}
+.qj-ttl{flex:1;min-width:0}
+.qj-h h3{font-size:17px;line-height:1.3}
+.qj-sub{font-size:12.5px;color:var(--muted);margin-top:3px}
+.qj-actions{display:flex;align-items:center;gap:8px;flex:0 0 auto;margin-left:auto}
+#qjob .close{position:static;flex:0 0 auto}
+.qj-state{flex:0 0 auto;max-width:340px;overflow:hidden;text-overflow:ellipsis;font-size:12px;font-weight:700;padding:5px 10px;border-radius:9px;background:var(--surface-2);border:1px solid var(--line);white-space:nowrap}
+.qj-state.ok{color:var(--ok);border-color:rgba(47,191,113,.4);background:rgba(47,191,113,.12)}
+.qj-state.run{color:var(--accent-2);border-color:rgba(var(--accent-rgb),.45);background:var(--accent-soft)}
+.qj-state.warn{color:var(--warn);border-color:rgba(232,163,23,.4);background:rgba(232,163,23,.12)}
+.qj-state.bad{color:#ff8f95;border-color:rgba(229,72,77,.45);background:rgba(229,72,77,.14)}
+.qj-bar{height:4px;background:var(--surface-2);border-radius:3px;overflow:hidden;margin:0 22px}
+.qj-bar i{display:block;height:100%;width:0;background:var(--grad);transition:width .4s}
+.qj-bar[hidden]{display:none}
+.qj-note{margin:0 22px;padding:9px 12px;border-radius:10px;background:rgba(229,72,77,.1);border:1px solid rgba(229,72,77,.3);color:var(--text);font-size:12.5px;line-height:1.45}
+.qj-note[hidden]{display:none}
+.qj-body{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(290px,.85fr);gap:20px;padding:16px 22px 18px;overflow:auto}
+.qj-sec{margin-bottom:16px}
+.qj-sec:last-child{margin-bottom:0}
+.qj-sec-h{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:11.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);margin-bottom:9px}
+.qj-sec-h small{font-size:11.5px;font-weight:600;letter-spacing:0;text-transform:none;color:var(--muted)}
+.qj-media{display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:10px}
+.qj-item{position:relative;border:1px solid var(--line);border-radius:11px;overflow:hidden;background:var(--screen);min-height:100px;display:grid;place-items:center}
+.qj-item img{width:100%;height:128px;object-fit:contain;display:block;cursor:zoom-in;background:var(--screen)}
+.qj-item video{width:100%;height:150px;object-fit:contain;background:#000;display:block}
+.qj-item.aud{display:flex;flex-direction:column;justify-content:center;gap:6px;padding:22px 10px 10px}
+.qj-item audio{width:100%}
+.qj-role{position:absolute;left:0;right:0;bottom:0;padding:5px 8px;font-size:11.5px;font-weight:700;color:#fff;background:linear-gradient(transparent,rgba(0,0,0,.85));text-shadow:0 1px 3px rgba(0,0,0,.8);pointer-events:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.qj-item.aud .qj-role{position:static;background:none;text-shadow:none;color:var(--muted);font-weight:600;text-align:center;white-space:normal}
+.qj-item.gone{min-height:96px}
+.qj-item.gone img,.qj-item.gone video,.qj-item.gone audio{display:none}
+.qj-item.gone::before{content:'файл недоступен';color:var(--dim);font-size:12px;padding:10px;text-align:center}
+.qj-item.gone .qj-role{position:static;background:none;color:var(--dim);text-shadow:none;white-space:normal;text-align:center;padding:0 8px 10px}
+.qj-empty{border:1.5px dashed var(--line-2);border-radius:11px;padding:20px 16px;color:var(--muted);font-size:13px;text-align:center}
+.qj-result{display:flex;gap:12px;align-items:flex-start;background:var(--surface-2);border:1px solid var(--line);border-radius:11px;padding:8px}
+.qj-result img,.qj-result video{width:96px;height:58px;object-fit:cover;border-radius:8px;background:#000;flex:0 0 auto}
+.qj-result b{font-size:13px}
+.qj-result .hint{font-size:11.5px;margin:2px 0 6px}
+.qj-f{display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:12px 22px;border-top:1px solid var(--line);background:var(--bg-2)}
+.qj-f .sp{flex:1}
+.qj-prompt{max-height:280px;font-size:12.5px;line-height:1.5;margin:0}
+@media (max-width:900px){.qj-h{flex-wrap:wrap}.qj-ttl{flex-basis:100%}.qj-body{grid-template-columns:1fr;padding:14px 16px}.qj-h,.qj-f{padding-left:16px;padding-right:16px}.qj-state{max-width:100%}}
 .cw-cols{display:grid;grid-template-columns:minmax(0,1fr) 10px var(--cw-rw,520px);gap:6px;align-items:start}
 .cw-rs{align-self:stretch;cursor:col-resize;position:relative;touch-action:none}
 .cw-rs::before{content:'';position:absolute;left:4px;top:0;bottom:0;width:2px;border-radius:2px;background:var(--line-2);transition:.15s}
@@ -1814,6 +1862,56 @@ equirements.txt</code><br>
     <div class="v-btns">
       <button class="btn" data-close>Отмена</button>
       <button class="btn danger" id="cfOk">Удалить</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="qjob" hidden>
+  <div class="box qj" role="dialog" aria-modal="true" aria-labelledby="qjTitle">
+    <div class="qj-h">
+      <div class="qj-ttl">
+        <h3 id="qjTitle">Задание</h3>
+        <div class="qj-sub" id="qjSub"></div>
+      </div>
+      <div class="qj-actions">
+        <span class="qj-state" id="qjState">—</span>
+        <button class="close" data-close aria-label="Закрыть">✕</button>
+      </div>
+    </div>
+    <div class="qj-bar" id="qjBar" hidden><i></i></div>
+    <div class="qj-note" id="qjNote" hidden></div>
+    <div class="qj-body">
+      <div>
+        <div class="qj-sec">
+          <div class="qj-sec-h">Что использовалось <small id="qjCount"></small></div>
+          <div class="qj-media" id="qjMedia"></div>
+        </div>
+        <div class="qj-sec">
+          <div class="qj-sec-h">Промпт</div>
+          <div class="v-prompt qj-prompt" id="qjPrompt"></div>
+        </div>
+      </div>
+      <div>
+        <div class="qj-sec">
+          <div class="qj-sec-h">Формат</div>
+          <div class="kv" id="qjFormat"></div>
+        </div>
+        <div class="qj-sec">
+          <div class="qj-sec-h">Параметры</div>
+          <div class="kv" id="qjParams"></div>
+        </div>
+        <div class="qj-sec" id="qjResultSec" hidden>
+          <div class="qj-sec-h">Результат</div>
+          <div id="qjResult"></div>
+        </div>
+      </div>
+    </div>
+    <div class="qj-f">
+      <button class="btn mini" id="qjCopy" type="button">Скопировать промпт</button>
+      <button class="btn mini" id="qjStop" type="button" hidden>Остановить</button>
+      <button class="btn mini pri" id="qjOpen" type="button" hidden>Открыть результат</button>
+      <span class="sp"></span>
+      <button class="btn mini" data-close type="button">Закрыть</button>
     </div>
   </div>
 </div>
@@ -3560,6 +3658,7 @@ function qHandle(m) {
   } else if (m.type === 'error') { j.state = 'error'; j.msg = m.message; if (j.detached) toast('Задание не получилось: ' + m.message); }
   else if (m.type === 'interrupted') j.state = 'stopped';
   qRender();
+  qJobTick();
 }
 const QBASE = { queued: .02, load: .05, encode: .12, sample: .15, upscale: .67, sample2: .7, decode: .92, save: .98, cloud_queued: .05, cloud_run: .4 };
 /* what the user should see about a job: how far it is, and whether it is alive (green), quiet (yellow) or probably stuck (red) */
@@ -3617,26 +3716,200 @@ function qRender() {
     if (j.stopping && act.includes(j)) st = 'останавливаем… ComfyUI заканчивает текущий шаг, это может занять несколько секунд';
     const btn = act.includes(j) ? (j.stopping ? `<button class="btn" disabled>Останавливаем…</button>` : `<button class="btn" data-q="stop" data-id="${j.id}">${run ? 'Остановить' : 'Убрать'}</button>`)
       : j.state === 'done' ? '<button class="btn" data-q="lib">В Библиотеку</button>' : '';
+    const det = `<button class="btn" data-q="open" data-id="${j.id}" title="Что использовалось, формат, промпт и параметры">Детали</button>`;
     const live = act.includes(j), v = live ? jobView(j) : null;
     const big = live ? `<div class="q-big ${v.lvl}"><i style="width:${Math.round(v.p * 100)}%"></i></div><div class="pbox-chip ${v.lvl}"><span class="pbox-dot"></span><span>${run ? Math.round(v.p * 100) + '% · ' : ''}${esc(v.txt)}</span></div>` : '';
     const cmpB = j.state === 'done' && j.mode === 'upscale' && j.itemId ? `<button class="btn pri" data-q="cmp" data-id="${j.itemId}">До и после</button>` : '';
-    return `<div class="q-row${cls}"><div class="q-n">${n || (j.state === 'done' ? '✓' : '·')}</div><div><div class="q-t">${esc(MODE_NAME[j.mode] || 'Видео')}: ${esc(j.prompt.slice(0, 120) || 'без промпта')}</div>`
-      + `<div class="q-s">${esc(st)}</div>${big}</div>${cmpB || btn}</div>`;
+    return `<div class="q-row${cls}" data-id="${j.id}" role="button" tabindex="0" title="Открыть подробности задания" aria-label="${esc((MODE_NAME[j.mode] || 'Задание') + ': подробности')}"><div class="q-n">${n || (j.state === 'done' ? '✓' : '·')}</div><div><div class="q-t">${esc(MODE_NAME[j.mode] || 'Видео')}: ${esc(j.prompt.slice(0, 120) || 'без промпта')}</div>`
+      + `<div class="q-s">${esc(st)}</div>${big}</div><div class="q-btns">${det}${cmpB || btn}</div></div>`;
   };
   box.innerHTML = QUEUE.length ? act.map((j, i) => row(j, i + 1)).join('') + fin.map(j => row(j, 0)).join('')
     : '<div class="q-empty">Очередь пуста. Нажмите «Сгенерировать» в любом разделе — задание появится здесь.</div>';
 }
 $('#qList').addEventListener('click', e => {
-  const b = e.target.closest('button'); if (!b) return;
+  const b = e.target.closest('button');
+  if (!b || b.dataset.q === undefined) {   // не кнопка: открываем подробности задания
+    const row = e.target.closest('.q-row');
+    if (row && row.dataset.id) openJobWindow(row.dataset.id);
+    return;
+  }
+  if (b.dataset.q === 'open') return openJobWindow(b.dataset.id);
   if (b.dataset.q === 'lib') return goTo('library');
   if (b.dataset.q === 'cmp') return openViewer(b.dataset.id);
   b.disabled = true;
   const sj = QUEUE.find(j => j.id === b.dataset.id); if (sj) { sj.stopping = true; qRender(); }   // the list is redrawn every second: remember that a stop was asked, so the button doesn't come back
   fetch('/api/interrupt', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt_id: b.dataset.id }) });
 });
+$('#qList').addEventListener('keydown', e => {
+  const row = e.target.closest('.q-row'); if (!row || e.target.closest('button')) return;
+  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); if (row.dataset.id) openJobWindow(row.dataset.id); }
+});
 $('#qClear').onclick = () => { for (let i = QUEUE.length - 1; i >= 0; i--) if (!['queued', 'running'].includes(QUEUE[i].state)) QUEUE.splice(i, 1); qRender(); };
-setInterval(() => { if (QUEUE.some(j => j.state === 'running' || j.state === 'queued')) qRender(); else dockRender(); }, 1000);
+setInterval(() => { if (QUEUE.some(j => j.state === 'running' || j.state === 'queued')) qRender(); else dockRender(); qJobTick(); }, 1000);
 qRender();
+
+/* ---------- подробности одного задания: что использовалось, формат, промпт, параметры ---------- */
+let QJ = null;   // { id, data, error } — задание, открытое в окне подробностей
+const QJ_REF_SIZE = { max: 'Максимум · лучшее сходство', match: 'Быстро · изображения уменьшаются' };
+const qjKind = mode => mode === 'krea' || mode === 'qwen' ? 'image' : '';
+const qjNum = (n, one, few, many) => `${n} ${n % 10 === 1 && n % 100 !== 11 ? one : (n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20)) ? few : many}`;
+const qjTime = m => {   // когда поставлено: сервер отдаёт секунды, готовый результат — дату в тексте
+  if (m.created == null) return '';
+  const t = typeof m.created === 'number' ? new Date(m.created * 1000) : new Date(m.created);
+  return isNaN(t) ? '' : fmtDate(t);
+};
+function qJobClose() {
+  const box = $('#qjob'); if (box) box.hidden = true;
+  $$('#qjob video, #qjob audio').forEach(m => { try { m.pause(); } catch (e) {} m.removeAttribute('src'); try { m.load(); } catch (e) {} });
+  QJ = null;
+}
+async function openJobWindow(id) {
+  const j = QUEUE.find(x => x.id === id); if (!j) return;
+  QJ = { id, data: null, error: '' };
+  $('#qjob').hidden = false;
+  qJobPaint();
+  if (!API) { QJ.error = 'Подробности берутся у программы, а страница открыта без неё'; qJobPaint(); return; }
+  let data = null, error = '';
+  try {
+    const r = await fetch('/api/job/' + encodeURIComponent(id), { cache: 'no-store' });
+    if (r.ok) data = await r.json();
+    else error = r.status === 404 ? 'Программа уже не помнит это задание: подробности не сохранились' : 'Не удалось загрузить подробности задания';
+  } catch (e) { error = 'Нет связи с программой: ' + e.message; }
+  if (!QJ || QJ.id !== id) return;   // пока грузили, открыли другое задание
+  QJ.data = data; QJ.error = error;
+  qJobPaint();
+}
+function qJobPaint() {
+  if (!QJ || $('#qjob').hidden) return;
+  const j = QUEUE.find(x => x.id === QJ.id) || {};
+  const d = QJ.data, meta = { ...(d && d.meta || {}) };
+  const mode = meta.mode || j.mode || '';
+  const prompt = meta.prompt || j.prompt || '';
+  const modeName = MODE_NAME[mode] || 'Задание', sub = meta.sub && meta.sub !== modeName ? meta.sub : '';
+  $('#qjTitle').textContent = modeName + (sub ? ' · ' + sub : '');
+  const cloud = !!meta.cloud, agent = (meta.origin && meta.origin.kind === 'agent') || j.agent;
+  $('#qjSub').textContent = cloud ? 'Считалось в облаке RunningHub' : agent ? 'Задание другой программы (агент)' : 'Задание из приложения';
+  $('#qjPrompt').textContent = prompt || 'Без промпта: это задание сделано без текста';
+  $('#qjPrompt').scrollTop = 0;
+  $('#qjCopy').disabled = !prompt;
+  $('#qjResult').dataset.id = '';
+  qJobFormatPaint(meta, mode);
+  qJobMediaPaint(meta, mode);
+  qJobTick();
+}
+function qJobFormatPaint(meta, mode) {
+  const rows = [];
+  const a = meta.aspect ? ASPECTS.find(x => x.id === meta.aspect) : null;
+  if (a) rows.push(['Формат', `${a.id} · ${a.name}`]);
+  if (meta.res) {
+    const wh = String(meta.res).split('×').map(Number);
+    rows.push(['Разрешение', wh[0] && wh[1] ? `${meta.res} · ${(wh[0] * wh[1] / 1e6).toFixed(2).replace('.', ',')} МП` : String(meta.res)]);
+  }
+  const still = qjKind(mode) === 'image' || ((mode === 'upscale' || mode === 'custom') && !(meta.len > 0) && ((QJ.data?.items || [])[0]?.kind || meta.kind) === 'image');
+  if (!still && meta.len > 0) rows.push(['Длина', `${(+meta.len).toFixed(1).replace('.', ',')} с · ${qjNum(frames(meta.len), 'кадр', 'кадра', 'кадров')}`]);
+  if (!still && QJ.data) rows.push(['Кадров/с', String(QJ.data.fps || 24)]);
+  if (meta.q) rows.push(['Качество', String(meta.q)]);
+  $('#qjFormat').innerHTML = !QJ.data ? '<span>Формат</span><b>—</b>'
+    : rows.length ? rows.map(([k, v]) => `<span>${k}</span><b>${esc(v)}</b>`).join('') : '<span>Формат</span><b>не записан</b>';
+  const p = [];
+  const modeName = MODE_NAME[mode] || 'Задание', sub = meta.sub && meta.sub !== modeName ? meta.sub : '';
+  p.push(['Режим', modeName + (sub ? ' · ' + sub : '')]);
+  if (meta.steps != null) p.push(['Шаги', String(meta.steps)]);
+  if (meta.ref_size) p.push(['Точность переноса', QJ_REF_SIZE[meta.ref_size] || meta.ref_size]);
+  if (meta.faithful != null) p.push(['Схема', meta.faithful ? 'точная копия workflow' : 'упрощённая схема']);
+  if (meta.long && meta.long.run) p.push(['Проект', meta.long.run + (meta.long.draft ? ' · черновик' : '')]);
+  if (meta.seed != null) p.push(['Seed', String(meta.seed)]);
+  if (meta.origin) p.push(['Источник', 'Другая программа' + (meta.origin.client ? ` · ${meta.origin.client}` : '')]);
+  const when = qjTime({ created: (QJ.data || {}).created != null ? QJ.data.created : meta.date });
+  if (when) p.push(['Создано', when]);
+  p.push(['Номер задания', QJ.id]);
+  $('#qjParams').innerHTML = p.map(([k, v]) => `<span>${k}</span><b style="${k === 'Номер задания' ? 'word-break:break-all' : ''}">${esc(v)}</b>`).join('');
+}
+function qJobMediaPaint(meta, mode) {
+  const box = $('#qjMedia'), count = $('#qjCount');
+  if (!QJ.data) {
+    count.textContent = '';
+    box.innerHTML = `<div class="qj-empty">${QJ.error ? 'Нет данных' : 'Загружаем, что использовалось…'}</div>`;
+    return;
+  }
+  if (meta.cloud) {
+    count.textContent = '';
+    box.innerHTML = '<div class="qj-empty">Задание считалось в облаке RunningHub: исходные файлы остались на их сервере</div>';
+    return;
+  }
+  const list = Array.isArray(meta.inputs) ? meta.inputs.filter(x => x && x.url) : [];
+  count.textContent = list.length ? qjNum(list.length, 'файл', 'файла', 'файлов') : '';
+  if (!list.length) {
+    const known = Array.isArray(meta.inputs);
+    box.innerHTML = `<div class="qj-empty">${!known ? 'Какие файлы использовались — не записано: задание сделано до обновления'
+      : qjKind(mode) === 'image' ? 'Картинок нет: изображение сделано по тексту' : 'Картинок и видео нет: задание сделано по тексту'}</div>`;
+    return;
+  }
+  box.innerHTML = list.map(x => {
+    const url = esc(x.url), role = esc(x.role || 'Файл'), file = esc(x.file || '');
+    if (x.kind === 'audio') return `<div class="qj-item aud" title="${file}"><audio src="${url}" preload="none" controls onerror="this.parentNode.classList.add('gone')"></audio><span class="qj-role">${role}</span></div>`;
+    if (x.kind === 'video') return `<div class="qj-item" title="${file}"><video src="${url}" preload="metadata" muted loop playsinline controls onerror="this.parentNode.classList.add('gone')"></video><span class="qj-role">${role}</span></div>`;
+    return `<div class="qj-item" title="${file}"><img src="${url}" alt="" loading="lazy" data-zoom="${url}" onerror="this.parentNode.classList.add('gone')"><span class="qj-role">${role}</span></div>`;
+  }).join('');
+}
+function qJobResultPaint() {
+  if (!QJ) return;
+  const j = QUEUE.find(x => x.id === QJ.id) || {};
+  const items = LIB.filter(x => x.prompt_id === QJ.id);
+  const it = items.find(x => x.id === j.itemId) || items.find(x => !x.missing) || items[0];
+  $('#qjResultSec').hidden = !it;
+  $('#qjOpen').hidden = !it || !!it.missing;
+  if (!it) { $('#qjResult').innerHTML = ''; $('#qjResult').dataset.id = ''; return; }
+  if ($('#qjResult').dataset.id === it.id) return;
+  $('#qjResult').dataset.id = it.id;
+  const media = it.kind === 'image' ? `<img src="${it.url}" alt="">` : `<video src="${it.url}#t=0.2" muted loop playsinline preload="metadata"></video>`;
+  $('#qjResult').innerHTML = `<div class="qj-result">${media}<div style="min-width:0"><b>${esc(MODE_NAME[it.mode] || 'Результат')}</b>
+    <div class="hint">${esc(it.sub || '')}${it.len ? ' · ' + fmtTime(it.len) : ''}${it.missing ? ' · файл не найден' : ''}</div>
+    <button class="btn mini pri" type="button" data-open="${it.id}">Открыть</button></div></div>`;
+}
+function qJobTick() {
+  if (!QJ || $('#qjob').hidden) return;
+  const j = QUEUE.find(x => x.id === QJ.id) || {};
+  const state = j.state || (QJ.data && QJ.data.state) || 'unknown';
+  const chip = $('#qjState'), bar = $('#qjBar');
+  let txt = 'Задание', cls = '', p = null, note = '';
+  const noData = !QJ.data && !!QJ.error && state !== 'running' && state !== 'queued';
+  if (noData) { txt = 'Нет данных'; cls = 'warn'; note = QJ.error; }
+  else if (state === 'running' && j.id) { const v = jobView(j); txt = `${v.label || 'идёт'} · ${Math.round(v.p * 100)}%`; cls = v.lvl === 'ok' ? 'run' : v.lvl; p = v.p; }
+  else if (state === 'queued') { txt = 'В очереди'; cls = 'run'; }
+  else if (state === 'done') { txt = 'Готово' + (j.took ? ` за ${fmtTime(j.took)}` : ''); cls = 'ok'; }
+  else if (state === 'stopped') { txt = 'Остановлено'; cls = 'warn'; note = 'Задание остановлено: результат не сохранился.'; }
+  else if (state === 'error') { txt = 'Ошибка'; cls = 'bad'; note = j.msg || (QJ.data && QJ.data.message) || 'ComfyUI не смог выполнить задание'; }
+  chip.textContent = txt; chip.className = 'qj-state ' + cls;
+  bar.hidden = !(state === 'running' && p != null); if (!bar.hidden) $('i', bar).style.width = Math.round(p * 100) + '%';
+  $('#qjNote').hidden = !note; if (note) $('#qjNote').textContent = note;
+  const active = state === 'queued' || state === 'running';
+  $('#qjStop').hidden = !active;
+  $('#qjStop').disabled = !!j.stopping;
+  $('#qjStop').textContent = j.stopping ? 'Останавливаем…' : 'Остановить';
+  qJobResultPaint();
+}
+$('#qjMedia').addEventListener('click', e => {
+  const im = e.target.closest('img[data-zoom]'); if (im) zoomOpen(im.dataset.zoom);
+});
+$('#qjResult').addEventListener('click', e => {
+  const b = e.target.closest('[data-open]'); if (!b) return;
+  qJobClose(); openViewer(b.dataset.open);
+});
+$('#qjOpen').onclick = () => {
+  const it = LIB.find(x => x.prompt_id === QJ?.id); if (!it) return;
+  qJobClose(); openViewer(it.id);
+};
+$('#qjCopy').onclick = () => {
+  const t = $('#qjPrompt').textContent || '';
+  if (!t) return;
+  navigator.clipboard?.writeText(t).then(() => toast('Промпт скопирован'), () => toast('Не удалось скопировать'));
+};
+$('#qjStop').onclick = () => {
+  const j = QUEUE.find(x => x.id === QJ?.id); if (!j) return;
+  j.stopping = true; fetch('/api/interrupt', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt_id: j.id }) });
+  qJobTick(); qRender();
+};
 
 function addToLib(item, date = new Date()) {
   LIB.push({ id: Math.random().toString(36).slice(2), date, fav: false, ...item });
@@ -3854,8 +4127,8 @@ $('#libFilter').onclick = e => {
 $('#selToggle').onclick = () => { selecting = !selecting; selected.clear(); renderLib(); };
 $('#bulkSave').onclick = () => saveItems([...selected].map(byId));
 $('#bulkDel').onclick = () => askDelete([...selected]);
-$$('.modal').forEach(m => m.addEventListener('click', e => { if (e.target === m || e.target.closest('[data-close]')) m.id === 'viewer' ? closeViewer() : (m.hidden = true); }));
-addEventListener('keydown', e => { if (e.key === 'Escape') { $('#confirm').hidden = true; closeViewer(); } });
+$$('.modal').forEach(m => m.addEventListener('click', e => { if (e.target === m || e.target.closest('[data-close]')) { if (m.id === 'viewer') closeViewer(); else { m.hidden = true; if (m.id === 'qjob') qJobClose(); } } }));
+addEventListener('keydown', e => { if (e.key === 'Escape') { $('#confirm').hidden = true; closeViewer(); if (!$('#qjob').hidden) qJobClose(); } });
 $('#vwSave').onclick = () => saveItems([byId(openId)]);
 $('#vwCopy').onclick = () => {
   const t = (byId(openId) || {}).prompt || '';

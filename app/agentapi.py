@@ -31,6 +31,7 @@ import struct
 import subprocess
 import sys
 import time
+import urllib.parse
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -532,10 +533,15 @@ class AgentAPI:
                     last_name = await app.put_input(self.assets.file(last))
             graph, stages = wf.video_graph(app.model_names, prompt, width, height, seconds, seed,
                                            first_name, last_name, app.custom_loras(), None)
+            inputs = []   # the files the job is made from: the details window in the queue shows them
+            if first_name:
+                inputs.append(self._job_input("Первый кадр" + (" · зациклено" if loop else ""), "image", first_name))
+            if last_name and last_name != first_name:
+                inputs.append(self._job_input("Последний кадр", "image", last_name))
             response = await app.queue(graph, stages, {
                 "mode": "video", "sub": self._job_subtitle(first_name, last_name, loop),
                 "prompt": prompt, "aspect": aspect, "q": quality, "len": seconds,
-                "res": f"{width}×{height}", "seed": seed,
+                "res": f"{width}×{height}", "seed": seed, "inputs": inputs,
                 "origin": {"kind": "agent", "client": str(body.get("client") or "")[:40] or None,
                            "idempotency_key": key or None}})
         except web.HTTPException as e:
@@ -567,6 +573,12 @@ class AgentAPI:
     def _job_subtitle(first, last, loop):
         sub = "Зацикленное видео" if loop else "Кадр → кадр" if last else "Изображение → видео" if first else "Текст → видео"
         return sub + " · агент"
+
+    @staticmethod
+    def _job_input(role, kind, comfy):
+        """One file of a job as the window's details need it: ComfyUI has its own copy of what the agent brought."""
+        path = str(comfy).replace("\\", "/")
+        return {"role": role, "kind": kind, "url": "/api/input?name=" + urllib.parse.quote(path), "file": path.rsplit("/", 1)[-1]}
 
     @staticmethod
     def _short_title(prompt):

@@ -276,6 +276,33 @@ class JobStore(dict):
         return r
 
 
+def media_input(role, kind, comfy=None, item=None, url=None, name=None, **extra):
+    """One file a job is made from: what it is, what kind it is, and where the window can show it from.
+
+    `comfy` is a path in ComfyUI's input folder ("h3studio/h3s_ab12.png"), `item` a record of the
+    Library, `url` a ready address (a file an agent brought). The details window needs only the role,
+    the kind and the URL; the rest is a bonus.
+    """
+    d = {"role": role, "kind": kind, **extra}
+    if comfy:
+        path = str(comfy).replace("\\", "/")
+        d["url"] = "/api/input?name=" + urllib.parse.quote(path)
+        d["file"] = Path(path).name
+    elif item:
+        d["url"] = f"/api/file/{item['id']}"
+        f = item.get("file") or {}
+        if f.get("filename"):
+            d["file"] = Path(f["filename"]).name
+        for k in ("res", "len"):
+            if item.get(k):
+                d[k] = item[k]
+    elif url:
+        d["url"] = url
+    if name:
+        d["name"] = name
+    return d
+
+
 def round_size(form, step=32, low=256, high=2048, max_px=2200000):
     """The user's own width/height from the form, rounded to the model's step (None when not given)."""
     w, h = str(form.get("width", "")), str(form.get("height", ""))
@@ -345,6 +372,7 @@ class App:
         self.port = port  # the port this window actually listens on: agents find it through agent.json
         self.agents = agentapi.AgentAPI(self, DATA_DIR, MAX_SECONDS)
         self.recent = {}  # prompt_id -> how a job ended, for the short while after it left the queue
+        self.history = {}  # prompt_id -> what a failed or stopped job was made from (the details window asks later)
         self.session = None
         self.browsers = set()
         self.saved_queue = self.load_queue()  # unfinished jobs of the previous run (asked about at start)
@@ -453,6 +481,7 @@ class App:
                 params.headers["Authorization"] = f"Bearer {key}"
         trace.on_request_start.append(_comfy_key)
         self.session = aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=_ssl_context()), trace_configs=[trace])
+        asyncio.get_running_loop().run_in_executor(None, self.prune_input_cache)  # the details window copies files it shows
         if self.config.get("engine") == "managed" and self.config.get("setup_done") and not self.comfy_override:
             if self.missing_node_packs():
                 self.packs_task = asyncio.create_task(self.install_missing_packs())
@@ -460,6 +489,19 @@ class App:
                 self.start_managed()
         self.ws_task = asyncio.create_task(self.comfy_ws_loop())
         self.agents.publish()
+
+    def prune_input_cache(self, days=30):
+        """Drop the copies of job files the details window made: they are only a cache, ComfyUI keeps the originals."""
+        folder = DATA_DIR / "cache" / "input"
+        if not folder.is_dir():
+            return
+        edge = datetime.now().timestamp() - days * 86400
+        for f in folder.glob("*"):
+            try:
+                if f.is_file() and f.stat().st_mtime < edge:
+                    f.unlink()
+            except OSError:
+                pass
 
     def missing_node_packs(self):
         """Own ComfyUI: node packs from the catalog that are not in its custom_nodes yet (a newer app version may need more)."""
@@ -596,10 +638,12 @@ class App:
             entry = (hist or {}).get(pid)
             try:
                 if not entry:
+                    self.keep_meta(job)
                     self.jobs.pop(pid, None)
                     await self.broadcast({"type": "error", "prompt_id": pid, "message": (
                         "Задание пропало из очереди ComfyUI: связь с ним прерывалась. Запустите ещё раз.")})
                 elif entry.get("status", {}).get("status_str") == "error":
+                    self.keep_meta(job)
                     self.jobs.pop(pid, None)
                     await self.broadcast({"type": "error", "prompt_id": pid,
                                           "message": "ComfyUI закончил задание с ошибкой (связь с ним прерывалась)"})
@@ -706,9 +750,11 @@ class App:
             hint = self.model_hint((job.get("meta") or {}).get("mode", ""), d.get("exception_message", ""))
             await self.broadcast({"type": "error", "prompt_id": pid,
                                   "message": f'{d.get("node_type", "")}: {d.get("exception_message", "").strip()}' + hint})
+            self.keep_meta(job)
             self.jobs.pop(pid, None)
         elif t == "execution_interrupted":
             await self.broadcast({"type": "interrupted", "prompt_id": pid})
+            self.keep_meta(job)
             self.jobs.pop(pid, None)
 
     async def send_stage(self, job, stage, step=None, total=None, node=None):
@@ -724,6 +770,7 @@ class App:
 
     async def finish_job(self, job):
         pid = job["prompt_id"]
+        self.keep_meta(job)
         self.jobs.pop(pid, None)
         _, hist = await self.comfy_json("GET", f"/history/{pid}")
         outputs = (hist or {}).get(pid, {}).get("outputs", {})
@@ -802,6 +849,14 @@ class App:
                             "message": payload.get("message", "")}
         while len(self.recent) > 200:
             self.recent.pop(next(iter(self.recent)))
+
+    def keep_meta(self, job):
+        """Remember what a job was made from after it leaves the queue: the details window may be opened later."""
+        if not job:
+            return
+        self.history[job["prompt_id"]] = {"meta": job.get("meta") or {}, "created": job.get("t0")}
+        while len(self.history) > 200:
+            self.history.pop(next(iter(self.history)))
 
     # ---------- helpers ----------
 
@@ -1426,6 +1481,62 @@ class App:
         self.save_queue()
         return web.json_response({"ok": True})
 
+    async def h_job(self, req):
+        """Everything about one job for the details window: what it is, what it was made from, how it ended."""
+        pid = req.match_info["pid"]
+        out = {"prompt_id": pid, "state": "unknown", "fps": wf.FPS}
+        job = self.jobs.get(pid)
+        if job:
+            out.update(state=job.get("state") or "queued", stage=job.get("stage"), step=job.get("step"),
+                       max=job.get("step_max"), created=job.get("t0"), meta=job.get("meta") or {})
+            return web.json_response(out)
+        items = [self.public(x) for x in self.library.items if x.get("prompt_id") == pid]
+        if items:   # finished: the Library record keeps the job's own meta (prompt, format, inputs)
+            drop = {"file", "url", "local", "fav", "id", "kind", "ext", "prompt_id", "date", "missing"}
+            out.update(state="done", meta={k: v for k, v in items[0].items() if k not in drop},
+                       created=items[0].get("date"), items=items)
+            return web.json_response(out)
+        kept = self.history.get(pid) or {}
+        if kept:
+            out.update(meta=kept.get("meta") or {}, created=kept.get("created"))
+        if pid in self.recent:
+            r = self.recent[pid]
+            out.update(state=r.get("state") or "unknown", message=r.get("message") or "")
+        elif not kept:
+            saved = next((j for j in self.saved_queue if j.get("pid") == pid), None)
+            if not saved:
+                raise web.HTTPNotFound()
+            out.update(state="queued", meta=saved.get("meta") or {}, created=saved.get("saved"))
+        return web.json_response(out)
+
+    async def h_input(self, req):
+        """A file a job was made from (a picture, a reference video, the audio): ComfyUI keeps it in its input folder."""
+        name = (req.query.get("name") or "").strip()
+        path = Path(name.replace("\\", "/"))
+        parts = [p for p in path.parts if p not in ("", ".")]
+        if not parts or path.is_absolute() or ".." in parts or parts[0] == "..":
+            raise web.HTTPNotFound()
+        filename, subfolder = parts[-1], "/".join(parts[:-1])
+        if not re.fullmatch(r"[A-Za-z0-9 _\-.,()\[\]{}@+=]+", filename):
+            raise web.HTTPNotFound()
+        key = hashlib.sha1((subfolder + "/" + filename).encode()).hexdigest()[:20]
+        ext = Path(filename).suffix.lower()[:6] or ".bin"
+        cache = DATA_DIR / "cache" / "input" / f"{key}{ext}"
+        if not (cache.exists() and cache.stat().st_size > 0):
+            try:
+                async with self.session.get(self.comfy + "/view", params={
+                        "filename": filename, "subfolder": subfolder, "type": "input"}) as r:
+                    if r.status != 200:
+                        raise web.HTTPNotFound(text="Файл задания не найден: ComfyUI его уже не хранит")
+                    data = await r.read()
+            except aiohttp.ClientError:
+                raise web.HTTPServiceUnavailable(text="ComfyUI не отвечает")
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            tmp = cache.with_name(f"{cache.name}.{uuid.uuid4().hex[:8]}.part")
+            tmp.write_bytes(data)
+            tmp.replace(cache)
+        return web.FileResponse(cache)
+
     async def h_support(self, _req):
         """Open the author's donation page (a fixed address, never taken from the request)."""
         webbrowser.open(SUPPORT_URL)
@@ -1606,6 +1717,8 @@ class App:
                 await asyncio.sleep(5)
         except Exception as e:
             if pid in self.jobs:
+                job = self.jobs.get(pid)
+                self.keep_meta(job)
                 self.jobs.pop(pid, None)
                 await self.broadcast({"type": "error", "prompt_id": pid, "message": str(e)})
 
@@ -1749,10 +1862,15 @@ class App:
         await self.stop_llm()
         prompt = next((str(values.get(w["key"], w["value"])) for w in report["widgets"] if w["role"] == "prompt"), "")
         seed = next((values.get(w["key"], w["value"]) for w in report["widgets"] if w["role"] == "seed"), None)
+        by_key = {w["key"]: w for w in report["widgets"]}
+        inputs = []
+        for key, comfy in uploads.items():   # a file the simple form of this workflow asked for
+            w = by_key.get(key) or {}
+            inputs.append(media_input(w.get("title") or w.get("name") or key, w.get("mkind") or "image", comfy=comfy))
         return await self.queue(graph, customwf.stage_map(graph), {
             "mode": "custom", "sub": wf_file["name"], "wf": form.get("wf"), "cw_values": values,
             "prompt": prompt, "aspect": "", "q": "", "len": 0.0, "res": "",
-            "seed": seed if isinstance(seed, (int, float)) else None}, last_output=True,
+            "seed": seed if isinstance(seed, (int, float)) else None, "inputs": inputs}, last_output=True,
             titles={nid: (n.get("_meta") or {}).get("title", "") for nid, n in graph.items() if n["class_type"].startswith("Save")})
 
     async def read_image_form(self, req):
@@ -1855,6 +1973,9 @@ class App:
             raise web.HTTPBadGateway(text="Не удалось передать файл в ComfyUI")
         video = f'{res["subfolder"]}/{res["name"]}' if res.get("subfolder") else res["name"]
         src_file = {"filename": res["name"], "subfolder": res.get("subfolder", ""), "type": "input"}  # the "before" of the before/after slider
+        src_input = media_input("Исходный файл", item.get("kind") or ("image" if pic else "video"), comfy=video)
+        if item.get("res"):
+            src_input["res"] = item["res"]
         seed = random.randrange(2 ** 40)
         try:
             w, h = (int(x) for x in str(item.get("res", "")).split("×"))
@@ -1870,7 +1991,8 @@ class App:
             graph, stages = wf.upscale_image_graph(self.model_names, video, scale, seed, soften=0.5)
             return await self.queue(graph, stages, {
                 "mode": "upscale", "sub": "До 2К, мягко", "prompt": item.get("prompt", "") or "Увеличение до 2К",
-                "aspect": item.get("aspect", ""), "q": "2K", "len": 0.0, "res": f"{round(w0 * scale / 2) * 2}×{round(h0 * scale / 2) * 2}", "seed": seed, "src": item.get("id", ""), "src_file": src_file})
+                "aspect": item.get("aspect", ""), "q": "2K", "len": 0.0, "res": f"{round(w0 * scale / 2) * 2}×{round(h0 * scale / 2) * 2}", "seed": seed,
+                "src": item.get("id", ""), "src_file": src_file, "inputs": [src_input]})
         def num(key, default):   # a slider value 0..1 from the window (a string when it comes with an uploaded file)
             try:
                 return min(1.0, max(0.0, float(body.get(key))))
@@ -1884,7 +2006,7 @@ class App:
         return await self.queue(graph, stages, {
             "mode": "upscale", "sub": "Быстрое увеличение ×2 (RelayVSR)" if relay else f"Увеличение ×{body.get('scale', '1.5')}", "prompt": item.get("prompt", "") or "Увеличение",
             "aspect": item.get("aspect", ""), "q": item.get("q", ""), "len": item.get("len", 0.0), "res": res, "seed": seed,
-            "src": item.get("id", ""), "src_file": src_file})
+            "src": item.get("id", ""), "src_file": src_file, "inputs": [src_input]})
 
     async def h_generate_krea(self, req):
         await self.need_models("krea")
@@ -1906,29 +2028,35 @@ class App:
             graph, stages = wf.flux_t2i_graph(self.model_names, prompt, width, height, seed)
             return await self.queue(graph, stages, {
                 "mode": "krea", "sub": "Изображение (FLUX.2)", "prompt": prompt, "aspect": aspect, "q": "1K",
-                "len": 0.0, "res": f"{width}×{height}", "seed": seed, **lab})
+                "len": 0.0, "res": f"{width}×{height}", "seed": seed, "inputs": [], **lab})
         if engine == "qwen":
             await self.need_models("qwen")
             graph, stages = wf.qwen_t2i_graph(self.model_names, prompt, form.get("negative", "").strip()[:600], width, height, seed)
             return await self.queue(graph, stages, {
                 "mode": "krea", "sub": "Изображение (Qwen 2.1)", "prompt": prompt, "aspect": aspect, "q": "1K",
-                "len": 0.0, "res": f"{width}×{height}", "seed": seed, **lab})
+                "len": 0.0, "res": f"{width}×{height}", "seed": seed, "inputs": [], **lab})
         if form.get("style") == "real":
             await self.need_models("kreareal")
             scale = wf.KREA_REAL_SCALES.get(form.get("scale", "2k"), 1.5)
             graph, stages = wf.krea_real_graph(self.model_names, prompt, width, height, seed, scale)
             return await self.queue(graph, stages, {
                 "mode": "krea", "sub": "Изображение: реализм", "prompt": prompt, "aspect": aspect, "q": "4K" if scale > 2 else "2K",
-                "len": 0.0, "res": f"{int(width * scale)}×{int(height * scale)}", "seed": seed, **lab})
+                "len": 0.0, "res": f"{int(width * scale)}×{int(height * scale)}", "seed": seed, "inputs": [], **lab})
         graph, stages = wf.krea_graph(self.model_names, prompt, width, height, seed)
         return await self.queue(graph, stages, {
             "mode": "krea", "sub": "Изображение по тексту", "prompt": prompt, "aspect": aspect, "q": "1K",
-            "len": 0.0, "res": f"{width}×{height}", "seed": seed, **lab})
+            "len": 0.0, "res": f"{width}×{height}", "seed": seed, "inputs": [], **lab})
 
     async def h_generate_qwen(self, req):
         form, image, seed = await self.read_image_form(req)
         flux = form.get("kind") != "sheet" and form.get("engine") == "flux"
         await self.need_models("flux" if flux else "qwen")
+
+        def pics(main_role):
+            out = [media_input(main_role, "image", comfy=image)] if image else []
+            out += [media_input(f"Дополнительное изображение {i + 2}", "image", comfy=n)
+                    for i, n in enumerate(form.get("_extra") or [])]
+            return out
         if form.get("kind") == "story" and form.get("frames") == "1":
             # storyboard frame by frame (FLUX.2 klein): every frame is its own picture, the sheet is glued from them
             use_qwen = form.get("engine") == "qwen"
@@ -1941,7 +2069,7 @@ class App:
             graph, stages, titles = build(self.model_names, refs, frames, seed, size=round_size(form) or wf.FRAME_SIZE, line=form.get("line", "white"))
             return await self.queue(graph, stages, {
                 "mode": "qwen", "sub": "Раскадровка по кадрам", "prompt": form.get("prompt", "").strip(), "aspect": "",
-                "q": "", "len": 0.0, "res": "", "seed": seed}, titles=titles)
+                "q": "", "len": 0.0, "res": "", "seed": seed, "inputs": pics("Референс персонажа")}, titles=titles)
         if not image:
             raise web.HTTPBadRequest(text="Загрузите изображение")
         if form.get("kind") == "story":
@@ -1956,7 +2084,7 @@ class App:
                 graph, stages = wf.qwen_story_graph(self.model_names, refs, prompt, seed, sz)
             return await self.queue(graph, stages, {
                 "mode": "qwen", "sub": "Раскадровка по изображениям", "prompt": prompt, "aspect": "",
-                "q": "", "len": 0.0, "res": "%d×%d" % wf.STORY_SIZE, "seed": seed})
+                "q": "", "len": 0.0, "res": "%d×%d" % wf.STORY_SIZE, "seed": seed, "inputs": pics("Главный герой")})
         if flux:
             prompt = form.get("prompt", "").strip()
             if not prompt:
@@ -1965,7 +2093,7 @@ class App:
             graph, stages = wf.flux_edit_graph(self.model_names, prompt, image, mp, seed, form.get("_extra") or (), round_size(form))
             return await self.queue(graph, stages, {
                 "mode": "qwen", "sub": "Правка изображения (FLUX.2)", "prompt": prompt, "aspect": "",
-                "q": "", "len": 0.0, "res": "", "seed": seed})
+                "q": "", "len": 0.0, "res": "", "seed": seed, "inputs": pics("Исходное изображение")})
         if form.get("kind") == "sheet":
             panels = 6 if form.get("panels") == "6" else 4
             graph, stages, prompt = wf.qwen_sheet_graph(
@@ -1981,9 +2109,11 @@ class App:
             size = round_size(form) or wf.qwen_edit_size(form.get("aspect", ""), mp)
             graph, stages = wf.qwen_edit_graph(self.model_names, prompt, image, mp, seed, size, form.get("_extra") or ())
             sub, res = "Правка изображения", ("%d×%d" % size if size else "")
+        inputs = ([media_input("Фото персонажа", "image", comfy=image)] if form.get("kind") == "sheet" and image
+                  else pics("Исходное изображение"))
         return await self.queue(graph, stages, {
             "mode": "qwen", "sub": sub, "prompt": prompt, "aspect": form.get("aspect", "") if form.get("kind") != "sheet" else "",
-            "q": "", "len": 0.0, "res": res, "seed": seed})
+            "q": "", "len": 0.0, "res": res, "seed": seed, "inputs": inputs})
 
     async def h_generate_video(self, req):
         await self.need_models("video")
@@ -2006,9 +2136,14 @@ class App:
         sub = "Зацикленное видео" if loop else "Кадр → кадр" if last else "Изображение → видео" if first else "Текст → видео"
         if fast:
             sub += " · быстрый черновик"
+        inputs = []
+        if first:
+            inputs.append(media_input("Первый кадр" + (" · зациклено" if loop else ""), "image", comfy=first))
+        if last and last != first:
+            inputs.append(media_input("Последний кадр", "image", comfy=last))
         return await self.queue(graph, stages, {
             "mode": "video", "sub": sub, "prompt": prompt, "aspect": aspect, "q": quality,
-            "len": seconds, "res": f"{width}×{height}", "seed": seed})
+            "len": seconds, "res": f"{width}×{height}", "seed": seed, "inputs": inputs})
 
     async def h_generate_lipsync(self, req):
         await self.need_models("lipsync")
@@ -2031,10 +2166,12 @@ class App:
         graph, stages = wf.lipsync_graph(self.model_names, wf.lipsync_prompt(prompt, len(refs)), width, height,
                                          seconds, seed, files["audio"], refs, scale, ref_size, extra)
         speed = "максимум" if ref_size == "max" else "быстро"
+        inputs = [media_input(f"Референс {i + 1}", "image", comfy=name) for i, name in enumerate(refs)]
+        inputs.append(media_input("Аудио для губ", "audio", comfy=files["audio"]))
         return await self.queue(graph, stages, {
             "mode": "lipsync", "sub": f"{len(refs)} реф. ({speed}) · аудио {seconds:.1f} с", "prompt": prompt,
             "aspect": aspect, "q": quality, "len": seconds, "res": f"{out_w}×{out_h}", "seed": seed,
-            "ref_size": ref_size})
+            "ref_size": ref_size, "inputs": inputs})
 
     async def read_ref_form(self, req, max_images):
         fields = tuple(f"img{i}" for i in range(max_images)) + tuple(f"vid{i}" for i in range(3)) + \
@@ -2102,9 +2239,12 @@ class App:
                                      steps, ref_size, extra, pika)
         sub = f"{len(images)} карт." + (f", {len(videos)} видео" if videos else "") + (f", {len(audios)} аудио" if audios else "") \
             + f" · {steps} шагов" + (" · Pika" if pika else "")
+        inputs = [media_input(f"Референс-изображение {i + 1}", "image", comfy=name) for i, name in enumerate(images)]
+        inputs += [media_input(f"Референс-видео {i + 1}", "video", comfy=name) for i, name in enumerate(videos)]
+        inputs += [media_input(f"Аудио {i + 1}", "audio", comfy=name) for i, name in enumerate(audios)]
         return await self.queue(graph, stages, {
             "mode": "refs", "sub": sub, "prompt": prompt, "aspect": aspect, "q": quality, "len": seconds,
-            "res": f"{width}×{height}", "seed": seed, "steps": steps, "ref_size": ref_size})
+            "res": f"{width}×{height}", "seed": seed, "steps": steps, "ref_size": ref_size, "inputs": inputs})
 
     async def long_source(self, item_id, uploaded, first_sec):
         """A video the user already has (from the library, or a file from the computer) to continue from: put it into ComfyUI and
@@ -2316,6 +2456,13 @@ class App:
             if not dmad:
                 raise web.HTTPBadRequest(text="Для черновика нужен файл minimax_h3_DMAD_4step_full_lora в папке loras. Или сделайте сцену сразу в хорошем качестве.")
         scenes = [(wf.lipsync_prompt(p, len(own or images)), sec, own) for p, sec, own in scenes]
+        long_common = [media_input(f"Общая карта персонажа {i + 1}", "image", comfy=name) for i, name in enumerate(images)]
+        if audio:
+            long_common.append(media_input("Музыка или звук", "audio", comfy=audio))
+        # a scene may bring references of its own instead of the common ones
+        scene_refs = {i: [files[f"simg{i}_{j}"] for j in range(5) if f"simg{i}_{j}" in files] for i in range(len(scenes))}
+        long_inputs = list(long_common) + [media_input(f"Сцена {i + 1} · референс {j + 1}", "image", comfy=name)
+                                           for i, names in scene_refs.items() for j, name in enumerate(names)]
         part = form.get("part", "")
         if part.isdigit():  # one scene at a time: scene k continues from the saved tail of scene k-1
             k = int(part)
@@ -2345,10 +2492,20 @@ class App:
                                                await self.preview_opts(), cont, form.get("src_project") == "1", fresh, draft)
             plan = wf.long_plan([sc[1] for sc in scenes], cont_first=bool(cont) or form.get("src_project") == "1", fresh=fresh)
             sub = f"сцена {k + 1} из {len(scenes)}" + (" · музыка" if audio else " · звук от модели")
+            inputs = list(long_common) + [media_input(f"Референс {j + 1}", "image", comfy=name)
+                                          for j, name in enumerate(scene_refs.get(k, []))]
+            if cont:
+                inputs.append(media_input("Видео, с которого продолжаем", "video", comfy=cont[0]))
+            elif form.get("src_item"):
+                src_it = self.library.get(form.get("src_item"))
+                if src_it:
+                    inputs.append(media_input("Видео, с которого продолжаем", "video", item=src_it))
+            elif files.get("srcvid"):
+                inputs.append(media_input("Видео, с которого продолжаем", "video", comfy=files["srcvid"]))
             return await self.queue(graph, stages, {
                 "mode": "long", "sub": sub + (" · черновик" if draft else f" · проба {width}×{height}" if test else ""), "prompt": scenes[k][0], "aspect": aspect, "q": quality,
                 "len": round((plan[k]["total"] - plan[k]["ov"]) / wf.FPS, 1), "res": f"{width}×{height}", "seed": seed,
-                "long": {"run": run, "part": k, "n": len(scenes), "draft": draft, "test": test}})
+                "long": {"run": run, "part": k, "n": len(scenes), "draft": draft, "test": test}, "inputs": inputs})
         graph, stages = wf.long_graph(self.model_names, scenes, width, height, seed, images, audio, start,
                                       dmad if draft else self.model_names["pika_lora"], self.custom_loras(), "match", vocals, await self.preview_opts(), fresh, False, draft)
         run = re.sub(r"[^A-Za-z0-9]", "", form.get("run", ""))[:32]
@@ -2356,7 +2513,7 @@ class App:
         total = wf.long_plan([sc[1] for sc in scenes], fresh=fresh)[-1]["acc"] / wf.FPS
         sub = f"{len(scenes)} сцен · {len(images)} карт." + (", музыка" if audio else ", звук от модели") + (" · черновик" if draft else "")
         meta = {"mode": "long", "sub": sub, "prompt": "\n\n".join(sc[0] for sc in scenes), "aspect": aspect, "q": quality,
-                "len": round(total, 1), "res": f"{width}×{height}", "seed": seed}
+                "len": round(total, 1), "res": f"{width}×{height}", "seed": seed, "inputs": long_inputs}
         if run:
             meta["long"] = {"run": run, "part": len(scenes) - 1, "n": len(scenes), "all": True}
         return await self.queue(graph, stages, meta)
@@ -2435,9 +2592,17 @@ class App:
             sizes.append((int(mm.group(1)), int(mm.group(2))) if mm else None)
         graph, stages = wf.montage_graph(names, sizes, cuts)
         total = sum((cuts[n_] if cuts[n_] is not None else float(it.get("len") or 0)) for n_, it in enumerate(items))
+        inputs = []
+        for n_, it in enumerate(items):
+            role = f"Клип {n_ + 1}"
+            cut = cuts[n_]
+            if "_up" in it:   # a clip taken from the user's computer: it lives in ComfyUI's input folder now
+                inputs.append(media_input(role, "video", comfy=names[n_], len=cut if cut is not None else it.get("len") or 0))
+            else:
+                inputs.append(media_input(role, "video", item=it))
         return await self.queue(graph, stages, {
             "mode": "montage", "sub": f"{len(items)} клипов", "prompt": "", "aspect": items[0].get("aspect", ""), "q": "",
-            "len": round(total, 1), "res": items[0].get("res", ""), "seed": 0}, last_output=True)
+            "len": round(total, 1), "res": items[0].get("res", ""), "seed": 0, "inputs": inputs}, last_output=True)
 
     async def h_grain(self, req):
         """Film grain on ONE clip (a library clip or a file from the computer) as a job of its own: the frames of a clip are decoded
@@ -2487,7 +2652,8 @@ class App:
             ln = 0.0
         return await self.queue(graph, stages, {
             "mode": "montage", "sub": "Зерно плёнки", "prompt": (item.get("prompt") or name or "")[:100], "aspect": item.get("aspect", ""), "q": "",
-            "len": ln, "res": item.get("res", ""), "seed": 0}, last_output=True)
+            "len": ln, "res": item.get("res", ""), "seed": 0,
+            "inputs": [media_input("Клип", "video", comfy=res["name"], len=ln)]}, last_output=True)
 
     async def h_generate_actor(self, req):
         await self.need_models("actor")
@@ -2501,9 +2667,11 @@ class App:
         graph, stages = wf.actor_graph(self.model_names, wf.lipsync_prompt(prompt, len(images)), width, height, seconds, seed,
                                        images, audios, realism, self.custom_loras())
         sub = f"{len(images)} карт." + (f", голос ({len(audios)})" if audios else ", без голоса") + " · 10 шагов"
+        inputs = [media_input(f"Карта персонажа {i + 1}", "image", comfy=name) for i, name in enumerate(images)]
+        inputs += [media_input(f"Образец голоса {i + 1}", "audio", comfy=name) for i, name in enumerate(audios)]
         return await self.queue(graph, stages, {
             "mode": "actor", "sub": sub, "prompt": prompt, "aspect": aspect, "q": quality, "len": seconds,
-            "res": f"{width}×{height}", "seed": seed})
+            "res": f"{width}×{height}", "seed": seed, "inputs": inputs})
 
     async def h_generate_swap(self, req):
         """Preset «Замена персонажа»: one video + up to two character pictures, the app writes the prompt."""
@@ -2563,10 +2731,12 @@ class App:
             snd = form.get("sound") if form.get("sound") in ("original", "lock", "model") else "original"
             graph, stages = wf.swap_graph(names, text, width, height, seconds, seed, images, videos[0], loras, pika, snd,
                                              small_ref=form.get("small_ref") == "1")
+        inputs = [media_input("Видео для замены", "video", comfy=videos[0])]
+        inputs += [media_input(f"Новый персонаж {i + 1}", "image", comfy=name) for i, name in enumerate(images)]
         return await self.queue(graph, stages, {
             "mode": "swap", "sub": "Замена персонажа" + (f", планов: {len(shots)}" if shots else (f" ({len(images)})" if len(images) > 1 else "")) + (" · Pika" if pika else ""),
             "prompt": prompt or whos[0], "aspect": aspect, "q": quality, "len": seconds,
-            "res": f"{width}×{height}", "seed": seed})
+            "res": f"{width}×{height}", "seed": seed, "inputs": inputs})
 
     async def action_setup(self):
         """What the original action workflow needs and what this ComfyUI has."""
@@ -2620,9 +2790,11 @@ class App:
             req_inputs = [k for k in (s["refiner_def"]["input"].get("required") or {}) if k != "sigmas"]
             graph["13"]["inputs"] = {"sigmas": ["10", 0], **dict(zip(req_inputs, [1, 0.7, 0.0, "cosine"]))}
         sub = ("точная копия workflow" if s["faithful"] else "упрощённая схема") + f" · {len(images)} карт."
+        inputs = [media_input(f"Карта персонажа {i + 1}", "image", comfy=name) for i, name in enumerate(images)]
+        inputs += [media_input(f"Аудио {i + 1}", "audio", comfy=name) for i, name in enumerate(audios)]
         return await self.queue(graph, stages, {
             "mode": "action", "sub": sub, "prompt": prompt, "aspect": aspect, "q": quality, "len": seconds,
-            "res": f"{width}×{height}", "seed": seed, "faithful": s["faithful"]})
+            "res": f"{width}×{height}", "seed": seed, "faithful": s["faithful"], "inputs": inputs})
 
     # ---------- audio: voice / music separation (MelBand RoFormer through ComfyUI) ----------
 
@@ -2696,6 +2868,7 @@ class App:
         """Stop one job: a cloud task, a waiting one, or the running one (ComfyUI has one running prompt at a time)."""
         job = self.jobs.get(pid)
         if job and job.get("task"):  # cloud task
+            self.keep_meta(job)
             self.jobs.pop(pid, None)
             rh = self.rh()
             if rh:
@@ -2706,6 +2879,7 @@ class App:
             await self.broadcast({"type": "interrupted", "prompt_id": pid})
         elif job and job["state"] == "queued":
             await self.comfy_json("POST", "/queue", json={"delete": [pid]})
+            self.keep_meta(job)
             self.jobs.pop(pid, None)
             await self.broadcast({"type": "interrupted", "prompt_id": pid})
         elif job:
@@ -2739,6 +2913,7 @@ class App:
             self.note_error(f"Не удалось перезапустить движок после отмены: {e}")
         # the restarted engine has an empty queue: nothing of what was running or waiting is there any more
         for jid in [j for j, job in self.jobs.items() if not job.get("task")]:
+            self.keep_meta(self.jobs.get(jid))
             self.jobs.pop(jid, None)
             await self.broadcast({"type": "interrupted", "prompt_id": jid})
 
@@ -3301,6 +3476,8 @@ def build_app(comfy_override=None, port=None):
         web.get("/api/queue/saved", state.h_queue_saved),
         web.post("/api/queue/resume", state.h_queue_resume),
         web.post("/api/queue/discard", state.h_queue_discard),
+        web.get("/api/job/{pid}", state.h_job),
+        web.get("/api/input", state.h_input),
         web.post("/api/search-web", state.h_search_web),
         web.post("/api/report", state.h_report),
         web.post("/api/setup/reset", state.h_setup_reset),
