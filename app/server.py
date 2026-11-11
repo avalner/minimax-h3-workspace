@@ -743,6 +743,8 @@ class App:
 
     async def guard_tick(self):
         """One look at the card. Cheap when nothing runs: nvidia-smi is asked only while a job is going."""
+        if self._restarting:  # the engine is being replaced right now: there is nothing to judge yet
+            return
         if not self.watchdog_on() or not self.watchdog_local() or not self.running_jobs():
             self.guard.paused()
             return
@@ -759,12 +761,11 @@ class App:
         self.note_error("Сторож видеокарты: " + line)
         await self.broadcast({"type": "notice", "text": watchdog.verdict_text(verdict)})
         ok, why = await self.restart_engine()
-        self.guard_last = {"at": time.time(), "kind": verdict["kind"], "ok": ok, "why": why}
         if ok:
             await self.drop_engine_jobs("Задание прервано: движок завис, ComfyUI перезапущен")
             self.guard.reset()
             return
-        if not why:  # another restart is already under way
+        if not why:  # a restart was already under way (the user's «Stop» got there first): not a failure
             return
         text = (f"Перезапустить ComfyUI не получилось: {why}. Закройте окно ComfyUI и запустите его снова. "
                 "Если это повторяется, перезагрузите компьютер и обновите драйвер NVIDIA.")
@@ -773,7 +774,8 @@ class App:
 
     async def restart_engine(self):
         """Start ComfyUI again: our own engine, or the user's own one from the command line it reports.
-        Returns (ok, why); an empty `why` means another restart was already running, which is not a problem."""
+        Returns (ok, why); an empty `why` means another restart was already running, which is not a failure.
+        What really happened is remembered for the sidebar, whichever path asked for it."""
         if not self.watchdog_local():
             return False, "это ComfyUI на другом компьютере: перезапустите его там, где он запущен"
         if self._restarting:
@@ -787,12 +789,14 @@ class App:
                     self.ext_proc = None  # an old copy of it is already gone
                 self.ext_proc = await asyncio.to_thread(engine.restart_external, self.stats, self.ext_log, self.comfy)
             await self.wait_comfy(timeout=240)
+            self.guard_last = {"at": time.time(), "ok": True, "why": ""}
             return True, ""
         except Exception as e:
             why = str(e) or type(e).__name__
             if not self.process:
                 tail = engine.log_tail(self.ext_log, 6)
                 why = f"{why}. Журнал: {tail}" if tail else why
+            self.guard_last = {"at": time.time(), "ok": False, "why": why}
             return False, why
         finally:
             self._restarting = False
@@ -3095,6 +3099,8 @@ class App:
         await asyncio.sleep(wait)
         if pid not in self.jobs:
             return
+        if await self.stopped_after_all(pid):
+            return
         text = "ComfyUI не отвечает на «Отмена». Перезапускаю движок, это займёт около минуты."
         self.note_error(text)
         await self.broadcast({"type": "notice", "text": text})
@@ -3108,6 +3114,35 @@ class App:
             return
         # the restarted engine has an empty queue: nothing of what was running or waiting is there any more
         await self.drop_engine_jobs(kind="interrupted")
+
+    async def stopped_after_all(self, pid):
+        """The engine honoured the cancel a moment after we stopped watching.
+
+        ComfyUI can take the interrupt slowly: by the time we are ready to replace the whole engine the
+        prompt may already be gone from its queue. Restarting then would throw away a finished result and
+        the other jobs behind it, so ask first — and take the result if the job finished while cancelling.
+        """
+        try:
+            _, q = await self.comfy_json("GET", "/queue", timeout=aiohttp.ClientTimeout(total=5))
+            alive = {str(x[1]) for key in ("queue_running", "queue_pending") for x in (q or {}).get(key, []) if len(x) > 1}
+        except Exception:
+            return False  # cannot ask at all: the engine really is unresponsive, replace it
+        if pid in alive:
+            return False
+        job = self.jobs.get(pid)
+        if job:
+            try:
+                _, hist = await self.comfy_json("GET", f"/history/{pid}", timeout=aiohttp.ClientTimeout(total=10))
+            except Exception:
+                hist = None
+            entry = (hist or {}).get(pid) or {}
+            if entry.get("outputs") and entry.get("status", {}).get("status_str") != "error":
+                await self.finish_job(job)  # it finished just as we were cancelling: keep the clip
+                return True
+            self.keep_meta(job)
+            self.jobs.pop(pid, None)
+            await self.broadcast({"type": "interrupted", "prompt_id": pid})
+        return True
 
     async def h_library(self, _req):
         return web.json_response([self.public(x) for x in self.library.items])
