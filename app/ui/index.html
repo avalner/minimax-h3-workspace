@@ -1756,6 +1756,17 @@ equirements.txt</code><br>
             <button class="btn" id="supBtn" type="button" title="Программа бесплатная. Если она вам помогла, можно поддержать автора: откроется страница оплаты в браузере. Ничего вводить в самой программе не нужно.">♥ Поддержать</button>
           </div>
         </div>
+
+        <div class="card">
+          <div class="card-h"><h3>Агенты</h3><span class="hint" id="agentApiState"></span></div>
+          <div class="set-row">
+            <div class="set-lbl"><b>Разрешить управление агентам</b>
+              <small>другие программы на этом компьютере (например, DeepSeek Harness) смогут запускать генерацию и забирать готовое. Нужен ключ из файла agent.json: он новый после каждого запуска программы</small></div>
+            <label class="hint" style="display:flex;gap:8px;align-items:flex-start;cursor:pointer" title="Пока выключено, программа не принимает ни одного запроса от других программ">
+              <input type="checkbox" id="setAgents" style="margin-top:2px;accent-color:var(--accent)" checked><span>Разрешено</span></label>
+          </div>
+          <div class="set-acts"><span class="hint" id="agentApiFile"></span></div>
+        </div>
       </div>
     </section>
 
@@ -1836,6 +1847,12 @@ function connectEvents() {
     if (m.type === 'setup') { onSetupEvent(m); return; }
     if (m.type === 'agent_setup') { onAgentSetup(m); return; }
     if (m.type === 'mdl') { onMdl(m); return; }
+    if (m.type === 'external_job') {   // a job started by another program (agent): show it in the queue like your own
+      qAdd(m.prompt_id, m.mode, m.prompt);
+      const j = QUEUE.find(x => x.id === m.prompt_id);
+      if (j) { j.detached = true; j.agent = true; }
+      return;
+    }
     qHandle(m);
     const fn = promptHandlers.get(m.prompt_id);
     if (fn) fn(m);
@@ -3294,6 +3311,23 @@ function renderModels(s) {
 $('#mdMirror').onchange = async e => {
   try { await postJSON('/api/settings/mirror', { on: e.target.checked }); toast(e.target.checked ? 'Скачивание через зеркало hf-mirror.com включено' : 'Зеркало выключено, скачиваем с Hugging Face'); loadStatus(); } catch (err) { toast(err.message); }
 };
+/* agents: other programs on this computer may drive the studio (Settings → Агенты) */
+async function loadAgents() {
+  try {
+    const j = await (await fetch('/api/agent/allow')).json();
+    $('#setAgents').checked = !!j.enabled;
+    $('#agentApiState').textContent = j.enabled ? 'включено' : 'выключено';
+    $('#agentApiFile').textContent = j.file ? `${j.port ? `Порт ${j.port}. ` : ''}Адрес и ключ лежат в ${j.file}` : '';
+  } catch {}
+}
+$('#setAgents').onchange = async e => {
+  try {
+    const j = await postJSON('/api/agent/allow', { enabled: e.target.checked });
+    $('#agentApiState').textContent = j.enabled ? 'включено' : 'выключено';
+    toast(j.enabled ? 'Агентам можно запускать генерацию' : 'Агенты отключены: программа их не слушает');
+  } catch (err) { e.target.checked = !e.target.checked; toast(err.message); }
+};
+loadAgents();
 $('#mdFix').onclick = async () => {
   if (!setupInfo) setupInfo = await (await fetch('/api/setup/info')).json();
   const c = setupInfo.config;
@@ -3507,6 +3541,9 @@ function qAdd(id, mode, prompt) {
   qRender();
 }
 function qHandle(m) {
+  if (m.type === 'done') (m.items || [m.item]).filter(Boolean).forEach(it => {   // also work started by an agent
+    if (!LIB.some(x => x.id === it.id)) addToLib(normItem(it), new Date(it.date));
+  });
   const j = QUEUE.find(x => x.id === m.prompt_id); if (!j) return;
   j.lastEv = performance.now();
   if (m.type === 'stage') {
@@ -3519,7 +3556,7 @@ function qHandle(m) {
     j.state = 'done'; j.took = j.t0 ? (performance.now() - j.t0) / 1000 : 0; j.itemId = (m.item || (m.items || [])[0] || {}).id;
     (m.items || [m.item]).forEach(it => { if (!LIB.some(x => x.id === it.id)) addToLib(normItem(it), new Date(it.date)); if (it.long && typeof RM !== 'undefined' && RM.long && RM.long.root._partDone) RM.long.root._partDone(normItem(it)); });
     if (j.mode === 'upscale' && j.itemId && $('#view-queue').classList.contains('active') && $('#viewer').hidden) setTimeout(() => openViewer(j.itemId), 400);  // show before/after at once
-    if (j.detached) toast(`Готово: ${MODE_NAME[j.mode] || 'видео'} — оно в Библиотеке`);
+    if (j.detached) toast(`${j.agent ? 'Агент: готово' : 'Готово'}: ${MODE_NAME[j.mode] || 'видео'} — оно в Библиотеке`);
   } else if (m.type === 'error') { j.state = 'error'; j.msg = m.message; if (j.detached) toast('Задание не получилось: ' + m.message); }
   else if (m.type === 'interrupted') j.state = 'stopped';
   qRender();
