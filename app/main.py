@@ -40,7 +40,7 @@ class ServerThread(threading.Thread):
     def run(self):
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
-        self.runner = web.AppRunner(server.build_app())
+        self.runner = web.AppRunner(server.build_app(port=self.port))
         self.loop.run_until_complete(self.runner.setup())
         self.loop.run_until_complete(web.TCPSite(self.runner, "127.0.0.1", self.port).start())
         self.ready.set()

@@ -30,6 +30,7 @@ import aiohttp
 from aiohttp import web
 
 import agent as ag
+import agentapi
 import catalog
 import cloud
 import customwf
@@ -338,9 +339,12 @@ class Library:
 
 
 class App:
-    def __init__(self, comfy_override=None):
+    def __init__(self, comfy_override=None, port=None):
         self.config = engine.Config(DATA_DIR / "config.json")
         self.comfy_override = comfy_override.rstrip("/") if comfy_override else None
+        self.port = port  # the port this window actually listens on: agents find it through agent.json
+        self.agents = agentapi.AgentAPI(self, DATA_DIR, MAX_SECONDS)
+        self.recent = {}  # prompt_id -> how a job ended, for the short while after it left the queue
         self.session = None
         self.browsers = set()
         self.saved_queue = self.load_queue()  # unfinished jobs of the previous run (asked about at start)
@@ -455,6 +459,7 @@ class App:
             else:
                 self.start_managed()
         self.ws_task = asyncio.create_task(self.comfy_ws_loop())
+        self.agents.publish()
 
     def missing_node_packs(self):
         """Own ComfyUI: node packs from the catalog that are not in its custom_nodes yet (a newer app version may need more)."""
@@ -479,6 +484,7 @@ class App:
             self.start_managed()
 
     async def stop(self, _app):
+        self.agents.unpublish()
         self.ws_task.cancel()
         if self.installer:
             self.installer.cancelled = True
@@ -566,6 +572,42 @@ class App:
             self.output_dir = Path(argv[argv.index("--output-directory") + 1])
         return data
 
+    async def reconcile_jobs(self):
+        """After a reconnect: a job marked running may have finished while the app was not listening.
+        A short websocket hiccup used to leave such a job stuck at its last percentage forever, with the
+        finished clip never reaching the Library, so on every reconnect we ask ComfyUI what really happened."""
+        if not self.jobs:
+            return
+        try:
+            _, q = await self.comfy_json("GET", "/queue", timeout=aiohttp.ClientTimeout(total=10))
+            alive = {str(x[1]) for key in ("queue_running", "queue_pending") for x in (q or {}).get(key, []) if len(x) > 1}
+        except Exception:
+            return
+        now = datetime.now().timestamp()
+        for pid, job in list(self.jobs.items()):
+            if job.get("task") or pid in alive:  # a cloud task, or ComfyUI still has it
+                continue
+            if now - (job.get("t0") or 0) < 20:  # just submitted: it may not be in /queue yet
+                continue
+            try:
+                _, hist = await self.comfy_json("GET", f"/history/{pid}")
+            except Exception:
+                continue
+            entry = (hist or {}).get(pid)
+            try:
+                if not entry:
+                    self.jobs.pop(pid, None)
+                    await self.broadcast({"type": "error", "prompt_id": pid, "message": (
+                        "Задание пропало из очереди ComfyUI: связь с ним прерывалась. Запустите ещё раз.")})
+                elif entry.get("status", {}).get("status_str") == "error":
+                    self.jobs.pop(pid, None)
+                    await self.broadcast({"type": "error", "prompt_id": pid,
+                                          "message": "ComfyUI закончил задание с ошибкой (связь с ним прерывалась)"})
+                else:
+                    await self.finish_job(job)  # it is done: take the result into the Library as usual
+            except Exception as e:
+                self.note_error(f"Не удалось восстановить задание после обрыва связи: {e}")
+
     async def comfy_ws_loop(self):
         while True:
             if not self.config.get("setup_done") and not self.comfy_override:
@@ -576,6 +618,7 @@ class App:
                 async with self.session.ws_connect(ws_url, max_msg_size=0, heartbeat=20) as ws:
                     self.comfy_online = True
                     await self.resolve_models()
+                    await self.reconcile_jobs()
                     await self.broadcast({"type": "engine", "online": True})
                     await self.warn_weak_gpu()
                     async for msg in ws:
@@ -670,6 +713,7 @@ class App:
 
     async def send_stage(self, job, stage, step=None, total=None, node=None):
         job["stage"] = stage
+        job["step"], job["step_max"] = step, total  # agents read the same numbers: "step 3 of 8"
         msg = {"type": "stage", "prompt_id": job["prompt_id"], "stage": stage, "step": step, "max": total}
         sc = job.get("scenes")
         if sc and node is not None and str(node) in sc.get("map", {}):
@@ -740,12 +784,24 @@ class App:
         await self.broadcast({"type": "done", "prompt_id": pid, "item": items[0], "items": items})
 
     async def broadcast(self, payload):
+        self.remember(payload)
         text = json.dumps(payload, ensure_ascii=False)
         for b in list(self.browsers):
             try:
                 await b.send_str(text)
             except Exception:
                 self.browsers.discard(b)
+
+    def remember(self, payload):
+        """Keep the outcome of a job for a while: an agent asks about it after it has already left the queue."""
+        kind = {"done": "done", "error": "error", "interrupted": "interrupted"}.get(payload.get("type", ""))
+        pid = payload.get("prompt_id")
+        if not kind or not pid:
+            return
+        self.recent[pid] = {"state": kind, "at": datetime.now().isoformat(timespec="seconds"),
+                            "message": payload.get("message", "")}
+        while len(self.recent) > 200:
+            self.recent.pop(next(iter(self.recent)))
 
     # ---------- helpers ----------
 
@@ -840,6 +896,23 @@ class App:
         status, res = await self.comfy_json("POST", "/upload/image", data=data)
         if status != 200:
             raise web.HTTPBadGateway(text="Не удалось загрузить файл в ComfyUI")
+        return f'{res["subfolder"]}/{res["name"]}' if res.get("subfolder") else res["name"]
+
+    async def put_input(self, path, name=None):
+        """A file from disk into ComfyUI's input/h3studio (a picture an agent brought, a ready clip)."""
+        path = Path(path)
+        data = aiohttp.FormData()
+        nm = name or f"h3s_{uuid.uuid4().hex[:8]}{path.suffix.lower() or '.png'}"
+        try:
+            raw = await asyncio.to_thread(path.read_bytes)
+        except OSError as e:
+            raise web.HTTPBadRequest(text=f"Не удалось прочитать файл: {e}")
+        data.add_field("image", raw, filename=nm, content_type="application/octet-stream")
+        data.add_field("subfolder", "h3studio")
+        data.add_field("type", "input")
+        status, res = await self.comfy_json("POST", "/upload/image", data=data)
+        if status != 200:
+            raise web.HTTPBadGateway(text="Не удалось передать файл в ComfyUI")
         return f'{res["subfolder"]}/{res["name"]}' if res.get("subfolder") else res["name"]
 
     # ---------- HTTP handlers ----------
@@ -1493,7 +1566,7 @@ class App:
             return web.json_response({"error": str(e)}, status=400)
         pid = "rh-" + task
         self.jobs[pid] = {"prompt_id": pid, "state": "queued", "stages": {}, "stage": None,
-                          "meta": dict(meta, cloud=True), "task": task}
+                          "meta": dict(meta, cloud=True), "task": task, "t0": datetime.now().timestamp()}
         asyncio.create_task(self.poll_cloud(rh, pid))
         return web.json_response({"prompt_id": pid, "seed": meta["seed"]})
 
@@ -1583,7 +1656,7 @@ class App:
             return web.json_response({"error": comfy_error_text(res)}, status=400)
         pid = res["prompt_id"]
         self.jobs[pid] = {"prompt_id": pid, "state": "queued", "stages": stages, "stage": None, "meta": meta, "last_output": last_output, "titles": titles or {},
-                          "graph": graph, "scenes": scenes}
+                          "graph": graph, "scenes": scenes, "t0": datetime.now().timestamp()}
         return web.json_response({"prompt_id": pid, "seed": meta["seed"], "queue_number": res.get("number")})
 
     async def need_models(self, mode):
@@ -2616,7 +2689,11 @@ class App:
         return web.json_response({"error": "Отделение голоса заняло слишком много времени"}, status=504)
 
     async def h_interrupt(self, req):
-        pid = (await req.json()).get("prompt_id")
+        await self.cancel_job((await req.json()).get("prompt_id"))
+        return web.json_response({"ok": True})
+
+    async def cancel_job(self, pid):
+        """Stop one job: a cloud task, a waiting one, or the running one (ComfyUI has one running prompt at a time)."""
         job = self.jobs.get(pid)
         if job and job.get("task"):  # cloud task
             self.jobs.pop(pid, None)
@@ -2631,12 +2708,13 @@ class App:
             await self.comfy_json("POST", "/queue", json={"delete": [pid]})
             self.jobs.pop(pid, None)
             await self.broadcast({"type": "interrupted", "prompt_id": pid})
-        else:
+        elif job:
             await self.comfy_json("POST", "/interrupt", json={"prompt_id": pid})
             task = asyncio.create_task(self.interrupt_watch(pid))
             self._bg.add(task)
             task.add_done_callback(self._bg.discard)
-        return web.json_response({"ok": True})
+        else:  # unknown id: the window's «Stop» means "stop whatever is running now"
+            await self.comfy_json("POST", "/interrupt", json={})
 
     async def interrupt_watch(self, pid, wait=15):
         """ComfyUI sometimes ignores «Cancel» (stuck on a heavy step). If the job is still there after `wait` seconds:
@@ -2803,6 +2881,14 @@ class App:
         finally:
             self.browsers.discard(ws)
         return ws
+
+    async def h_agent_allow(self, req):
+        """The window's switch «Агенты»: whether other programs on this computer may drive the studio."""
+        if req.method == "POST":
+            body = await req.json()
+            self.config.update(allow_agents=bool(body.get("enabled", True)))
+        return web.json_response({"enabled": self.agents.enabled(), "port": self.port,
+                                  "file": str(agentapi.agent_file())})
 
     # ---------- agent ----------
 
@@ -3186,9 +3272,10 @@ def send_to_recycle_bin(path):
     return r.returncode == 0 and not path.exists()
 
 
-def build_app(comfy_override=None):
-    state = App(comfy_override)
+def build_app(comfy_override=None, port=None):
+    state = App(comfy_override, port)
     app = web.Application(client_max_size=300 * 1024 * 1024)
+    app.middlewares.append(state.agents.middleware)  # only /api/agent/v1/ is guarded: the window needs no key
     app.on_startup.append(state.start)
     app.on_cleanup.append(state.stop)
     app.add_routes([
@@ -3285,8 +3372,11 @@ def build_app(comfy_override=None):
         web.get("/api/file/{id}", state.h_file),
         web.get("/api/srcfile/{id}", state.h_srcfile),
         web.get("/api/events", state.h_events),
+        web.get("/api/agent/allow", state.h_agent_allow),
+        web.post("/api/agent/allow", state.h_agent_allow),
         web.static("/ui", UI_DIR),
     ])
+    app.add_routes(state.agents.routes())  # /api/agent/v1/...: the contract other programs use
     return app
 
 
@@ -3297,7 +3387,7 @@ def main():
     ap.add_argument("--open", action="store_true", help="open the UI in the default browser")
     args = ap.parse_args()
 
-    app = build_app(args.comfy)
+    app = build_app(args.comfy, args.port)
     if args.open:
         async def open_browser(_app):
             asyncio.get_running_loop().call_later(1, webbrowser.open, f"http://127.0.0.1:{args.port}")
