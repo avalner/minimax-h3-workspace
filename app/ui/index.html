@@ -177,7 +177,7 @@ setTimeout(() => document.documentElement.classList.add('booted'), 1500);
 .cw-rs::before{content:'';position:absolute;left:4px;top:0;bottom:0;width:2px;border-radius:2px;background:var(--line-2);transition:.15s}
 .cw-rs:hover::before,.cw-rs.drag::before{background:var(--accent);width:3px;left:3.5px}
 .mf{cursor:copy;text-decoration:underline dotted;user-select:all}
-.cw-zb{position:absolute;right:10px;top:10px;width:36px;height:36px;border-radius:10px;background:rgba(var(--ov-rgb),.78);display:grid;place-items:center;color:var(--text);z-index:2;backdrop-filter:blur(6px)}
+.cw-zb{position:absolute;right:10px;top:10px;width:36px;height:36px;border-radius:10px;background:rgba(var(--ov-rgb),.78);display:grid;place-items:center;color:var(--text);z-index:2}
 .cw-zb:hover{background:var(--accent);color:#fff}
 .cw-frame img#cwImage{cursor:zoom-in}
 .cw-th{position:relative}
@@ -397,7 +397,17 @@ body.cloud-on #mdCloudBox{display:block!important}
 body.fit-page .main{scrollbar-gutter:auto}
 .view{display:none;padding:var(--vpt) var(--vp) 40px}
 .view.active{display:block;animation:fade .25s ease}
-@keyframes fade{from{opacity:0}to{opacity:1}}
+html.bg-hidden *{animation-play-state:paused!important}
+.mdl-pick{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;margin:0 0 14px;padding:9px 14px;border:1px solid var(--line);border-radius:12px;font-size:13px}
+.mdl-pick.own{border-color:#e08a1e;background:rgba(224,138,30,.10);box-shadow:inset 4px 0 0 #e08a1e}
+.mdl-pick .mp-cur{font-weight:800;font-size:14px;word-break:break-all}
+.mdl-pick .mp-src{font-size:11px;font-weight:800;padding:2px 9px;border-radius:99px;letter-spacing:.04em}
+.mdl-pick .mp-src.std{background:var(--surface-2);color:var(--dim)}.mdl-pick .mp-src.own{background:#e08a1e;color:#111}
+.mdl-pick .mp-loras{flex-basis:100%;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.mdl-pick .mp-l{font-size:12px;padding:2px 9px;border-radius:8px;background:var(--surface-2);word-break:break-all}.mdl-pick .mp-l.mine{background:rgba(224,138,30,.25)}.mdl-pick button.mp-l{border:0;cursor:pointer;color:inherit;font:inherit;font-size:12px}.mdl-pick .mp-l.tgl.off{background:var(--surface-2);text-decoration:line-through;opacity:.7}.mdl-pick .mp-l.no{background:rgba(229,72,77,.2);color:#e5484d}
+.nav[data-view="models"]{background:var(--accent-soft);color:var(--text);box-shadow:inset 0 0 0 1px rgba(var(--accent-rgb),.55);font-weight:800}.nav[data-view="models"] svg{color:var(--accent)}.mdl-pick .pm{flex-basis:100%;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.mdl-pick .mp-notes{flex-basis:100%;display:grid;gap:4px;font-size:12.5px}.mdl-pick .mp-notes .bad{color:#e5484d}.mdl-pick .mp-notes .warn{color:#d6a13a}.mdl-pick .mp-notes .info{opacity:.8}
+@keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
 .head{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;margin-bottom:22px}
 .head-acts{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 h1{font-size:26px;font-weight:800;letter-spacing:-.02em}
@@ -451,7 +461,7 @@ h1{font-size:26px;font-weight:800;letter-spacing:-.02em}
 .drop .ph span{font-size:12px;color:var(--muted)}
 /* the whole frame is shown in its own proportions (a vertical frame is not cropped to the box) */
 .drop img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:var(--screen)}
-.drop .tag{position:absolute;left:8px;top:8px;font-size:11px;font-weight:700;padding:3px 8px;border-radius:7px;background:rgba(var(--ov-rgb),.75);backdrop-filter:blur(6px)}
+.drop .tag{position:absolute;left:8px;top:8px;font-size:11px;font-weight:700;padding:3px 8px;border-radius:7px;background:rgba(var(--ov-rgb),.75)}
 .drop .x{position:absolute;right:8px;top:8px;width:26px;height:26px;border-radius:8px;background:rgba(var(--ov-rgb),.75);display:none;place-items:center}
 .drop.filled .x{display:grid}
 .drop input{display:none}
@@ -459,6 +469,15 @@ h1{font-size:26px;font-weight:800;letter-spacing:-.02em}
 textarea{width:100%;min-height:64px;height:110px;resize:vertical;background:var(--bg-2);border:1px solid var(--line);border-radius:12px;padding:13px 14px;outline:none;line-height:1.55}
 textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
 .ta-foot{display:flex;justify-content:space-between;align-items:center;margin-top:8px;gap:10px;flex-wrap:wrap}
+.ta-wrap{position:relative}
+.ta-x{position:absolute;top:8px;right:8px;z-index:2;padding:2px 9px;font-size:12px;line-height:1.6;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--muted);cursor:pointer}
+.ta-x:hover{color:var(--accent);border-color:var(--accent)}
+.ip-stage{position:relative;border-radius:12px;overflow:hidden;border:1px solid var(--line);margin-top:10px;background:repeating-conic-gradient(var(--bg-2) 0 25%,var(--surface-2) 0 50%) 0 0/18px 18px}
+.ip-stage canvas{display:block;width:100%;height:auto}
+.ip-over{position:absolute;inset:0;cursor:crosshair;touch-action:none}
+.ip-tools{display:flex;gap:10px;align-items:center;margin-top:10px;flex-wrap:wrap}
+.ip-tools .seg{flex:0 0 auto}
+.ip-tools input[type=range]{width:140px}
 .tokens{display:flex;gap:6px;flex-wrap:wrap}
 .token{font-family:var(--mono);font-size:11.5px;padding:4px 8px;border-radius:7px;background:var(--surface-2);border:1px solid var(--line-2);color:var(--text)}
 .token:hover{border-color:var(--accent)}
@@ -737,7 +756,7 @@ img.pr-media{object-position:center 38%}
 .pr-tags{display:flex;gap:6px;flex-wrap:wrap}.pr-tags span{font-size:11px;padding:2px 9px;border-radius:99px;border:1px solid var(--line-2)}
 .pr-new{position:absolute;right:10px;top:10px;font-size:11px;padding:3px 10px;border-radius:99px;background:var(--accent,#c0405a);color:#fff}
 .pr-new.warn{background:#8a6a1f}
-.pr-bdg{position:absolute;left:10px;bottom:10px;z-index:2;font-size:11px;font-weight:700;padding:3px 10px;border-radius:99px;color:#fff;backdrop-filter:blur(6px)}
+.pr-bdg{position:absolute;left:10px;bottom:10px;z-index:2;font-size:11px;font-weight:700;padding:3px 10px;border-radius:99px;color:#fff}
 .pr-bdg.q{background:linear-gradient(90deg,#b8861b,#e0a93a)}
 .pr-bdg.f{background:linear-gradient(90deg,#1f8f86,#2fb5a8)}
 .mcard{position:relative;text-align:left;padding:13px 14px 13px 44px;border-radius:13px;background:var(--bg-2);border:1.5px solid var(--line);display:grid;gap:3px;transition:.15s}
@@ -829,16 +848,28 @@ img.pr-media{object-position:center 38%}
 .ag-att img{height:56px;border-radius:8px;display:block}
 .ag-att b{position:absolute;left:4px;top:4px;font-size:10px;font-family:var(--mono);background:rgba(var(--ov-rgb),.8);padding:1px 5px;border-radius:5px}
 .ag-att button{position:absolute;right:-6px;top:-6px;width:20px;height:20px;border-radius:50%;background:var(--surface-2);font-size:11px}
-/* the field takes a whole row of its own; every button sits underneath it */
-.ag-comp{display:flex;flex-wrap:wrap;gap:8px 10px;align-items:flex-end;padding:12px 18px 14px}
-.ag-comp textarea{order:-2;flex:1 1 100%;width:100%;min-height:56px;max-height:180px;min-width:0}
-.ag-comp #agSend{order:-1}
-.ag-comp .ag-clip,.ag-comp #agClearIn,.ag-comp #agSend{height:38px;min-height:38px;border-radius:10px;font-size:13px}
-.ag-comp .ag-clip{padding:0 11px;min-width:44px}
-.ag-comp #agClearIn{padding:0 14px}
-.ag-comp .ag-clip svg{width:16px;height:16px}
-.ag-clip{padding:12px;display:grid;place-items:center}
-.ag-clip.rec{background:rgba(var(--accent-rgb),.25);border-color:var(--accent);color:#fff;animation:pulse 1s infinite}
+.ag-comp{padding:12px 18px 14px}
+.ag-box{position:relative;border:1px solid var(--line);border-radius:16px;background:var(--bg-2);transition:border-color .15s}
+.ag-box:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.ag-box textarea{border:none;background:transparent;box-shadow:none;resize:none;min-height:64px;max-height:220px;padding:14px 46px 46px 46px;line-height:1.55}
+.ag-box textarea:focus{box-shadow:none}
+.ag-box .ag-x{position:absolute;top:8px;right:8px;width:26px;height:26px;border-radius:8px;display:grid;place-items:center;color:var(--muted);border:1px solid var(--line);background:var(--surface)}
+.ag-box .ag-x:hover{color:var(--accent);border-color:var(--accent)}
+.ag-box .ag-x[hidden],.ag-menu[hidden]{display:none}
+.ag-box .ag-go{position:absolute;right:9px;bottom:9px;width:34px;height:34px;border-radius:50%;background:var(--accent);color:#fff;display:grid;place-items:center}
+.ag-box .ag-go:hover{filter:brightness(1.12)}
+.ag-box .ag-go:disabled{opacity:.5}
+.ag-box .ag-plus{position:absolute;left:9px;bottom:9px;width:34px;height:34px;border-radius:50%;display:grid;place-items:center;color:var(--muted);border:1px dashed var(--line);background:var(--surface)}
+.ag-box .ag-plus:hover{color:var(--accent);border-color:var(--accent)}
+.ag-menu{position:absolute;left:9px;bottom:50px;z-index:6;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:6px;display:grid;gap:2px;min-width:255px;box-shadow:0 10px 34px rgba(0,0,0,.5)}
+.ag-menu .ag-clip{display:flex;gap:10px;align-items:center;width:100%;padding:9px 10px;border-radius:9px;font-size:13px;cursor:pointer;color:var(--text);text-align:left;border:none;background:none}
+.ag-menu .ag-clip:hover{background:var(--surface-2)}
+.ag-menu .ag-clip svg{width:16px;height:16px;flex:none;color:var(--muted)}
+.ag-menu .ag-clip.rec{background:rgba(var(--accent-rgb),.25);color:#fff;animation:pulse 1s infinite}
+/* a send that is running shows a stop square in the same round button, so the arrow is not lost to a word */
+.ag-box .ag-go.busy{background:var(--pink)}
+.ag-box .ag-go.busy svg{display:none}
+.ag-box .ag-go.busy::after{content:'';width:12px;height:12px;border-radius:3px;background:#fff}
 .ag-audio{margin:0 18px;padding:10px 12px;border-radius:12px;background:var(--bg-2);border:1px solid var(--line);display:grid;gap:6px}
 .ag-audio-h{display:flex;align-items:center;gap:10px}
 .ag-audio-h b{flex:1;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -903,7 +934,7 @@ img.pr-media{object-position:center 38%}
 
 /* live preview */
 .frame canvas.live{position:absolute;inset:0;width:100%;height:100%}
-.live-hud{position:absolute;left:10px;top:10px;display:flex;align-items:center;gap:8px;padding:5px 10px;border-radius:8px;background:rgba(var(--ov-rgb),.72);backdrop-filter:blur(6px);font-size:11.5px;font-weight:700}
+.live-hud{position:absolute;left:10px;top:10px;display:flex;align-items:center;gap:8px;padding:5px 10px;border-radius:8px;background:rgba(var(--ov-rgb),.72);font-size:11.5px;font-weight:700}
 .live-hud .hud-s{font-family:var(--mono);font-weight:500;color:var(--muted)}
 .live-dot{width:7px;height:7px;border-radius:50%;background:var(--accent);animation:pulse 1s infinite}
 @keyframes pulse{50%{opacity:.3}}
@@ -1008,7 +1039,7 @@ img.pr-media{object-position:center 38%}
 .li-th img{width:100%;height:100%;object-fit:cover;display:block}
 .li-gone{position:absolute;inset:0;display:grid;place-content:center;gap:4px;text-align:center;color:var(--muted);font-weight:700;font-size:13px;background:repeating-linear-gradient(45deg,rgba(255,255,255,.02) 0 10px,transparent 10px 20px)}
 .li-gone small{font-weight:500;font-size:11px;color:var(--dim)}
-.li-mode,.li-len{position:absolute;bottom:8px;font-size:11px;font-weight:700;padding:3px 8px;border-radius:7px;background:rgba(var(--ov-rgb),.75);backdrop-filter:blur(6px)}
+.li-mode,.li-len{position:absolute;bottom:8px;font-size:11px;font-weight:700;padding:3px 8px;border-radius:7px;background:rgba(var(--ov-rgb),.75)}
 .li-mode{left:8px}.li-len{right:8px;font-family:var(--mono);font-weight:500}
 .li-play{position:absolute;inset:0;display:grid;place-items:center;opacity:0;transition:.15s;background:rgba(var(--ov-rgb),.25)}
 .li-play i{width:46px;height:46px;border-radius:50%;background:var(--grad);display:grid;place-items:center;box-shadow:0 8px 22px rgba(var(--accent-rgb),.4)}
@@ -1032,7 +1063,7 @@ img.pr-media{object-position:center 38%}
 .btn.on{border-color:var(--accent);background:var(--accent-soft)}
 
 /* modals, toast */
-.modal{position:fixed;inset:0;background:rgba(5,2,3,.72);backdrop-filter:blur(6px);display:grid;place-items:center;padding:20px;z-index:50}
+.modal{position:fixed;inset:0;background:rgba(5,2,3,.72);display:grid;place-items:center;padding:20px;z-index:50}
 .box{position:relative;background:var(--surface);border:1px solid var(--line-2);border-radius:18px;width:min(980px,100%);max-height:calc(calc(var(--vh,1vh)*100) - 40px);overflow:auto;box-shadow:0 30px 80px rgba(0,0,0,.6)}
 .viewer{display:grid;grid-template-columns:1.5fr 1fr}
 .v-media{position:relative;background:var(--screen);display:grid;place-items:center;min-height:300px}
@@ -1129,7 +1160,11 @@ img.pr-media{object-position:center 38%}
     </button>
     <button class="nav sub" data-view="qwen">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
-      Правка изображения
+      Редактирование изображений
+    </button>
+    <button class="nav sub" data-view="inpaint">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.06 11.9 3.6 13.44a1 1 0 0 0-.54 1.66l4.84 4.84a1 1 0 0 0 1.66-.54L11.1 14.94"/><path d="m14.47 12.53 6.43-6.43a2.12 2.12 0 0 0-3-3l-6.43 6.43"/><path d="m11.9 9.06-2.44.65a1 1 0 0 0-.54 1.66l1.58 1.58"/><path d="M19.07 4.93a2.12 2.12 0 0 1 3 3"/></svg>
+      Инпейнт
     </button>
 
     <button class="nav" data-view="custom" id="navCustom" hidden>
@@ -1309,7 +1344,7 @@ img.pr-media{object-position:center 38%}
           </div>
 
           <div class="card">
-            <div class="card-h"><h3><span class="n">2</span>Референсы</h3><span class="counter" id="rCount">0 / 9</span></div>
+            <div class="card-h"><h3><span class="n">2</span>Референсы</h3><span class="counter" id="rCount">0 / 9</span> <button class="btn mini" id="rClrAll" type="button" title="Убрать все изображения из ячеек">Очистить всё</button></span></div>
             <div class="refs" id="refs"></div>
             <div class="note" style="margin-top:12px">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 8h0M11 12h1v5h1"/></svg>
@@ -1355,6 +1390,7 @@ img.pr-media{object-position:center 38%}
     <section class="view" id="view-montage"></section>
     <section class="view" id="view-krea"></section>
     <section class="view" id="view-qwen"></section>
+    <section class="view" id="view-inpaint"></section>
 
     <!-- ============ AGENT ============ -->
     <section class="view" id="view-agent">
@@ -1387,27 +1423,28 @@ img.pr-media{object-position:center 38%}
             <textarea id="agAudioText" rows="2" placeholder="Распознаём слова…"></textarea>
           </div>
           <div class="ag-comp">
-            <label class="btn ag-clip" title="Приложить изображения с компьютера"><input type="file" accept="image/*" multiple hidden id="agFile">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m21 12-8.5 8.5a5 5 0 0 1-7-7L14 5a3.5 3.5 0 0 1 5 5l-8.5 8.5a2 2 0 0 1-3-3L15 8"/></svg>
-            </label>
-            <button class="btn ag-clip" type="button" id="agLib" title="Взять изображение или звук из Библиотеки (то, что вы уже сделали)">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M8 4v5M16 4v5"/></svg>
-            </button>
-            <label class="btn ag-clip" title="Приложить видео: программа вырежет из него несколько кадров, чтобы Агент увидел, кто в кадре"><input type="file" accept="video/*" hidden id="agVidFile">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="14" height="14" rx="2"/><path d="m16 10 6-3v10l-6-3"/></svg>
-            </label>
-            <label class="btn ag-clip" title="Приложить аудио (песню или голос) — слова будут распознаны"><input type="file" accept="audio/*,video/mp4" hidden id="agAudioFile">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
-            </label>
-            <button class="btn ag-clip" type="button" id="agFromLip" title="Взять выделенный фрагмент из раздела Lipsync" hidden>
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 12h2M7 8v8M11 4v16M15 8v8M19 10v4M21 12h0"/></svg>
-            </button>
-            <button class="btn ag-clip" type="button" id="agMic" title="Голосовой ввод: нажмите, говорите, нажмите ещё раз">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
-            </button>
-            <button class="btn" type="button" id="agClearIn" title="Очистить поле ввода">Очистить</button>
-            <textarea id="agIn" rows="2" placeholder="Опишите сцену, сценарий или вставьте реплики… (Enter — отправить, Shift+Enter — новая строка)"></textarea>
-            <button class="btn pri" id="agSend">Отправить</button>
+            <div class="ag-box">
+              <textarea id="agIn" rows="2" placeholder="Опишите сцену, сценарий или вставьте реплики… (Enter — отправить, Shift+Enter — новая строка)"></textarea>
+              <button type="button" class="ag-x" id="agClrField" title="Очистить поле и вложения" hidden>✕</button>
+              <button type="button" class="ag-go" id="agSend" title="Отправить (Enter)"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
+              <button type="button" class="ag-plus" id="agPlus" title="Вложения: изображения, видео, аудио, Библиотека, голосовой ввод">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21 12-8.5 8.5a5 5 0 0 1-7-7L14 5a3.5 3.5 0 0 1 5 5l-8.5 8.5a2 2 0 0 1-3-3L15 8"/></svg>
+              </button>
+              <div class="ag-menu" id="agMenu" hidden>
+                <label class="ag-clip" title="Приложить изображения с компьютера"><input type="file" accept="image/*" multiple hidden id="agFile">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="1.6"/><path d="m21 15-5-5L5 21"/></svg><span>Изображения с компьютера</span></label>
+                <button class="ag-clip" type="button" id="agLib" title="Взять изображение или звук из Библиотеки (то, что вы уже сделали)">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M8 4v5M16 4v5"/></svg><span>Из Библиотеки</span></button>
+                <label class="ag-clip" title="Приложить видео: программа вырежет из него несколько кадров, чтобы Агент увидел, кто в кадре"><input type="file" accept="video/*" hidden id="agVidFile">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="14" height="14" rx="2"/><path d="m16 10 6-3v10l-6-3"/></svg><span>Видео — агент увидит кадры</span></label>
+                <label class="ag-clip" title="Приложить аудио (песню или голос) — слова будут распознаны"><input type="file" accept="audio/*,video/mp4" hidden id="agAudioFile">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg><span>Аудио — распознаем слова</span></label>
+                <button class="ag-clip" type="button" id="agFromLip" title="Взять выделенный фрагмент из раздела Lipsync" hidden>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 12h2M7 8v8M11 4v16M15 8v8M19 10v4M21 12h0"/></svg><span>Фрагмент из Lipsync</span></button>
+                <button class="ag-clip" type="button" id="agMic" title="Голосовой ввод: нажмите, говорите, нажмите ещё раз">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg><span>Голосовой ввод</span></button>
+              </div>
+            </div>
           </div>
         </div>
         <div class="col ag-side">
@@ -1561,6 +1598,7 @@ img.pr-media{object-position:center 38%}
         </div>
         <span class="sp"></span>
         <span class="counter" id="selCount" hidden></span>
+        <button class="btn" id="selAll" type="button" hidden title="Выбрать всё, что видно в этом разделе (с учётом выбранного фильтра)">Выбрать все</button>
         <button class="btn" id="bulkSave" hidden>Сохранить выбранные</button>
         <button class="btn danger" id="bulkDel" hidden>Удалить выбранные</button>
         <span class="zoom-btns" title="Размер значков (или Ctrl + колесо мыши)"><button class="btn" id="libSm" type="button">−</button><button class="btn" id="libLg" type="button">+</button></span>
@@ -1754,7 +1792,7 @@ equirements.txt</code><br>
         </div>
         <div class="card" id="clCard" style="margin-bottom:16px" hidden>
           <div class="card-h"><h3>Свои LoRA <small style="color:var(--muted);font-weight:500">· для тех, кто знает ComfyUI</small></h3><span><button class="btn" id="clRe" type="button">Обновить список</button> <button class="btn pri" id="clAdd" type="button">+ Добавить LoRA</button></span></div>
-          <div class="hint" style="margin-bottom:10px">Положите файл LoRA в папку <b>ComfyUI\models\loras</b>, нажмите «Обновить список» и добавьте её. Она подключится ко всем разделам сразу после основной модели. Новичкам ничего менять не нужно: всё уже готово. Свои VAE и модели меняются кнопкой «Заменить…» в списке ниже.</div>
+          <div class="hint" style="margin-bottom:10px">Положите файл LoRA в папку <b>ComfyUI\models\loras</b>, нажмите «Обновить список» и добавьте её. <b>Включённая LoRA подмешивается во все видео-режимы.</b> Отключить её только для одного режима можно прямо в нём: вверху, в строке «Модель», нажмите на название LoRA. Новичкам ничего менять не нужно: всё уже готово. Свои VAE и модели меняются кнопкой «Заменить…» в списке ниже.</div>
           <div class="mlist" id="clList"></div>
         </div>
         <div class="card" id="mdDl" hidden style="margin-bottom:16px">
@@ -2002,8 +2040,8 @@ function setEngine(on) {
 /* pinned top bar with every video and image section */
 (function () {
   const bar = document.createElement('div'); bar.id = 'modeBar'; $('.topbar').appendChild(bar);
-  const SHORT = { video: 'Видео', lipsync: 'Lipsync', refs: 'Референсы', actor: 'Актёр', swap: 'Замена', long: 'Видеостудия', action: 'Экшн', krea: 'Изображение', qwen: 'Правка', upfile: 'Увеличить' };
-  const GROUPS = [['presets'], ['video', 'lipsync', 'refs', 'actor', 'swap', 'long', 'action'], ['krea', 'qwen'], ['upfile']];
+  const SHORT = { video: 'Видео', lipsync: 'Lipsync', refs: 'Референсы', actor: 'Актёр', swap: 'Замена', long: 'Видеостудия', action: 'Экшн', krea: 'Изображение', qwen: 'Правка', inpaint: 'Инпейнт', upfile: 'Увеличить' };
+  const GROUPS = [['presets'], ['video', 'lipsync', 'refs', 'actor', 'swap', 'long', 'action'], ['krea', 'qwen', 'inpaint'], ['upfile']];
   function paint() {
     const cur = ($('.view.active')?.id || '').replace('view-', '');
     let html = '';
@@ -2767,6 +2805,39 @@ function wireDrop(zone, onFile) {
   return { clear };
 }
 
+/* picture slots: drag one picture onto another slot to swap them; clearAll clicks every slot's ✕ */
+function slotSet(z, f, src) {
+  z._file = f || null;
+  let im = $('img', z);
+  if (src) { if (!im) { im = document.createElement('img'); z.prepend(im); } im.src = src; }
+  else if (im) im.remove();
+  z.classList.toggle('filled', !!f);
+  const ph = $('.plus, .ph', z); if (ph) ph.hidden = !!f;
+  const tg = $('.tag', z); if (tg) tg.hidden = !f;
+}
+function wireSlotSwap(zones, onSwap) {
+  let from = null;
+  zones.forEach(z => {
+    z.addEventListener('dragstart', e => {
+      if (!z._file) { e.preventDefault(); return; }
+      from = z;
+      try { e.dataTransfer.setData('text/plain', 'slot'); e.dataTransfer.effectAllowed = 'move'; } catch {}
+    });
+    z.addEventListener('dragend', () => { from = null; });
+    z.addEventListener('dragover', e => { if (from && from !== z) { e.preventDefault(); try { e.dataTransfer.dropEffect = 'move'; } catch {} } });
+    z.addEventListener('drop', e => {
+      e.preventDefault(); e.stopPropagation();
+      if (!from || from === z) return;
+      const a = from, b = z;
+      const fa = a._file, sa = $('img', a)?.src, fb = b._file, sb = $('img', b)?.src;
+      slotSet(a, fb, sb); slotSet(b, fa, sa);
+      from = null;
+      if (onSwap) onSwap();
+    });
+  });
+}
+const clearSlots = zones => zones.forEach(z => { const x = $('.x', z); if (x) x.click(); });
+
 /* ---------- VIDEO view ---------- */
 const V = { aspect: '16:9', q: '720p', dur: 5, first: false, last: false, unet: 'fast', len: () => V.dur };
 const vPrev = previewPanel($('#vPreview'), V, {
@@ -2940,6 +3011,8 @@ for (let i = 1; i <= MAX_REFS; i++) {
     r.classList.remove('filled'); $('.plus', r).hidden = false; $('.tag', r).hidden = true; refsChanged();
   };
 }
+wireSlotSwap($$('.ref', refsEl), refsChanged);
+$('#rClrAll').onclick = () => clearSlots($$('.ref', refsEl));
 function refsChanged() {
   // H3 numbers references without gaps, so tags follow the order of filled slots
   const slots = $$('.ref.filled', refsEl);
@@ -3841,7 +3914,8 @@ function qRender() {
     const live = act.includes(j), v = live ? jobView(j) : null;
     const big = live ? `<div class="q-big ${v.lvl}"><i style="width:${Math.round(v.p * 100)}%"></i></div><div class="pbox-chip ${v.lvl}"><span class="pbox-dot"></span><span>${run ? Math.round(v.p * 100) + '% · ' : ''}${esc(v.txt)}</span></div>` : '';
     const cmpB = j.state === 'done' && j.mode === 'upscale' && j.itemId ? `<button class="btn pri" data-q="cmp" data-id="${j.itemId}">До и после</button>` : '';
-    return `<div class="q-row${cls}" data-id="${j.id}" role="button" tabindex="0" title="Открыть подробности задания" aria-label="${esc((MODE_NAME[j.mode] || 'Задание') + ': подробности')}"><div class="q-n">${n || (j.state === 'done' ? '✓' : '·')}</div><div><div class="q-t">${esc(MODE_NAME[j.mode] || 'Видео')}: ${esc(j.prompt.slice(0, 120) || 'без промпта')}</div>`
+    const mn = MODE_NAME[j.mode] || 'Видео', pt = j.prompt.slice(0, 120) || 'без промпта';
+    return `<div class="q-row${cls}" data-id="${j.id}" role="button" tabindex="0" title="Открыть подробности задания" aria-label="${esc(mn + ': подробности')}"><div class="q-n">${n || (j.state === 'done' ? '✓' : '·')}</div><div><div class="q-t">${esc(pt === mn ? mn : mn + ': ' + pt)}</div>`
       + `<div class="q-s">${esc(st)}</div>${big}</div><div class="q-btns">${det}${cmpB || btn}</div></div>`;
   };
   box.innerHTML = QUEUE.length ? act.map((j, i) => row(j, i + 1)).join('') + fin.map(j => row(j, 0)).join('')
@@ -4227,8 +4301,11 @@ function renderLib() {
       <div class="li-b"><p>${esc(it.prompt) || '<span style="color:var(--dim)">без промпта</span>'}</p><small>${[it.res, it.aspect, fmtDate(it.date)].filter(Boolean).join(' · ')}</small></div>
     </div>`).join('')
     : `<div class="empty" style="grid-column:1/-1">${LIB.length ? 'В этом разделе пока пусто' : 'Здесь появятся ваши видео после первой генерации'}</div>`;
-  $('#selCount').hidden = $('#bulkSave').hidden = $('#bulkDel').hidden = !selecting;
+  $('#selCount').hidden = $('#bulkSave').hidden = $('#bulkDel').hidden = $('#selAll').hidden = !selecting;
   $('#selCount').textContent = `выбрано: ${selected.size}`;
+  $('#selAll').textContent = items.length && items.every(it => selected.has(it.id)) ? 'Снять выбор' : `Выбрать все (${items.length})`;
+  $('#selAll').disabled = !items.length;
+  $('#selAll')._items = items;
   $('#bulkSave').disabled = $('#bulkDel').disabled = !selected.size;
   $('#selToggle').textContent = selecting ? 'Готово' : 'Выбрать';
   $('#selToggle').classList.toggle('on', selecting);
@@ -4273,11 +4350,16 @@ function askDelete(ids) {
   $('#cfText').textContent = 'Файлы переместятся в корзину Windows — их можно будет восстановить.';
   $('#confirm').hidden = false;
   $('#cfOk').onclick = async () => {
+    $('#confirm').hidden = true;
     if (API) {
-      for (const id of [...ids]) {
-        const r = await fetch(`/api/library/${id}`, { method: 'DELETE' });
-        if (!r.ok) { toast((await r.json().catch(() => ({}))).error || 'Не удалось удалить'); ids = ids.filter(x => x !== id); }
-      }
+      // the page itself keeps the video files open: let them go first, otherwise Windows says «файл уже используется»
+      $$('video').forEach(v => { try { v.pause(); v.removeAttribute('src'); v.load(); } catch {} });
+      toast(ids.length === 1 ? 'Удаляем…' : `Удаляем ${ids.length}…`);
+      try {
+        const r = await fetch('/api/library/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids }) });
+        const j = await r.json();
+        if (j.failed?.length) { toast(`Не удалось удалить: ${j.failed.length}. Возможно, файл открыт в другой программе.`); const bad = new Set(j.failed); ids = ids.filter(x => !bad.has(x)); }
+      } catch { toast('Не удалось удалить'); ids = []; }
     }
     ids.forEach(id => { const i = LIB.findIndex(x => x.id === id); if (i >= 0) LIB.splice(i, 1); selected.delete(id); });
     $('#confirm').hidden = true;
@@ -4410,6 +4492,11 @@ $('#libFilter').onclick = e => {
   libFilter = c.dataset.f; $$('#libFilter .chip').forEach(x => x.classList.toggle('on', x === c)); renderLib();
 };
 $('#selToggle').onclick = () => { selecting = !selecting; selected.clear(); renderLib(); };
+$('#selAll').onclick = () => {
+  const items = $('#selAll')._items || [], all = items.length && items.every(it => selected.has(it.id));
+  items.forEach(it => all ? selected.delete(it.id) : selected.add(it.id));
+  renderLib();
+};
 $('#bulkSave').onclick = () => saveItems([...selected].map(byId));
 $('#bulkDel').onclick = () => askDelete([...selected]);
 $$('.modal').forEach(m => m.addEventListener('click', e => { if (e.target === m || e.target.closest('[data-close]')) { if (m.id === 'viewer') closeViewer(); else { m.hidden = true; if (m.id === 'qjob') qJobClose(); } } }));
@@ -4474,7 +4561,7 @@ function makeRefMode(cfg) {
     <div class="head"><div><h1>${cfg.title}</h1><p>${cfg.sub}</p></div><div class="mode-pill"><i></i><span class="rm-pill">${cfg.pill}</span></div></div>
     <div class="grid"><div class="col">
       <div class="card">
-        <div class="card-h"><h3><span class="n">1</span>Референсы</h3><span class="counter rm-count"></span></div>
+        <div class="card-h"><h3><span class="n">1</span>Референсы</h3><span class="counter rm-count"></span> <button class="btn mini rm-clr" type="button" title="Убрать все изображения из ячеек">Очистить всё</button></span></div>
         <div class="refs rm-imgs"></div>
         <div class="rm-media">
           ${cfg.videos ? `<div><div class="sub-l"><span>Референс-видео</span></div><div class="slots rm-vids"></div><small class="media-hint">движение, камера, хореография · 2–15 с</small></div>` : ''}
@@ -4511,6 +4598,8 @@ function makeRefMode(cfg) {
     r.addEventListener('drop', e => { e.preventDefault(); set(e.dataTransfer.files[0]); });
     $('.x', r).onclick = e => { e.preventDefault(); e.stopPropagation(); $('img', r)?.remove(); input.value = ''; r._file = null; resetSlot(r); r.classList.remove('filled'); $('.plus', r).hidden = false; $('.tag', r).hidden = true; changed(); };
   }
+  wireSlotSwap($$('.ref', imgsEl), changed);
+  $('.rm-clr', root).onclick = () => clearSlots($$('.ref', imgsEl));
   // video / audio slots
   const mkSlots = (el, n, accept, icon, label) => {
     for (let i = 0; i < n; i++) {
@@ -4619,6 +4708,8 @@ function makeRefMode(cfg) {
       <div class="lm-scenes"></div>
       <div class="seg lm-q" style="grid-template-columns:1fr 1fr;margin:10px 0 6px"><button type="button" data-mq="draft">Черновик<small>4 шага, быстро: посмотреть, что получится</small></button><button type="button" data-mq="final">Хорошее качество<small>8 шагов: итоговые сцены</small></button></div>
       <div class="hint lm-q-hint" style="margin-bottom:10px"></div>
+      <div class="seg lm-acc" style="grid-template-columns:1fr 1fr;margin:0 0 6px" title="Чем считаются сцены в хорошем качестве"><button type="button" data-x="pika" class="on">С ускорением Pika<small>8 шагов, быстро (как раньше)</small></button><button type="button" data-x="old">Без Pika<small>12 шагов, дольше, обычный путь модели</small></button></div>
+      <div class="hint" style="margin-bottom:10px;font-size:12px">Если со сценами что-то не так (зависает, плохой звук или картинка), попробуйте «Без Pika». Выбор действует на «Хорошее качество»; в «Черновике» ускорение другое.</div>
       <div class="seg lm-mode" style="grid-template-columns:1fr 1fr;margin-bottom:6px"><button type="button" data-m="parts">По частям<small>сцена за сценой</small></button><button type="button" data-m="all">Весь ролик<small>одним файлом</small></button></div>
       <div class="hint lm-mode-hint" style="margin-bottom:10px"></div>
       <button class="btn pri lm-chain" type="button" style="margin-bottom:12px;width:100%;padding:12px" title="Сцены считаются одна за другой сами: следующая запускается, когда предыдущая готова. Можно оставить компьютер на ночь: каждая сцена сохраняется в Библиотеку отдельным клипом.">▶ Сделать все сцены подряд (само, одну за другой)</button>
@@ -4918,7 +5009,15 @@ function makeRefMode(cfg) {
       };
       $('textarea', c).addEventListener('input', () => refreshStates());
       $('textarea', c).addEventListener('focus', e => { root._ta = e.target; });
-      $('input[type=range]', c).oninput = recount; $('.x', c).onclick = () => { root._pushUndo?.(); c.remove(); recount(); };
+      $('input[type=range]', c).oninput = recount; $('.x', c).onclick = () => {
+        root._pushUndo?.();
+        // deleting the FIRST scene of a song-driven video: the next scene becomes the first, so its piece of the track must stay the
+        // same, and the start of the track moves on by the length of the deleted scene (same frame arithmetic as the pieces themselves)
+        const gone = root._snd === 'own' && $$('.sc', root)[0] === c ? (accs()[0] || 0) / 24 : 0;
+        c.remove();
+        if (gone) { const f = $('.lm-start', root); f.value = String(Math.round(((parseFloat(f.value) || 0) + gone) * 100) / 100); toast(`Начало трека сдвинуто на ${gone.toFixed(2)} с: следующие сцены берут тот же кусок аудио`); }
+        recount();
+      };
       fin.addEventListener('change', () => refreshStates());
       recount();
     };
@@ -4991,7 +5090,7 @@ function makeRefMode(cfg) {
       $('.lm-q button[data-mq="final"] small', root).textContent = `${szOf('final')} · 8 шагов, итог`;
       const qn = $('.lm-qnote', root); if (qn) qn.textContent = root._q === 'draft' ? 'Размер ниже выбирается для ЧЕРНОВИКА (режим переключается кнопками в блоке «Сцены»).' : 'Размер ниже выбирается для ХОРОШЕГО КАЧЕСТВА (режим переключается кнопками в блоке «Сцены»).';
       const qh = $('.lm-q-hint', root);
-      qh.textContent = root._dmad === false ? 'Черновик недоступен: нет файла minimax_h3_DMAD_4step_full_lora (0,37 ГБ). Он есть в разделе «Модели» — скачайте, и кнопка включится сама. Пока сцены считаются в хорошем качестве.' : Q_HINT(root._q);
+      qh.textContent = root._dmad === false ? `Черновик недоступен: ComfyUI не видит файл minimax_h3_DMAD_4step_full_lora в папке loras (в названии должно быть «DMAD_4step»).${(root._dmadFiles || []).length ? ' Похожие файлы, которые он видит: ' + root._dmadFiles.join(', ') + '.' : ''} Положили файл — откройте этот раздел заново. Сцены пока считаются в хорошем качестве.` : Q_HINT(root._q);
       qh.style.color = root._dmad === false ? 'var(--pink)' : '';
       $$('.sc-tq', root).forEach(sel => { if (!sel._touched) sel.value = S.q; });
     };
@@ -5004,30 +5103,27 @@ function makeRefMode(cfg) {
     }
     root._setQ = setQ;
     $('.lm-q', root).onclick = e => { const b = e.target.closest('button'); if (b && !b.disabled) setQ(b.dataset.mq); };
+    $('.lm-acc', root).onclick = e => { const b = e.target.closest('button'); if (!b) return; $$('.lm-acc button', root).forEach(x => x.classList.toggle('on', x === b)); };
     $('.lm-final', root).onclick = () => { setQ('final'); $('.lm-chain', root).click(); };
-    const dmadNow = async (announce) => {   // ask ComfyUI again: the file may have just been downloaded in «Модели»
-      let has = null;
-      try { has = !!(await (await fetch('/api/loras/custom')).json()).files?.some(f => /DMAD_4step/i.test(f)); } catch { has = null; }
-      if (has == null) return null;
-      const was = root._dmad; root._dmad = has;
-      if (has && !was) { renderTL(); root._paintQ(); if (announce) toast('Черновик включён: 4 шага, быстро'); }
-      else if (!has) { if (root._q === 'draft') setQ('final'); else { renderTL(); root._paintQ(); } }
-      return has;
+    // the draft LoRA is looked for again every time the section is opened: a file put into the folder later is picked up without restarting
+    // Only "ComfyUI answered and there is no such file" means no draft. An error while the page reacts to the answer must never turn the draft off
+    // (before, any such error landed in the same catch and left «Черновик недоступен» for good, even with the file in place).
+    const checkDmad = async first => {
+      let r;
+      try { r = await (await fetch('/api/loras/custom')).json(); } catch { r = null; }
+      if (!r || !Array.isArray(r.files)) { if (root._dmad == null) { root._dmad = false; try { setQ('final'); } catch (e) { console.warn(e); } } return; }   // ComfyUI did not answer: try again when the section is opened
+      const was = root._dmad;
+      root._dmadFiles = r.files.filter(f => /dmad/i.test(f));
+      root._dmad = r.files.some(f => /dmad[_\-\s]?4[_\-\s]?step/i.test(f));
+      try {
+        if (!root._dmad) { if (root._q === 'draft') setQ('final'); else root._paintQ?.(); }
+        else if (first && !root._restoring && !readyUpTo()) setQ('draft');
+        else if (was !== true) root._paintQ?.();
+        renderTL();
+      } catch (e) { console.warn('draft check:', e); }
     };
-    root._dmadCheck = () => dmadNow(true);
-    function dmadRetry(n) {   // the window may open before ComfyUI answers: ask again, do not keep the draft locked for the whole session
-      if (n > 3) return;
-      setTimeout(async () => { if (!(await dmadNow(n === 1))) dmadRetry(n + 1); }, 15000 * n);
-    }
-    // coming back to the section after downloading the file in «Модели»: check again, no reload needed
-    new MutationObserver(() => { if (root.classList.contains('active') && root._dmad === false) dmadNow(true); })
-      .observe(root, { attributes: true, attributeFilter: ['class'] });
-    fetch('/api/loras/custom').then(r => r.json()).then(r => {
-      root._dmad = !!(r.files || []).some(f => /DMAD_4step/i.test(f));
-      if (!root._dmad) { setQ('final'); dmadRetry(1); }   // ComfyUI may still be starting: ask again instead of locking the switch for good
-      else if (!root._restoring && !readyUpTo()) setQ('draft');
-      renderTL();
-    }).catch(() => { root._dmad = false; setQ('final'); dmadRetry(1); });
+    checkDmad(true);
+    root.closest('.view') && new MutationObserver(() => { if (root.closest('.view').classList.contains('active')) checkDmad(false); }).observe(root.closest('.view'), { attributes: true, attributeFilter: ['class'] });
     queueMicrotask(() => { setQ('final'); });
     queueMicrotask(() => queueMicrotask(() => {   /* the order of the page: main settings, pictures, scenes; the rare things are folded */
       const col = $('.col', root), top = $('.rm-params', root), refsCard = $('.rm-imgs', root).closest('.card'), musCard = $('.lm-snd', root).closest('.card'), scCard = $('.lm-scenes', root).parentElement;
@@ -5218,7 +5314,7 @@ function makeRefMode(cfg) {
           if (k == null) k = root._ready();
           if (k >= all.length) throw new Error('Все сцены уже сделаны. Чтобы переделать одну, нажмите «Переделать» в её карточке.');
           if (!tst && !root._canGo(k)) throw new Error(`Сначала сделайте сцену ${k}: эта продолжает её конец. Или отметьте у сцены «Сменить план здесь».`);
-          fd.append('part', k); fd.append('run', root._run); if (root._q === 'draft' && !tst) fd.append('draft', '1'); fd.append('variant', String(all[k]._var || 0));
+          fd.append('part', k); fd.append('run', root._run); if (root._q === 'draft' && !tst) fd.append('draft', '1'); if ($('.lm-acc .on', root)?.dataset.x === 'old') fd.append('accel', 'old'); fd.append('variant', String(all[k]._var || 0));
           if (tst) { fd.set('quality', tst.q); fd.delete('width'); fd.delete('height'); fd.append('test', '1'); }   // a size test: the scene alone, in the chosen size
           else {
             if (root._src) { fd.append('src_project', '1'); if (k === 0) { if (root._src.id) fd.append('src_item', root._src.id); else if (root._src.file) fd.append('srcvid', root._src.file); } }
@@ -5226,7 +5322,7 @@ function makeRefMode(cfg) {
             (root._sent = root._sent || {})[k] = root._pending.sig; (root._sentText = root._sentText || {})[k] = $('textarea', all[k]).value;
           }
         }
-        if (cfg.scenes && root._mode !== 'parts') { fd.append('run', root._run); if (root._q === 'draft') fd.append('draft', '1'); }
+        if (cfg.scenes && root._mode !== 'parts') { fd.append('run', root._run); if (root._q === 'draft') fd.append('draft', '1'); if ($('.lm-acc .on', root)?.dataset.x === 'old') fd.append('accel', 'old'); }
         if (cfg.scenes) { fd.append('scenes', JSON.stringify(sceneList())); $$('.sc', root).forEach((c, i) => c._files.forEach((f, j) => fd.append(`simg${i}_${j}`, f))); fd.append('start', $('.lm-start', root).value || '0'); fd.append('vocals', root._snd === 'own' && $('.lm-vocals', root).checked ? '1' : '0'); }
         else loraForm(S, fd);
         seedForm(S, fd);
@@ -5557,6 +5653,7 @@ function renderAtt() {
   $('#agAtt').innerHTML = AG.att.map((a, i) => a.frame
     ? `<div title="Кадр из видео «${esc(a.vname)}»"><img src="${a.url}"><b style="background:#3a5a8c">🎞 ${esc(a.label)}</b><button data-i="${i}">✕</button></div>`
     : `<div><img src="${a.url}"><b>Picture ${base + (++k)}</b><button data-i="${i}">✕</button></div>`).join('');
+  if (window._agUpdX) window._agUpdX();   // keep the clear-field cross in sync
 }
 // a video cannot be shown to the model as a file: several frames are cut out of it and sent as pictures, with the seconds written down
 async function agVideoFrames(file, n = 8) {
@@ -5788,7 +5885,7 @@ async function agSend() {
   const reply = { role: 'assistant', content: '', status: 'Отправляем…' };
   AG.msgs.push(reply); renderMsgs();
   const el = $('#agMsgs .msg:last-child');
-  AG.busy = true; $('#agSend').textContent = 'Стоп'; AG.ctrl = new AbortController();
+  AG.busy = true; $('#agSend').classList.add('busy'); $('#agSend').title = 'Остановить'; AG.ctrl = new AbortController();
   const ctx = { model: AG.storyFrames && AG.storyModel === 'krea' ? 'flux' : AG.storyModel, frames: AG.target === 'story' && AG.storyFrames, duration: AG_IMG.includes(AG.target) ? null : AG.target === 'video' ? V.dur : AG.target === 'lipsync' ? (L.dur0 ? L.len() : null) : RM[AG.target].S.dur };
   if (AG.target === 'actor') ctx.voice = RM.actor.voice() ? 1 : 0;
   if (AG.target === 'long') ctx.long = { sound: RM.long.root._snd, secs: $$('.sc input[type=range]', RM.long.root).map(r => +r.value) };
@@ -5814,11 +5911,24 @@ async function agSend() {
       }
     }
   } catch (e) { if (e.name !== 'AbortError') reply.error = e.message; }
-  AG.busy = false; $('#agSend').textContent = 'Отправить'; reply.status = null;
+  AG.busy = false; $('#agSend').classList.remove('busy'); $('#agSend').title = 'Отправить (Enter)'; reply.status = null;
   if (!reply.content && !reply.error) reply.error = 'Остановлено';
   renderAssistant(el, reply); agStatus(); saveChat();
 }
 $('#agSend').onclick = agSend;
+/* ChatGPT-style input: paperclip menu, auto-grow, clear-field cross in the corner */
+(() => {
+  const box = $('.ag-box'), menu = $('#agMenu'), tin = $('#agIn');
+  $('#agPlus').onclick = e => { e.stopPropagation(); menu.hidden = !menu.hidden; };
+  document.addEventListener('click', e => { if (!menu.hidden && !e.target.closest('.ag-box')) menu.hidden = true; });
+  menu.addEventListener('click', () => { if (!$('#agMic').classList.contains('rec')) menu.hidden = true; });
+  const grow = () => { tin.style.height = 'auto'; tin.style.height = Math.min(220, Math.max(64, tin.scrollHeight + 2)) + 'px'; };
+  const updX = () => { $('#agClrField').hidden = !tin.value && !AG.att.length; };
+  tin.addEventListener('input', grow); tin.addEventListener('input', updX);
+  $('#agClrField').onclick = () => { tin.value = ''; AG.att = []; renderAtt(); grow(); updX(); tin.focus(); };
+  window._agUpdX = updX;   // renderAtt calls this to keep the cross in sync
+  grow(); updX();
+})();
 
 /* chat history */
 async function saveChat() {
@@ -5874,10 +5984,22 @@ $('#agNew2').onclick = newChat;
 // send a finished prompt into a generator, with the chat's pictures
 async function setDropFile(input, file) { const dt = new DataTransfer(); dt.items.add(file); input.files = dt.files; input.dispatchEvent(new Event('change')); }
 async function sendPrompt(blk, to) {
-  const prompt = $('pre', blk).textContent;
+  let prompt = $('pre', blk).textContent;
   // pictures of a reopened chat exist only as data URLs; turn them back into files
   const toFile = (u, i) => { const [h, b] = u.split(','); const bin = atob(b); const a = new Uint8Array(bin.length); for (let k = 0; k < bin.length; k++) a[k] = bin.charCodeAt(k); return new File([a], `picture${i + 1}.jpg`, { type: h.slice(5, h.indexOf(';')) }); };
-  const files = AG.msgs.flatMap(m => m.files || (m.images || []).slice(0, (m.images || []).length - (m.nframes || 0)).map(toFile));
+  const perMsg = AG.msgs.map(m => { const ims = m.files || (m.images || []).map(toFile); return { ims, frames: m.nframes || 0 }; });
+  const allFiles = perMsg.flatMap(x => x.ims);                       // chat numbering counts ALL images, frames included
+  const noFrames = perMsg.flatMap(x => x.ims.slice(0, x.ims.length - x.frames));
+  // transfer only the pictures the prompt actually references, in the order they appear, into slots 1, 2, 3…,
+  // and renumber the references to match the slots — otherwise «Picture 3» points at the wrong cell (Олег's report)
+  const order = [];
+  prompt = prompt.replace(/<image(\d+)>|Picture\s+(\d+)|image\s+(\d+)/gi, (m, t, p, f) => {
+    const n = +(t || p || f);
+    if (n < 1 || n > allFiles.length) return m;
+    if (!order.includes(n)) order.push(n);
+    return m.replace(/\d+/, String(order.indexOf(n) + 1));
+  });
+  const files = order.length ? order.map(n => allFiles[n - 1]) : noFrames;
   if (to === 'story' && (AG.storyFrames || (files.length && AG.storyModel !== 'krea'))) {
     IMG.qwen.fill({ prompt, kind: 'story', engine: AG.storyFrames && AG.storyModel === 'krea' ? 'flux' : AG.storyModel, frames: AG.storyFrames });
     for (const [i, sel] of ['#qwDrop', '#qwDrop2', '#qwDrop3'].entries()) {
@@ -5920,8 +6042,8 @@ async function sendPrompt(blk, to) {
   } else {
     const box = to === 'lipsync' ? refsEl : RM[to].root;
     (to === 'lipsync' ? $('#lPrompt') : RM[to].prompt()).value = prompt;
+    $$('.ref.filled .x', box).forEach(x => x.click());   // always: <Picture N> numbering of the new prompt must match its pictures
     if (files.length) {
-      $$('.ref.filled .x', box).forEach(x => x.click());
       const slots = $$('.ref input', box);
       for (let i = 0; i < Math.min(files.length, slots.length); i++) await setDropFile(slots[i], files[i]);
     }
@@ -5983,7 +6105,6 @@ async function clipText() {
   try { const t = await navigator.clipboard.readText(); if (t) return t; } catch {}
   try { return (await (await fetch('/api/clipboard', { method: 'POST' })).json()).text || ''; } catch { return ''; }
 }
-$('#agClearIn').onclick = () => { const ta = $('#agIn'); ta.value = ''; ta.dispatchEvent(new Event('input', { bubbles: true })); ta.focus(); };
 
 // right-click menu: copy / cut / paste / select all in every text field, copy on any selectable text
 (() => {
@@ -6889,7 +7010,7 @@ async function libToFile(it) {
 }
 
 /* ---------- Library -> workflow: "Use in…" button and the side tray to drag from ---------- */
-const USE_TARGETS = [['video', 'Image-to-Video'], ['lipsync', 'Lipsync / клип'], ['refs', 'Референсы'], ['actor', 'Актёрская игра'], ['action', 'Экшн-сцены'], ['long', 'Видеостудия'], ['qwen', 'Правка изображения'], ['agent', 'Агент (в чат)']];
+const USE_TARGETS = [['video', 'Image-to-Video'], ['lipsync', 'Lipsync / клип'], ['refs', 'Референсы'], ['actor', 'Актёрская игра'], ['action', 'Экшн-сцены'], ['long', 'Видеостудия'], ['qwen', 'Редактирование изображений'], ['agent', 'Агент (в чат)']];
 function freeSlot(view) {
   const root = $('#view-' + view); if (!root) return null;
   const s = $$('label.drop:not(.disabled):not(.filled), label.ref:not(.filled)', root)[0];
@@ -7266,12 +7387,12 @@ function imgJobSeed(root, S, seed) {
 
 /* --- Qwen Image 2.1: edit a picture, character sheet --- */
 (() => {
-  const root = $('#view-qwen'), S = { kind: 'edit', size: '1', aspect: '', headless: true, bg: 'grey', panels: 4, engine: 'qwen', frames: true, line: 'white' };
+  const root = $('#view-qwen'), S = { kind: 'edit', size: '1', aspect: '', aspectOut: '16:9', headless: true, bg: 'grey', panels: 4, engine: 'qwen', frames: true, line: 'white' };
   root.innerHTML = `
-    <div class="head"><div><h1>Правка изображения</h1><p>Загрузите изображение и напишите, что изменить: поменять место, одежду, свет, поставить персонажа в новую сцену. Или соберите лист персонажа</p></div>
+    <div class="head"><div><h1>Редактирование изображений</h1><p>Правьте готовые изображения: изменить по описанию, закрасить место (инпейнт), убрать фон, расширить картинку, собрать лист персонажа</p></div>
       <div class="mode-pill"><i></i><span>Qwen Image 2.1</span></div></div>
     <div class="grid"><div class="col">
-      <div class="card"><div class="card-h"><h3><span class="n">1</span>Изображение</h3></div>
+      <div class="card"><div class="card-h"><h3><span class="n">1</span>Изображение</h3><button class="btn mini" id="qwClrAll" type="button" title="Убрать все изображения из ячеек">Очистить всё</button></div>
         <div class="qw-slots">
           <label class="drop" id="qwDrop"><input type="file" accept="image/*"><div class="ph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="1.6"/><path d="m21 15-5-5L5 21"/></svg><b>Ваше изображение</b><span>перетащите или нажмите</span></div><span class="tag" hidden>Исходная</span><button class="x" type="button">✕</button></label>
           <label class="drop qw-s2" id="qwDrop2" title="Ещё одно изображение (референс, по желанию)"><input type="file" accept="image/*"><div class="ph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></div><span class="tag" hidden>2</span><button class="x" type="button">✕</button></label>
@@ -7280,7 +7401,7 @@ function imgJobSeed(root, S, seed) {
         <div class="hresize" id="qwResize" title="Потяните вверх или вниз, чтобы изменить высоту картинок. Двойной клик — вернуть как было"></div>
         <div class="hint qw-morehint" style="margin-top:8px"></div></div>
       <div class="card"><div class="card-h"><h3><span class="n">2</span>Что делаем</h3></div>
-        <div class="seg qw-kind" style="grid-template-columns:repeat(3,1fr)"><button data-k="edit">Править изображение<small>изменить по описанию</small></button><button data-k="sheet">Лист персонажа<small>4 или 6 видов с разных сторон</small></button><button data-k="story">Раскадровка<small>история по изображениям героя и места</small></button></div>
+        <div class="seg qw-kind" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))"><button data-k="edit">Править по описанию<small>изменить по описанию</small></button><button data-k="bg">Убрать фон<small>фон станет чисто белым</small></button><button data-k="outpaint">Расширение<small>дорисовать края, сменить формат</small></button><button data-k="sheet">Лист персонажа<small>4 или 6 видов с разных сторон</small></button><button data-k="story">Раскадровка<small>история по изображениям героя и места</small></button></div>
         <div class="qw-edit" style="margin-top:14px">
           <div class="row qw-storyopts" hidden style="margin-bottom:12px"><div class="row-l">Как рисовать</div>
             <div class="seg qw-fr" style="grid-template-columns:1fr 1fr"><button data-fr="1">По кадрам<small>каждый кадр отдельно, лист склеит программа</small></button><button data-fr="0">Одним листом<small>одно изображение сразу</small></button></div>
@@ -7289,11 +7410,13 @@ function imgJobSeed(root, S, seed) {
             <div class="hint" style="margin-top:6px">Кадры пишите по одному в строке: «1: ...», «2: ...» (2, 3, 4, 6, 8 или 9 кадров). Каждый кадр сохраняется отдельно в Библиотеку в полном размере. FLUX.2 рисует кадр за секунды, Qwen 2.1 заметно дольше (минуты на кадр).</div></div>
           <div class="row" style="margin-bottom:12px"><div class="row-l">Модель</div><div class="seg qw-eng" style="grid-template-columns:1fr 1fr"><button data-e="qwen">Qwen 2.1<small>для творчества, не для коммерции</small></button><button data-e="flux">FLUX.2 klein<small>можно в коммерцию</small></button></div>
             <div class="hint qw-fluxhint" hidden></div></div>
+          <div class="qw-ptxt">
           <textarea class="qw-prompt" placeholder="Что изменить и что оставить. Например: Этот человек сидит в кафе у окна и пьёт кофе. Лицо, причёска и одежда как на изображении."></textarea>
           <div class="ta-foot"><span class="hint">Скажите и что поменять, и что оставить прежним — так результат точнее</span></div>
-          <div class="row qw-editonly" style="margin-top:12px"><div class="row-l">Формат кадра <span class="hint">по умолчанию как у вашего изображения</span></div><div class="chips qw-asp"></div></div>
+        </div>
+          <div class="row qw-editonly qw-asprow" style="margin-top:12px"><div class="row-l">Формат кадра <span class="hint qw-asphint">по умолчанию как у вашего изображения</span></div><div class="chips qw-asp"></div></div>
           <div class="qw-szwrap" style="margin-top:12px">${SZ_ROW}</div>
-          <div class="row qw-editonly" style="margin-top:12px"><div class="row-l">Размер результата</div><div class="seg qw-size" style="grid-template-columns:1fr 1fr"><button data-s="1">Обычный<small>~1 МП, быстро</small></button><button data-s="2">Крупный<small>~2 МП, дольше</small></button></div></div></div>
+          <div class="row qw-editonly qw-sizerow" style="margin-top:12px"><div class="row-l">Размер результата</div><div class="seg qw-size" style="grid-template-columns:1fr 1fr"><button data-s="1">Обычный<small>~1 МП, быстро</small></button><button data-s="2">Крупный<small>~2 МП, дольше</small></button></div></div></div>
         <div class="qw-sheet" style="margin-top:14px" hidden>
           <div class="note"><span>Нужен персонаж на изображении (лучше в полный рост, но портрет тоже подойдёт). Потом лист можно взять как референс в других разделах.</span></div>
           <div class="row"><div class="row-l">Сколько видов</div><div class="seg qw-pn" style="grid-template-columns:1fr 1fr"><button data-p="4">4 панели<small>полный рост спереди и сзади, два портрета</small></button><button data-p="6">6 панелей<small>полный рост спереди, в 3/4, сбоку, сзади + 2 портрета</small></button></div></div>
@@ -7309,27 +7432,60 @@ function imgJobSeed(root, S, seed) {
   const drop2 = $('#qwDrop2'), drop3 = $('#qwDrop3');
   szWire($('.qw-szwrap', root), S, () => upd(), () => IMG_SIZES[S.aspect] || [1376, 768]);
   wireDrop(drop2, () => {}); wireDrop(drop3, () => {});
+  wireSlotSwap([drop, drop2, drop3]);
+  $('#qwClrAll', root).onclick = () => clearSlots([drop, drop2, drop3]);
   const P = imgPanel($('.qw-prev', root), {
     mode: 'qwen', url: '/api/generate/qwen',
-    promptText: () => S.kind === 'sheet' ? 'Лист персонажа' : $('.qw-prompt', root).value.trim(),
-    validate: () => !drop._file && !(S.kind === 'story' && S.frames) ? 'Загрузите изображение' : S.kind === 'edit' && !$('.qw-prompt', root).value.trim() ? 'Напишите, что изменить на изображении' : S.kind === 'story' && !$('.qw-prompt', root).value.trim() ? 'Опишите историю по кадрам' : '',
+    promptText: () => S.kind === 'sheet' ? 'Лист персонажа' : S.kind === 'bg' ? 'Убрать фон' : $('.qw-prompt', root).value.trim(),
+    validate: () => !drop._file && !(S.kind === 'story' && S.frames) ? 'Загрузите изображение'
+      : S.kind === 'outpaint' && !S.aspectOut ? 'Выберите, до какого формата расширить'
+      : S.kind === 'edit' && !$('.qw-prompt', root).value.trim() ? 'Напишите, что изменить на изображении'
+      : S.kind === 'story' && !$('.qw-prompt', root).value.trim() ? 'Опишите историю по кадрам' : '',
     form: () => {
-      const fd = new FormData(); if (drop._file) fd.append('image', drop._file); fd.append('kind', S.kind);
+      const fd = new FormData(); fd.append('kind', S.kind);
+      if (S.kind === 'outpaint') {   // the picture is placed on the larger canvas by the client
+        const c = outCanvas();
+        fd.append('image', c.file); fd.append('orig', c.orig);
+        fd.append('width', c.w); fd.append('height', c.h); fd.append('x', c.x); fd.append('y', c.y);
+        fd.append('prompt', $('.qw-prompt', root).value.trim());
+        imgSeedForm(S, fd); return fd;
+      }
+      if (drop._file) fd.append('image', drop._file);
+      if (S.kind === 'bg') { fd.append('size', S.size); imgSeedForm(S, fd); return fd; }
       if (S.kind === 'story') { fd.append('frames', S.frames ? '1' : '0'); fd.append('line', S.line); } fd.append('engine', S.kind === 'sheet' ? 'qwen' : S.engine);
       if (S.kind !== 'sheet' && S.cw && S.ch) { fd.append('width', S.cw); fd.append('height', S.ch); }
       if (S.kind !== 'sheet') { if (drop2._file) fd.append('image2', drop2._file); if (drop3._file) fd.append('image3', drop3._file); }
       if (S.kind === 'sheet') { fd.append('panels', S.panels); fd.append('headless', S.headless ? '1' : '0'); fd.append('background', S.bg); fd.append('marks', $('.qw-marks', root).value.trim()); }
-      else { fd.append('prompt', $('.qw-prompt', root).value.trim()); fd.append('size', S.size); fd.append('aspect', S.aspect); }
+      else if (S.kind !== 'bg') { fd.append('prompt', $('.qw-prompt', root).value.trim()); fd.append('size', S.size); fd.append('aspect', S.aspect); }
       imgSeedForm(S, fd); return fd;
     },
   });
   $('.qw-asp', root).innerHTML = `<button class="chip" data-qa="">Как у изображения</button>` + IMG_ASPECTS.map(([id, name, w, h]) => { const k = 18 / Math.max(w, h);
     return `<button class="chip" data-qa="${id}"><i class="ar" style="width:${w * k}px;height:${h * k}px"></i>${name}${name !== id ? ` <small>${id}</small>` : ''}</button>`; }).join('');
+  const outCanvas = () => {   // the source placed on the larger canvas of the chosen aspect (centered), blurred fill behind it
+    const img = $('img', drop), iw = img.naturalWidth, ih = img.naturalHeight;
+    const asp = IMG_ASPECTS.find(a => a[0] === S.aspectOut) || IMG_ASPECTS[0];
+    let t = Math.max(iw / asp[2], ih / asp[3]);
+    if (Math.max(asp[2] * t, asp[3] * t) > 2560) t *= 2560 / Math.max(asp[2] * t, asp[3] * t);
+    let w = Math.max(iw, Math.ceil(asp[2] * t / 16) * 16), h = Math.max(ih, Math.ceil(asp[3] * t / 16) * 16);
+    const dw = Math.round(iw * t), dh = Math.round(ih * t);
+    const x = Math.floor((w - dw) / 2 / 16) * 16, y = Math.floor((h - dh) / 2 / 16) * 16;
+    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    const cx = c.getContext('2d');
+    cx.filter = 'blur(24px)'; cx.drawImage(img, x, y, dw, dh);   // soft fill of the new edges
+    cx.filter = 'none'; cx.drawImage(img, x, y, dw, dh);
+    const o = document.createElement('canvas'); o.width = dw; o.height = dh;          // the untouched original at its place
+    o.getContext('2d').drawImage(img, 0, 0, dw, dh);
+    const png = cv => { const b = atob(cv.toDataURL('image/png').split(',')[1]), a = new Uint8Array(b.length);
+      for (let i = 0; i < b.length; i++) a[i] = b.charCodeAt(i); return new File([a], 'out.png', { type: 'image/png' }); };
+    return { file: png(c), orig: png(o), w, h, x, y };
+  };
   const upd = () => {
-    $$('.qw-asp .chip', root).forEach(c => c.classList.toggle('on', c.dataset.qa === S.aspect));
+    const isBg = S.kind === 'bg', isOut = S.kind === 'outpaint';
+    $$('.qw-asp .chip', root).forEach(c => { c.classList.toggle('on', isOut ? c.dataset.qa === S.aspectOut : c.dataset.qa === S.aspect); c.hidden = isOut && !c.dataset.qa; });
     $$('.qw-kind button', root).forEach(b => b.classList.toggle('on', b.dataset.k === S.kind));
     $('.qw-edit', root).hidden = S.kind === 'sheet'; $('.qw-sheet', root).hidden = S.kind !== 'sheet';
-    $$('.qw-s2, .qw-s3', root).forEach(x => x.hidden = S.kind === 'sheet'); $('.qw-slots', root).classList.toggle('one', S.kind === 'sheet'); $('.qw-morehint', root).hidden = S.kind === 'sheet';
+    $$('.qw-s2, .qw-s3', root).forEach(x => x.hidden = S.kind === 'sheet' || isBg || isOut); $('.qw-slots', root).classList.toggle('one', S.kind === 'sheet' || isBg || isOut); $('.qw-morehint', root).hidden = S.kind === 'sheet' || isBg || isOut;
     $('.qw-morehint', root).innerHTML = S.kind === 'story'
       ? 'Раскадровка: 1-е изображение — герой (или лист персонажа), 2-я — локация, 3-я — по желанию. В тексте они называются <b>&lt;image1&gt;</b>, <b>&lt;image2&gt;</b>, <b>&lt;image3&gt;</b> (для FLUX.2: «image 1», «image 2»).'
       : 'Референсы (по желанию): 1-е изображение — то, что меняем, 2-я и 3-я — например, герой, предмет или одежда. В тексте они называются <b>&lt;image2&gt;</b>, <b>&lt;image3&gt;</b> (для FLUX.2: «image 2», «image 3»).';
@@ -7337,8 +7493,14 @@ function imgJobSeed(root, S, seed) {
     $('.qw-lnrow', root).hidden = !S.frames;
     $$('.qw-fr button', root).forEach(b => b.classList.toggle('on', (b.dataset.fr === '1') === S.frames));
     $$('.qw-ln button', root).forEach(b => b.classList.toggle('on', b.dataset.ln === S.line));
-    $$('.qw-editonly', root).forEach(r => r.hidden = S.kind === 'story' || (S.engine === 'flux' && r.contains($('.qw-asp', root))));
-    $('.qw-prompt', root).placeholder = S.kind === 'story' && S.frames ? '1: первый кадр по-английски...\n2: второй кадр...\n(героя и место называйте image 1, image 2). Или попросите Агента (Раскадровка → По кадрам).' : S.kind === 'story' ? 'Расскажите историю по кадрам: первый кадр — …, второй кадр — …. Героя и место называйте <image1>, <image2>. Или попросите Агента (Раскадровка) написать промпт.' : 'Что изменить и что оставить. Например: Этот человек сидит в кафе у окна и пьёт кофе. Лицо, причёска и одежда как на изображении.';
+    $('.qw-ptxt', root).hidden = isBg;
+    $('.qw-eng', root).closest('.row').hidden = isBg || isOut;   // these two run on Qwen 2.1 only
+    $('.qw-asprow', root).hidden = S.kind === 'story' || isBg || (S.engine === 'flux' && !isOut);
+    $('.qw-asphint', root).textContent = isOut ? 'картинка останется целиком, края дорисуются до этого формата' : 'по умолчанию как у вашего изображения';
+    $('.qw-size', root).closest('.row').hidden = isOut;   // outpaint draws at the canvas size, «Размер результата» does not apply
+    $$('.qw-editonly', root).forEach(r => { if (!r.classList.contains('qw-asprow') && !r.classList.contains('qw-sizerow')) r.hidden = S.kind === 'story' || isOut || (S.engine === 'flux' && r.contains($('.qw-asp', root))); });
+    $('.qw-prompt', root).placeholder = isOut ? 'Что дорисовать на новых краях. Например: продолжить пляж, море и небо. Можно оставить пустым.'
+      : S.kind === 'story' && S.frames ? '1: первый кадр по-английски...\n2: второй кадр...\n(героя и место называйте image 1, image 2). Или попросите Агента (Раскадровка → По кадрам).' : S.kind === 'story' ? 'Расскажите историю по кадрам: первый кадр — …, второй кадр — …. Героя и место называйте <image1>, <image2>. Или попросите Агента (Раскадровка) написать промпт.' : 'Что изменить и что оставить. Например: Этот человек сидит в кафе у окна и пьёт кофе. Лицо, причёска и одежда как на изображении.';
     $$('.qw-size button', root).forEach(b => b.classList.toggle('on', b.dataset.s === S.size));
     $$('.qw-head button', root).forEach(b => b.classList.toggle('on', (b.dataset.h === '1') === S.headless));
     $$('.qw-bg button', root).forEach(b => b.classList.toggle('on', b.dataset.b === S.bg));
@@ -7352,7 +7514,7 @@ function imgJobSeed(root, S, seed) {
     const fr = e.target.closest('.qw-fr button'), ln = e.target.closest('.qw-ln button');
     if (fr) { S.frames = fr.dataset.fr === '1'; upd(); return; }
     if (ln) { S.line = ln.dataset.ln; upd(); return; }
-    const qa = e.target.closest('.qw-asp .chip'); if (qa) { S.aspect = qa.dataset.qa; upd(); return; }
+    const qa = e.target.closest('.qw-asp .chip'); if (qa) { if (S.kind === 'outpaint') S.aspectOut = qa.dataset.qa; else S.aspect = qa.dataset.qa; upd(); return; }
     const k = e.target.closest('.qw-kind button'), s = e.target.closest('.qw-size button'), h = e.target.closest('.qw-head button'), b = e.target.closest('.qw-bg button'), pn = e.target.closest('.qw-pn button'), en = e.target.closest('.qw-eng button');
     if (en) { S.engine = en.dataset.e; upd(); qwFluxCheck(); return; }
     if (pn) S.panels = +pn.dataset.p; else if (k) S.kind = k.dataset.k; else if (s) S.size = s.dataset.s; else if (h) S.headless = h.dataset.h === '1'; else if (b) S.bg = b.dataset.b; else return;
@@ -7373,7 +7535,7 @@ function imgJobSeed(root, S, seed) {
     } catch {}
   }
   imgSeedWire(root, S); upd();
-  IMG.qwen = { fill: it => { if (it.engine) S.engine = it.engine; if (it.frames !== undefined) S.frames = !!it.frames; if (String(it.sub || '').startsWith('Раскадровка по кадрам')) S.frames = true; else if (String(it.sub || '').startsWith('Раскадровка')) S.frames = false; if (it.kind === 'story' || String(it.sub || '').startsWith('Раскадровка')) { S.kind = 'story'; $('.qw-prompt', root).value = it.prompt || ''; } else if (it.sub === 'Лист персонажа') S.kind = 'sheet'; else { S.kind = 'edit'; $('.qw-prompt', root).value = it.prompt || ''; } upd(); } };
+  IMG.qwen = { fill: it => { if (it.engine) S.engine = it.engine; if (it.frames !== undefined) S.frames = !!it.frames; if (String(it.sub || '').startsWith('Раскадровка по кадрам')) S.frames = true; else if (String(it.sub || '').startsWith('Раскадровка')) S.frames = false; if (it.kind === 'story' || String(it.sub || '').startsWith('Раскадровка')) { S.kind = 'story'; $('.qw-prompt', root).value = it.prompt || ''; } else if (it.sub === 'Лист персонажа') S.kind = 'sheet'; else if (it.sub === 'Убрать фон') S.kind = 'bg'; else if (String(it.sub || '').startsWith('Расширение')) { S.kind = 'outpaint'; $('.qw-prompt', root).value = it.prompt || ''; } else { S.kind = 'edit'; $('.qw-prompt', root).value = it.prompt || ''; } upd(); } };
   // задание из очереди: что делали (правка, лист, раскадровка), по какому промпту, модель, формат и seed
   IMG.qwen.fillJob = m => {
     const sub = String(m.sub || '');
@@ -7419,8 +7581,124 @@ function imgJobSeed(root, S, seed) {
   addEventListener('resize', () => { if ($('#view-qwen').classList.contains('active')) fit(); });
 })();
 
+/* --- Inpaint: redraw only the painted (masked) area, the rest stays pixel-identical (Qwen Image 2.1) --- */
+(() => {
+  const root = $('#view-inpaint'), S = { size: '1' };
+  root.innerHTML = `
+    <div class="head"><div><h1>Инпейнт</h1><p>Закрасьте место на изображении, которое нужно переделать, и опишите, что там должно быть. Всё, что не закрашено, останется без изменений</p></div>
+      <div class="mode-pill"><i></i><span>Qwen Image 2.1</span></div></div>
+    <div class="grid"><div class="col">
+      <div class="card"><div class="card-h"><h3><span class="n">1</span>Изображение и закраска</h3></div>
+        <label class="drop" id="ipDrop"><input type="file" accept="image/*"><div class="ph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="1.6"/><path d="m21 15-5-5L5 21"/></svg><b>Ваше изображение</b><span>перетащите или нажмите</span></div><span class="tag" hidden>Исходная</span><button class="x" type="button">✕</button></label>
+        <div class="ip-edit" hidden>
+          <div class="ip-stage"><canvas class="ip-img"></canvas><canvas class="ip-over"></canvas></div>
+          <div class="ip-tools">
+            <div class="seg ip-mode" style="grid-template-columns:1fr 1fr;width:210px"><button data-m="paint" class="on">Закрасить</button><button data-m="erase">Ластик</button></div>
+            <span class="hint">Кисть</span><input type="range" class="ip-brush" min="8" max="160" value="36">
+            <button class="btn ip-clear" type="button">Очистить закраску</button>
+          </div>
+          <div class="hint" style="margin-top:8px">Закрасьте то, что нужно переделать. Подойдёт и небольшое пятно: закрасьте с запасом, чтобы края слились.</div>
+        </div></div>
+      <div class="card"><div class="card-h"><h3><span class="n">2</span>Что должно быть на закрашенном месте</h3></div>
+        <textarea class="ip-prompt" placeholder="Например: белая майка вместо красной куртки. Лицо, фон и свет оставить как было."></textarea>
+        <div class="ta-foot"><span class="hint">Скажите и что нарисовать, и что оставить прежним — так результат точнее</span></div>
+        <div class="row" style="margin-top:12px"><div class="row-l">Размер результата</div>
+          <div class="seg ip-q" style="grid-template-columns:1fr 1fr"><button data-s="1">Обычный<small>~1 МП, быстро</small></button><button data-s="2">Крупный<small>~2 МП, дольше</small></button></div></div>
+        ${imgSeedBox(S)}
+        <div class="hint" style="margin-top:10px">Модель Qwen Image 2.1 — только для некоммерческого использования (лицензия Qwen Research).</div></div>
+    </div><div class="preview ip-prev"></div></div>`;
+  gridResize($('.grid', root));
+  const drop = $('#ipDrop');
+  const edit = $('.ip-edit', root), imgC = $('.ip-img', root), overC = $('.ip-over', root);
+  const ictx = imgC.getContext('2d'), octx = overC.getContext('2d');
+  let mode = 'paint', brush = 36, hasMask = false;
+  wireDrop(drop, (ok, img) => {
+    if (!ok) { edit.hidden = true; return; }
+    const setup = () => {
+      let w = img.naturalWidth, h = img.naturalHeight;   // keep the mask light: cap the long side
+      const k = Math.min(1, 1600 / Math.max(w, h));
+      w = Math.round(w * k); h = Math.round(h * k);
+      imgC.width = overC.width = w; imgC.height = overC.height = h;
+      ictx.drawImage(img, 0, 0, w, h);
+      octx.clearRect(0, 0, w, h);
+      hasMask = false; edit.hidden = false;
+    };
+    if (img.complete && img.naturalWidth) setup(); else img.onload = setup;
+  });
+  $$('.ip-mode button', root).forEach(b => b.onclick = () => {
+    mode = b.dataset.m;
+    $$('.ip-mode button', root).forEach(x => x.classList.toggle('on', x === b));
+    overC.style.cursor = mode === 'erase' ? 'cell' : 'crosshair';
+  });
+  $('.ip-brush', root).oninput = e => { brush = +e.target.value; };
+  $('.ip-clear', root).onclick = () => { octx.clearRect(0, 0, overC.width, overC.height); hasMask = false; };
+  const pos = e => { const r = overC.getBoundingClientRect(); return [(e.clientX - r.left) * overC.width / r.width, (e.clientY - r.top) * overC.height / r.height]; };
+  let drawing = false, last = null;
+  const dot = (x, y) => { octx.beginPath(); octx.arc(x, y, brush / 2, 0, 7); octx.fill(); };
+  overC.addEventListener('pointerdown', e => {
+    if (edit.hidden) return;
+    e.preventDefault(); overC.setPointerCapture(e.pointerId); drawing = true;
+    const [x, y] = pos(e); last = [x, y];
+    octx.globalCompositeOperation = mode === 'erase' ? 'destination-out' : 'source-over';
+    octx.fillStyle = octx.strokeStyle = 'rgba(232,38,79,0.85)';
+    octx.lineWidth = brush; octx.lineCap = octx.lineJoin = 'round';
+    dot(x, y);
+  });
+  overC.addEventListener('pointermove', e => {
+    if (!drawing) return;
+    const [x, y] = pos(e);
+    octx.beginPath(); octx.moveTo(last[0], last[1]); octx.lineTo(x, y); octx.stroke();
+    last = [x, y];
+  });
+  const stop = () => {
+    if (!drawing) return; drawing = false;
+    hasMask = !!bbox();
+  };
+  overC.addEventListener('pointerup', stop); overC.addEventListener('pointercancel', stop);
+  $$('.ip-q button', root).forEach(b => b.onclick = () => { S.size = b.dataset.s; $$('.ip-q button', root).forEach(x => x.classList.toggle('on', x === b)); });
+  $('.ip-q button', root).classList.add('on');
+  const bbox = () => {   // painted region, canvas coordinates
+    const d = octx.getImageData(0, 0, overC.width, overC.height).data;
+    let x0 = overC.width, y0 = overC.height, x1 = -1, y1 = -1;
+    for (let y = 0; y < overC.height; y++) for (let x = 0; x < overC.width; x++)
+      if (d[(y * overC.width + x) * 4 + 3] > 8) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+    return x1 < 0 ? null : { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 };
+  };
+  const pngFile = (canvas, name) => {
+    const bin = atob(canvas.toDataURL('image/png').split(',')[1]), arr = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    return new File([arr], name, { type: 'image/png' });
+  };
+  const prep = () => {   // cut the picture around the painted area (with margin), like proven inpaint workflows
+    const b = bbox(); if (!b) return null;
+    const px = Math.max(32, Math.round(b.w * .25)), py = Math.max(32, Math.round(b.h * .25));
+    const cx = Math.max(0, b.x - px), cy = Math.max(0, b.y - py);
+    const cw = Math.min(overC.width - cx, Math.ceil((b.w + px * 2) / 8) * 8), ch = Math.min(overC.height - cy, Math.ceil((b.h + py * 2) / 8) * 8);
+    const cropC = document.createElement('canvas'); cropC.width = cw; cropC.height = ch;
+    cropC.getContext('2d').drawImage(imgC, cx, cy, cw, ch, 0, 0, cw, ch);
+    const maskC = document.createElement('canvas'); maskC.width = cw; maskC.height = ch;   // only the painted strokes
+    maskC.getContext('2d').drawImage(overC, cx, cy, cw, ch, 0, 0, cw, ch);
+    return { crop: pngFile(cropC, 'crop.png'), mask: pngFile(maskC, 'mask.png'), x: cx, y: cy };
+  };
+  imgPanel($('.ip-prev', root), {
+    mode: 'qwen', url: '/api/generate/inpaint',
+    promptText: () => $('.ip-prompt', root).value.trim(),
+    validate: () => !drop._file ? 'Загрузите изображение' : !hasMask ? 'Закрасьте кисточкой место, которое нужно переделать'
+      : !$('.ip-prompt', root).value.trim() ? 'Напишите, что должно быть в закрашенном месте' : '',
+    form: () => {
+      const p = prep();
+      const fd = new FormData();
+      fd.append('image', pngFile(imgC, 'image.png'));   // the exact picture the mask coordinates belong to
+      fd.append('crop', p.crop); fd.append('mask', p.mask); fd.append('x', p.x); fd.append('y', p.y);
+      fd.append('prompt', $('.ip-prompt', root).value.trim()); fd.append('size', S.size);
+      imgSeedForm(S, fd); return fd;
+    }
+  });
+  imgSeedWire(root, S);
+})();
 
-fetch('/api/version').then(r => r.json()).then(v => { $('#appVer').textContent = 'Версия ' + v.version; }).catch(() => {});
+
+fetch('/api/version').then(r => r.json()).then(v => { $('#appVer').textContent = 'Версия ' + v.version + (v.built ? ' · сборка от ' + v.built : ''); }).catch(() => {});
 /* ---------- updates: a new release on GitHub -> a bar with "Обновить" ---------- */
 (() => {
   if (!API) return;
@@ -7606,12 +7884,18 @@ function renderCL() {
 const saveCL = () => postJSON('/api/loras/custom', { items: CL.items }).catch(e => toast(e.message));
 $('#clAdd').onclick = () => {
   if (!CL.files.length) { toast('ComfyUI не видит файлов в папке loras'); return; }
-  CL.items.push({ file: CL.files[0], strength: 0.8, on: true }); renderCL(); saveCL();
+  const used = new Set(CL.items.map(x => x.file));
+  const f = CL.files.find(x => !used.has(x));
+  if (!f) { toast(CL.items.length ? 'Все доступные LoRA уже добавлены' : 'ComfyUI не видит файлов в папке loras'); return; }
+  CL.items.push({ file: f, strength: 0.8, on: true }); renderCL(); saveCL();
 };
 $('#clRe').onclick = loadCL;
 $('#clList').addEventListener('change', e => {
-  const row = e.target.closest('.m'); if (!row) return; const x = CL.items[+row.dataset.i];
-  if (e.target.matches('.cl-f')) x.file = e.target.value; else if (e.target.matches('.cl-s')) x.strength = +e.target.value || 0;
+  const row = e.target.closest('.m'); if (!row) return; const i = +row.dataset.i; const x = CL.items[i];
+  if (e.target.matches('.cl-f')) {
+    if (CL.items.some((y, j) => j !== i && y.file === e.target.value)) { toast('Эта LoRA уже добавлена — один и тот же файл не нужен дважды'); renderCL(); return; }
+    x.file = e.target.value;
+  } else if (e.target.matches('.cl-s')) x.strength = +e.target.value || 0;
   saveCL();
 });
 $('#clList').addEventListener('click', e => {
@@ -8020,7 +8304,31 @@ $('#setReset').onclick = () => {
   IMG_PANELS.push(render);
   render();
 })();
-['#vPrompt', '#lPrompt', '.kr-prompt', '.qw-prompt'].forEach(sel => $$(sel).forEach(attachRu));   // every prompt field gets «Показать по-русски»
+['#vPrompt', '#lPrompt', '.kr-prompt', '.qw-prompt', '.ip-prompt'].forEach(sel => $$(sel).forEach(attachRu));   // every prompt field gets «Показать по-русски»
+
+/* ✕ «Очистить» in the corner of every prompt field (request from a subscriber) */
+(() => {
+  const SEL = '#vPrompt,#lPrompt,.kr-prompt,.kr-negtxt,.qw-prompt,.rm-prompt,.sc textarea,.cw-pp textarea,.ip-prompt';
+  const mk = ta => {
+    if (!ta || ta._clr) return; ta._clr = 1;
+    const w = document.createElement('div'); w.className = 'ta-wrap';
+    ta.replaceWith(w); w.appendChild(ta);
+    const x = document.createElement('button');
+    x.type = 'button'; x.className = 'ta-x'; x.textContent = '✕'; x.title = 'Очистить поле';
+    w.appendChild(x);
+    const upd = () => { x.hidden = !ta.value; };
+    ta.addEventListener('input', upd); upd();
+    ta.addEventListener('focus', upd);
+    setInterval(upd, 1000);   // the app restores saved texts without an input event: keep the button in sync anyway
+    x.onclick = () => { ta.value = ''; ta.dispatchEvent(new Event('input', { bubbles: true })); ta.focus(); upd(); };
+  };
+  $$(SEL).forEach(mk);
+  new MutationObserver(ms => ms.forEach(m => m.addedNodes.forEach(n => {
+    if (!n || n.nodeType !== 1) return;
+    if (n.matches && n.matches(SEL)) mk(n);
+    if (n.querySelectorAll) $$(SEL, n).forEach(mk);
+  }))).observe(document.body, { childList: true, subtree: true });
+})();
 
 /* width of the left menu: drag the thin line on its edge */
 (() => {
@@ -8051,6 +8359,96 @@ if (START_VIEW && START_VIEW !== 'models') {
 }
 // show the window on the next frame, once the header of the restored section has moved up as well
 requestAnimationFrame(() => document.documentElement.classList.add('booted'));
+
+// Saving video memory: looping previews/library videos play only while they are on screen (and the window is visible).
+// WebView2 keeps a decoder on the video card for every playing <video>; dozens of hidden ones ate gigabytes next to ComfyUI.
+(() => {
+  const seen = new WeakSet();
+  const io = new IntersectionObserver(es => {
+    for (const e of es) {
+      const v = e.target;
+      if (e.isIntersecting && !document.hidden) { if (v._auto) v.play().catch(() => {}); }
+      else if (!v.paused) v.pause();
+    }
+  }, { threshold: 0.01 });
+  const reg = v => {
+    if (seen.has(v)) return; seen.add(v);
+    v._auto = v.hasAttribute('autoplay');   // only what was meant to play by itself: Library clips have `loop` (for the hover) but must stay still
+    if (v._auto) { v.removeAttribute('autoplay'); v.preload = 'metadata'; v.pause(); }
+    io.observe(v);
+  };
+  const scan = root => { if (root.tagName === 'VIDEO') reg(root); root.querySelectorAll && root.querySelectorAll('video').forEach(reg); };
+  new MutationObserver(ms => ms.forEach(m => m.addedNodes.forEach(n => n.nodeType === 1 && scan(n)))).observe(document.documentElement, { childList: true, subtree: true });
+  scan(document.documentElement);
+  document.addEventListener('visibilitychange', () => {
+    document.documentElement.classList.toggle('bg-hidden', document.hidden);
+    document.querySelectorAll('video').forEach(v => { if (document.hidden) { if (!v.paused) v.pause(); } else if (v._auto) { io.unobserve(v); io.observe(v); } });
+  });
+})();
+
+// An own main model in the mode itself: pick a file ComfyUI sees; the app says whether it fits the rest of the mode (speed-up LoRAs, format, video card)
+(() => {
+  const MAIN = { video: 'fast_unet', lipsync: 'lipsync_unet', refs: 'lipsync_unet', actor: 'lipsync_unet', swap: 'lipsync_unet', long: 'lipsync_unet', action: 'action_unet', krea: 'krea_unet', qwen: 'qwen_unet' };
+  const refresh = async box => {
+    const { mode, role } = box.dataset;
+    try {
+      const r = await (await fetch(`/api/models/compat?role=${role}&mode=${mode}`)).json();
+      $('.mp-cur', box).textContent = (r.name || '').split(/[\\/]/).pop() || 'не найдена';
+      const src = $('.mp-src', box); src.textContent = r.picked ? 'СВОЯ МОДЕЛЬ' : 'встроенная'; src.className = 'mp-src ' + (r.picked ? 'own' : 'std');
+      box.classList.toggle('own', !!r.picked);
+      $('.mp-reset', box).hidden = !r.picked;
+      $('.mp-loras', box).innerHTML = (r.loras || []).length
+        ? '<span class="hint">LoRA:</span>' + r.loras.map(l => l.custom
+          ? `<button type="button" class="mp-l mine tgl${l.off ? ' off' : ''}" data-file="${esc(l.name)}" title="Нажмите, чтобы ${l.off ? 'включить' : 'выключить'} эту LoRA в этом режиме">${l.off ? '✕ выключена' : '✓ включена'} здесь: ${esc(String(l.name).split(/[\\/]/).pop())}</button>`
+          : `<span class="mp-l${l.have ? '' : ' no'}${l.mine ? ' mine' : ''}" title="${esc(l.must ? 'Нужна этому режиму' : 'Подключается по желанию')}">${esc(l.title)}: ${esc(String(l.name).split(/[\\/]/).pop())}${l.have ? '' : ' (файла нет)'}</span>`).join('')
+        : '<span class="hint">LoRA: нет</span>';
+      $('.mp-notes', box).innerHTML = r.picked ? r.notes.map(n => `<div class="${n.level}">${n.level === 'bad' ? '✕ ' : n.level === 'warn' ? '⚠ ' : 'ⓘ '}${esc(n.text)}</div>`).join('') : '';
+    } catch { /* ComfyUI is off: the block stays as it is */ }
+  };
+  const ensure = view => {
+    const mode = view.id.replace('view-', ''), role = MAIN[mode];
+    if (!role || $('.mdl-pick', view)) return;
+    // the section's own title is moved into the pinned header while the section is open: the row then goes
+    // right under the stage bar; a section with neither gets the row as its first element
+    const anchor = $('.head', view) || $('.st-bar', view);
+    const row = `<div class="mdl-pick card" data-mode="${mode}" data-role="${role}"><span>Модель:</span><span class="mp-cur">…</span><span class="mp-src"></span><button class="btn mini mp-change" type="button" title="Выбрать другой файл модели из папки вашего ComfyUI">Выбрать свою…</button><button class="btn mini mp-reset" type="button" hidden>Вернуть встроенную</button><div class="pm" hidden><input type="search" class="pm-q" placeholder="Поиск по имени…" spellcheck="false"><select></select><button class="btn mini pri mp-ok" type="button">Выбрать</button><button class="btn mini mp-no" type="button">Отмена</button></div><div class="mp-loras"></div><div class="mp-notes"></div></div>`;
+    if (anchor) anchor.insertAdjacentHTML('afterend', row); else view.insertAdjacentHTML('afterbegin', row);
+    const box = $('.mdl-pick', view), pm = $('.pm', box), sel = $('select', pm);
+    refresh(box);
+    $('.mp-change', box).onclick = async () => {
+      try {
+        const r = await (await fetch('/api/models/files?role=' + role)).json();
+        if (!r.files?.length) { toast(`ComfyUI не видит файлов в папке ${r.folder}`); return; }
+        sel.innerHTML = r.files.map(f => `<option>${esc(f)}</option>`).join(''); pm.hidden = false;
+      } catch { toast('ComfyUI не отвечает'); }
+    };
+    $('.pm-q', box).oninput = e => {
+      const words = e.target.value.toLowerCase().split(/\s+/).filter(Boolean);
+      $$('option', sel).forEach(o => { o.hidden = !words.every(w => o.textContent.toLowerCase().includes(w)); });
+      const first = $$('option', sel).find(o => !o.hidden); if (words.length && first) first.selected = true;
+    };
+    $('.mp-no', box).onclick = () => { pm.hidden = true; };
+    $('.mp-loras', box).onclick = async e => {
+      const b = e.target.closest('.tgl'); if (!b) return;
+      try { await postJSON('/api/loras/custom/mode', { file: b.dataset.file, mode, on: b.classList.contains('off') }); refresh(box); } catch (err) { toast(err.message); }
+    };
+    $('.mp-ok', box).onclick = async () => {
+      const name = sel.value; if (!name) return;
+      const done = async () => { pm.hidden = true; await loadStatus(); $$('.mdl-pick').forEach(refresh); toast('Модель выбрана'); };
+      try {
+        const r = await postJSON('/api/models/pick', { role, name });
+        if (r && r.warn) { confirmBox('Это точно тот файл?', r.warn, 'Всё равно выбрать', async () => { await postJSON('/api/models/pick', { role, name, force: true }); await done(); }); return; }
+        await done();
+      } catch (e) { toast(e.message); }
+    };
+    $('.mp-reset', box).onclick = async () => { try { await postJSON('/api/models/pick', { role, name: '' }); await loadStatus(); $$('.mdl-pick').forEach(refresh); toast('Снова встроенная модель'); } catch (e) { toast(e.message); } };
+  };
+  // the row must survive the section redrawing itself (opening a mode rebuilds its content), so both the class
+  // switch and a replacement of the children put it back; ensure() is idempotent, so the extra calls cost nothing
+  const back = view => { if (view.classList.contains('active')) ensure(view); };
+  const watch = view => { new MutationObserver(() => back(view)).observe(view, { attributes: true, attributeFilter: ['class'], childList: true }); back(view); };
+  $$('.view').forEach(watch);
+})();
 </script>
 </body>
 </html>

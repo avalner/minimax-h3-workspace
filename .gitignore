@@ -7,6 +7,10 @@ config.json
 app/build/dist/
 app/build/work/
 app/build/output/
+app/build/reldist/
+app/build/work_rel/
+app/build/data_backup/
+app/build/file_version_info.txt
 *.exe
 *.7z
 *.zip

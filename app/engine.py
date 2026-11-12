@@ -294,9 +294,24 @@ class Installer:
         cats = {"diffusion_models": ["diffusion_models", "unet"], "text_encoders": ["text_encoders", "clip"],
                 "vae": ["vae"], "vae_approx": ["vae_approx"], "loras": ["loras"],
                 "latent_upscale_models": ["latent_upscale_models"]}
-        lines = ["h3studio_user_models:", f"    base_path: {Path(models_dir).as_posix()}"]
+        # one common folder for several programs: the files of the catalog may lie anywhere inside it (any depth, any subfolder),
+        # so every folder that holds a wanted file is added to its category; ComfyUI reads subfolders of a listed folder by itself
+        wanted = {}
+        for variants in catalog.VARIANTS.values():
+            for v in variants.values():
+                wanted[Path(v["name"].replace("\\", "/")).name.lower()] = v["category"]
+        found = {c: [] for c in cats}
+        base = Path(models_dir)
+        for dirpath, dirnames, filenames in os.walk(base):
+            if len(Path(dirpath).relative_to(base).parts) >= 8:
+                dirnames[:] = []
+            for fn in filenames:
+                cat = wanted.get(fn.lower())
+                if cat in found and Path(dirpath).as_posix() not in found[cat]:
+                    found[cat].append(Path(dirpath).as_posix())
+        lines = ["h3studio_user_models:", f"    base_path: {base.as_posix()}"]
         for cat, folders in cats.items():
-            lines += [f"    {cat}: |"] + [f"        {f}" for f in folders]
+            lines += [f"    {cat}: |"] + [f"        {f}" for f in folders + found[cat]]
         (comfy_root / "ComfyUI" / "extra_model_paths.yaml").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     async def download_models(self, models_root, missing):

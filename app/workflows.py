@@ -460,7 +460,37 @@ def grain_graph(name, strength, seed):
     return g, {k: "encode" for k in "LNHZIGRMKBF"} | {"W": "decode", "S": "save"}
 
 
-def montage_graph(names, sizes, cuts=None):
+def _fit_soundtrack(g, stages, names, cuts, timing):
+    """One soundtrack for the whole montage, built clip by clip: the sound of each clip is cut or padded with silence to the exact
+    length of ITS picture, so the small differences (a few hundredths of a second per clip) do not add up over many clips.
+    `timing[i]` = (picture seconds, sound seconds or None). Returns the audio output to give to ConcatenateVideo or None."""
+    if not timing or any(t is None for t in timing) or all(t[1] is None for t in timing):
+        return None
+    out = None
+    for i, (vdur, adur) in enumerate(timing):
+        want = round(min(vdur, cuts[i]) if cuts and i < len(cuts) and cuts[i] else vdur, 3)
+        if adur is None:   # a clip without sound: silence of its length
+            piece = [f"Q{i}", 0]
+            g[f"Q{i}"] = {"class_type": "EmptyAudio", "inputs": {"duration": want, "sample_rate": 48000, "channels": 2}}
+        else:
+            g[f"A{i}"] = {"class_type": "LoadAudio", "inputs": {"audio": names[i]}}
+            piece = [f"A{i}", 0]
+            if adur > want:
+                g[f"R{i}"] = {"class_type": "TrimAudioDuration", "inputs": {"audio": piece, "start_index": 0.0, "duration": want}}
+                piece = [f"R{i}", 0]
+            elif want - adur > 0.002:
+                g[f"E{i}"] = {"class_type": "EmptyAudio", "inputs": {"duration": round(want - adur, 3), "sample_rate": 48000, "channels": 2}}
+                g[f"P{i}"] = {"class_type": "AudioConcat", "inputs": {"audio1": piece, "audio2": [f"E{i}", 0], "direction": "after"}}
+                piece = [f"P{i}", 0]
+        if out is None:
+            out = piece
+        else:
+            g[f"J{i}"] = {"class_type": "AudioConcat", "inputs": {"audio1": out, "audio2": piece, "direction": "after"}}
+            out = [f"J{i}", 0]
+    return out
+
+
+def montage_graph(names, sizes, cuts=None, timing=None):
     """Join clips end to end with ComfyUI's own nodes (no ffmpeg). Clips of another size than the first one are scaled to it
     first: the join node refuses clips of different sizes. `sizes`: (width, height) per clip or None when unknown."""
     g, ins, stages = {}, {}, {}
@@ -482,6 +512,10 @@ def montage_graph(names, sizes, cuts=None):
             src = [f"V{i}", 0]
         ins[f"videos.video{i}"] = src
     g["C"] = {"class_type": "ConcatenateVideo", "inputs": {**ins, "codec": "auto"}}
+    sound = _fit_soundtrack(g, stages, names, cuts, timing)
+    if sound:
+        g["C"]["inputs"]["complete_audio"] = sound
+        stages.update({k: "decode" for k in g if k[:1] in "AEJPQR" and k[1:].isdigit()})
     g["S"] = {"class_type": "SaveVideo", "inputs": {"video": ["C", 0], "filename_prefix": "H3Workspace/montage",
                                                     "format": "auto", "codec": "auto"}}
     stages.update({"C": "decode", "S": "save"})
@@ -1369,6 +1403,54 @@ def qwen_edit_size(aspect, megapixels):
 
 def qwen_edit_graph(m, prompt, image, megapixels, seed, size=None, extras=()):
     return _qwen_base(m, image, megapixels, prompt, seed, size, extras)
+
+
+def qwen_inpaint_graph(m, prompt, image, crop, mask, x, y, megapixels, seed):
+    """Local edit like the proven crop-and-stitch inpainting: Qwen Image 2.1 redraws only the masked area.
+    `crop`/`mask` are the picture cut around the painted region (client-side), `x`/`y` its place in the original
+    `image`. The crop is scaled to ~megapixels for the model; the mask is scaled with the very same node and
+    settings, then ImageCompositeMasked pastes the redrawn crop back over the untouched original."""
+    g, stages = _qwen_base(m, crop, megapixels, prompt, seed)
+    g["12"] = {"class_type": "MaskToImage", "inputs": {"mask": ["21", 1]}}
+    g["13"] = {"class_type": "ImageScaleToTotalPixels", "inputs": {
+        "upscale_method": "lanczos", "megapixels": megapixels, "resolution_steps": 32, "image": ["12", 0]}}
+    g["14"] = {"class_type": "ImageToMask", "inputs": {"channel": "red", "image": ["13", 0]}}
+    # LoadImage's MASK output is 1-alpha (transparent counts as 1), so invert to get «painted area» back
+    g["19"] = {"class_type": "InvertMask", "inputs": {"mask": ["14", 0]}}
+    g["20"] = {"class_type": "LoadImage", "inputs": {"image": image}}
+    g["21"] = {"class_type": "LoadImage", "inputs": {"image": mask}}
+    g["22"] = {"class_type": "ImageCompositeMasked", "inputs": {
+        "destination": ["20", 0], "source": ["10", 0], "mask": ["19", 0], "x": x, "y": y, "resize_source": False}}
+    g["11"]["inputs"]["images"] = ["22", 0]
+    stages.update({"12": "encode", "13": "encode", "14": "encode", "19": "encode",
+                   "20": "load", "21": "load", "22": "decode"})
+    return g, stages
+
+
+BG_REMOVE_PROMPT = (
+    "Remove the background completely: replace it with a plain pure white background, evenly lit, no shadows. "
+    "Keep the subject exactly as in <image1> — the same face, hair, clothes, colors, edges and style. "
+    "Do not change, redraw or add anything in the subject itself.")
+
+OUTPAINT_PROMPT = "Extend and continue this picture naturally beyond its edges, keeping the same style, light and subject."
+
+
+def qwen_outpaint_graph(m, prompt, canvas, orig, x, y, size, seed, outpaint_lora=None):
+    """Extend a picture: `canvas` is the original placed at x,y on the new larger `size`; the model paints the whole
+    canvas (with the special outpaint LoRA when the user has it), then the untouched original is pasted back over
+    its place, so only the new edges come from the model."""
+    g, stages = _qwen_base(m, canvas, 1.0, prompt, seed, size)
+    if outpaint_lora:
+        g["23"] = {"class_type": "LoraLoaderModelOnly", "inputs": {
+            "model": ["4", 0], "lora_name": outpaint_lora, "strength_model": 1.0}}
+        g["9"]["inputs"]["model"] = ["23", 0]
+        stages["23"] = "load"
+    g["20"] = {"class_type": "LoadImage", "inputs": {"image": orig}}
+    g["22"] = {"class_type": "ImageCompositeMasked", "inputs": {
+        "destination": ["10", 0], "source": ["20", 0], "x": x, "y": y, "resize_source": False}}
+    g["11"]["inputs"]["images"] = ["22", 0]
+    stages.update({"20": "load", "22": "decode"})
+    return g, stages
 
 
 def sheet_prompt(headless=True, background="grey", marks="", panels=4):

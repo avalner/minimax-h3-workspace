@@ -243,6 +243,23 @@ def looks_right(role, filename):
     return not marks or any(m in n for m in marks)
 
 
+def foreign_marks(role, filename):
+    """Roles whose distinctive mark sits in the file name while the role's own rule is broken
+    (e.g. a video model file picked for «Отделение голоса»): a hard misfit, not a soft warning."""
+    if looks_right(role, filename):
+        return []
+    n = filename.replace("/", "\\").split("\\")[-1].lower()
+    own = set(ROLE_MARKS.get(role) or [])
+    out = []
+    for r, marks in ROLE_MARKS.items():
+        if r == role:
+            continue
+        hit = next((m for m in marks if m not in own and m in n), None)
+        if hit:
+            out.append(r)
+    return out
+
+
 def marks_text(role):
     return " или ".join(f"«{m}»" for m in ROLE_MARKS.get(role, [])[:2])
 
@@ -427,3 +444,52 @@ def model_entry(role, variant):
 
 # modes that appeared after the first release: the app offers them once after an update
 OFFER_MODES = ["flux", "long"]
+
+
+# ---- own model files: does the file fit the rest of the mode (the speed-up LoRAs are made for ONE family of video models) ----
+MAIN_ROLE = {"video": "fast_unet", "lipsync": "lipsync_unet", "refs": "lipsync_unet", "actor": "lipsync_unet", "swap": "lipsync_unet",
+             "long": "lipsync_unet", "action": "action_unet", "krea": "krea_unet", "qwen": "qwen_unet", "flux": "flux_unet",
+             "upscale": "seedvr_unet"}
+ROLE_FAMILY = {"lipsync_unet": "ref2", "fast_unet": "fast", "action_unet": "hybrid",
+               "ref2v_turbo_lora": "ref2", "pika_lora": "ref2", "swap_lora": "ref2", "sla_lora": "fast", "speed_slider_lora": "hybrid"}
+FAMILY_TITLE = {"ref2": "Ref2V / Singularity (референсы, Lipsync, студия)", "fast": "FastH3 (Image-to-Video)", "hybrid": "Hybrid FL2VA/Ref2VA (экшн)"}
+
+
+def model_family(filename):
+    """The kind of an H3 video model by its file name (None when the name does not say)."""
+    n = filename.replace("/", "\\").split("\\")[-1].lower()
+    if "hybrid" in n:
+        return "hybrid"
+    if "ref2v" in n or "singularity" in n:
+        return "ref2"
+    if "fasth3" in n or "fl2v" in n:
+        return "fast"
+    return None
+
+
+def compat_notes(mode, role, filename, compute_cap=0.0):
+    """Plain-language notes about an own model file picked for `role` in `mode`: [(level, text)], level is bad / warn / info."""
+    n = filename.replace("/", "\\").split("\\")[-1].lower()
+    notes = []
+    if n.endswith(".gguf"):
+        notes.append(("bad", "Файл в формате GGUF: наши сценарии грузят обычные .safetensors, такой файл не заработает."))
+    if "nvfp4" in n and compute_cap and compute_cap < 10:
+        notes.append(("warn", f"Формат nvfp4 рассчитан на видеокарты RTX 50-й серии. На вашей (compute {compute_cap}) он может не запуститься или дать ошибку."))
+    want = ROLE_FAMILY.get(role)
+    got = model_family(filename)
+    if want and got and got != want:
+        notes.append(("warn", f"По названию это модель другого типа: {FAMILY_TITLE[got]}. Этот раздел рассчитан на {FAMILY_TITLE[want]}. Скорее всего, будет ошибка или плохой результат."))
+    loras = [r for r in MODE_ROLES.get(mode, []) + MODE_OPTIONAL.get(mode, []) if r.endswith("_lora") and r in ROLE_FAMILY]
+    if want and role == MAIN_ROLE.get(mode) and loras:
+        fam = got or want
+        titles = ", ".join(f"«{ROLE_TITLES.get(r, r)}»" for r in loras)
+        if got and any(ROLE_FAMILY[r] != got for r in loras):
+            bad = ", ".join(f"«{ROLE_TITLES.get(r, r)}»" for r in loras if ROLE_FAMILY[r] != got)
+            notes.append(("warn", f"Ускоряющие файлы этого раздела ({bad}) сделаны для другого типа моделей, чем выбранный. "
+                                  "Звук, губы или картинка могут разойтись. Отключите ускорение (в разделе есть «Без Pika» или «Прежнее»)."))
+        elif not got:
+            notes.append(("info", f"Тип выбранной модели по названию не определить. Ускоряющие файлы раздела ({titles}) сделаны для типа {FAMILY_TITLE[fam]}: "
+                                  "если ваша модель того же типа, всё будет работать. Если результат плохой, отключите ускорение."))
+    if not notes:
+        notes.append(("info", "Название файла подходит. Это своя модель: если генерация сломается, нажмите «Вернуть встроенную»."))
+    return notes

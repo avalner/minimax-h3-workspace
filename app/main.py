@@ -51,6 +51,8 @@ class ServerThread(threading.Thread):
         fut = asyncio.run_coroutine_threadsafe(self.runner.cleanup(), self.loop)
         try:
             fut.result(timeout=30)
+        except Exception:
+            pass   # e.g. ComfyUI is slow to stop: the process is ending anyway, no error dialog at exit
         finally:
             self.loop.call_soon_threadsafe(self.loop.stop)
 
@@ -176,8 +178,40 @@ def main():
         api._window = webview.create_window("Minimax H3 Workspace", url, width=1440, height=920, min_size=(1000, 680), maximized=True,   # opens on the whole screen (the taskbar stays visible)
                                            background_color="#12070a", js_api=api,
                                            draggable=True)  # pywebview blocks dragging of every picture by default; the app drags pictures into slots
+        # watchdog for a half-broken WebView2 (e.g. Edge removed by hand): the version check above passes,
+        # the window opens but stays black and «loaded» never fires. Offer the browser, like the no-WebView2 fallback.
+        loaded = threading.Event()
+        state = {"browser": False}
+        try:
+            api._window.events.loaded += loaded.set
+        except Exception:
+            loaded.set()
+        if sys.platform == "win32":
+            def _watchdog():
+                if loaded.wait(20):
+                    return
+                try:
+                    r = ctypes.windll.user32.MessageBoxW(
+                        0, "Окно программы не загрузилось за 20 секунд. Скорее всего, на компьютере сломан компонент Windows "
+                           "«Microsoft Edge WebView2» — он рисует окно программы.\n\n"
+                           "Да — открыть интерфейс в обычном браузере (так можно работать прямо сейчас)\n"
+                           "Нет — закрыть программу\n\n"
+                           "Чтобы окно работало как положено, установите WebView2 Runtime: microsoft.com/edge/webview2",
+                        "Minimax H3 Workspace", 0x40 | 0x4)
+                    if r == 6:
+                        state["browser"] = True
+                        webbrowser.open(url)
+                except Exception:
+                    pass
+                try:
+                    api._window.destroy()   # makes webview.start() return below
+                except Exception:
+                    pass
+            threading.Thread(target=_watchdog, daemon=True).start()
         webview.start(gui="edgechromium", private_mode=False,
                       storage_path=str(server.DATA_DIR / "webview"))
+        if state["browser"]:
+            threading.Event().wait()   # keep the server alive for the browser window
     except Exception:
         # no WebView2: use the browser and keep running until the console/process is closed
         webbrowser.open(url)
