@@ -22,6 +22,7 @@ from pathlib import Path
 import aiohttp
 
 import catalog
+import procjob
 
 CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
@@ -31,7 +32,19 @@ CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 class Config:
     def __init__(self, path):
         self.path = path
-        self.data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        self.data = {}
+        try:
+            if path.exists():
+                loaded = json.loads(path.read_text(encoding="utf-8"))
+                if not isinstance(loaded, dict):
+                    raise ValueError("config.json: expected a JSON object")
+                self.data = loaded
+        except (OSError, ValueError):
+            # A broken config must not stop the app from starting: keep the file aside and use defaults.
+            try:
+                path.replace(path.with_name(f"{path.name}.broken-{time.strftime('%Y%m%d-%H%M%S')}"))
+            except OSError:
+                pass
 
     def get(self, key, default=None):
         return self.data.get(key, default)
@@ -170,20 +183,36 @@ class Installer:
         await self.emit({"type": "setup", "step": sid, "state": state, **kw})
 
     async def download(self, url, dest, sid, label, size_hint=0, attempts=40):
-        """Resumable download to dest (via dest.part)."""
+        """Resumable download to dest (via dest.part).
+
+        The .part file is trusted only when its size matches the size the server reports: a fragment
+        left over from an interrupted download of another build (or a cut-off connection) must never
+        be renamed into a "finished" model.
+        """
         url = mirrored(url)
         dest = Path(dest)
         if dest.exists():
             return
         dest.parent.mkdir(parents=True, exist_ok=True)
         part = dest.with_name(dest.name + ".part")
+        total = 0
         for attempt in range(attempts):  # a long outage: wait and continue from the saved .part file
             have = part.stat().st_size if part.exists() else 0
             headers = {"Range": f"bytes={have}-"} if have else {}
             try:
                 async with self.session.get(url, headers=headers, proxy=system_proxy(), timeout=aiohttp.ClientTimeout(sock_read=120)) as r:
-                    if r.status == 416:  # already complete
-                        break
+                    if r.status == 416:
+                        # Nothing to send from our offset: either the fragment IS the whole file, or it is
+                        # longer than the file on the server (the build was replaced). Trust only an exact match.
+                        m = re.search(r"\*/(\d+)$", r.headers.get("Content-Range", ""))
+                        total = int(m.group(1)) if m else 0
+                        if total and have == total:
+                            break
+                        part.unlink(missing_ok=True)
+                        if attempt == attempts - 1:
+                            raise RuntimeError(f"Не удалось скачать {label}: сервер отверг докачку")
+                        await self.step(sid, "progress", label=f"{label} — начинаем заново…")
+                        continue
                     if r.status not in (200, 206):
                         raise RuntimeError(f"HTTP {r.status} при скачивании {label}")
                     if r.status == 200:
@@ -208,6 +237,12 @@ class Installer:
                 why = (str(e) or type(e).__name__)[:90]
                 await self.step(sid, "progress", label=f"{label} — обрыв связи ({why}), пробуем снова…")
                 await asyncio.sleep(min(30, 3 + attempt * 3))
+        size = part.stat().st_size if part.exists() else 0
+        if total and size != total:
+            part.unlink(missing_ok=True)
+            raise RuntimeError(f"Не удалось скачать {label}: получено {size} из {total} байт")
+        if not part.exists():
+            raise RuntimeError(f"Не удалось скачать {label}: файл не появился")
         part.replace(dest)
 
     async def install_comfy(self, install_dir):
@@ -385,6 +420,7 @@ class ComfyProcess:
         log = open(self.log_path, "w", encoding="utf-8", errors="replace")
         self.proc = subprocess.Popen(args, cwd=self.root, stdout=log, stderr=subprocess.STDOUT,
                                      creationflags=CREATE_NO_WINDOW, env=local_env(self.root))
+        procjob.adopt(self.proc)   # dies with the app even if the app is killed from Task Manager
 
     @staticmethod
     def kill_orphans(py):

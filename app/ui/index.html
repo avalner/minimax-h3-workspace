@@ -654,9 +654,35 @@ details[open] summary::before{content:'－ '}
 .ref.filled{border-style:solid;border-color:var(--line)}
 /* a filled slot takes the shape of its picture; a landscape one is two columns wide */
 .ref.wide{grid-column:span 2}
-.lora{display:grid;gap:6px;margin-bottom:14px}
-.lora-h{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.lora{display:grid;gap:6px;margin-bottom:14px}.lora-h{display:flex;align-items:center;justify-content:space-between;gap:10px}
 .lora-v{font-family:var(--mono);font-size:12px;color:var(--muted)}
+/* LoRA screen: what a file means, which combinations fight, and the catalog of Civitai / Hugging Face */
+.lr-item{padding:10px 12px;border:1px solid var(--line);border-radius:10px;margin-bottom:8px;background:var(--surface-2)}
+.lr-top{display:flex;align-items:center;gap:8px;justify-content:space-between;flex-wrap:wrap}
+.lr-name{font-weight:700;font-size:13px}
+.lr-file{font-family:var(--mono);font-size:11px;color:var(--dim);word-break:break-all;margin-top:2px}
+.lr-row{display:flex;align-items:center;gap:10px;margin-top:8px;flex-wrap:wrap}
+.lr-row input[type=range]{flex:1;min-width:120px;accent-color:var(--pink)}
+.lr-row b{font-family:var(--mono);font-size:12px;min-width:44px;text-align:right}
+.lr-tags{margin-top:6px}
+.lr-chip{display:inline-block;font-size:11px;padding:1px 6px;border-radius:6px;background:var(--accent-soft);color:var(--text);margin:0 4px 4px 0}
+.lr-cf{padding:8px 10px;border-left:3px solid var(--line);margin-bottom:8px;font-size:12px;color:var(--muted)}
+.lr-cf b{color:var(--text);display:block;margin-bottom:2px;font-size:13px}
+.lr-cf.danger{border-color:var(--accent)}.lr-cf.warning{border-color:#e0a63c}.lr-cf.caution{border-color:#8a919b}
+.lr-res{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;margin-top:12px}
+.lr-card{border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--surface-2);display:flex;flex-direction:column}
+.lr-card img{width:100%;height:118px;object-fit:cover;display:block;background:var(--surface)}
+.lr-card .lr-b{padding:8px 10px;display:grid;gap:4px;flex:1;align-content:start}
+.lr-card .lr-n{font-weight:700;font-size:13px;line-height:1.25}
+.lr-card .lr-m{font-size:11px;color:var(--dim)}
+.lr-card .lr-t{font-size:11px;color:var(--muted);max-height:3.4em;overflow:hidden}
+.lr-card .btn{width:100%;margin-top:4px}
+.lr-qrow .path{display:flex;gap:8px;align-items:center}
+.lr-qrow input{flex:1}
+.lr-meta{border:0;background:transparent;margin-top:6px}
+.lr-meta summary{cursor:pointer;font-size:12px;color:var(--accent)}
+.lr-meta .fld{margin:8px 0 0}
+.lr-empty{padding:14px;border:1px dashed var(--line);border-radius:10px;color:var(--dim);font-size:13px}
 .ref .tag{position:absolute;left:6px;top:6px;font-family:var(--mono);font-size:10.5px;padding:2px 6px;border-radius:6px;background:rgba(var(--ov-rgb),.8)}
 .ref select{position:absolute;left:6px;right:6px;bottom:6px;font-size:11.5px;padding:5px 6px;border-radius:8px;background:rgba(var(--ov-rgb),.85);border:1px solid var(--line-2);outline:none}
 .ref .x{position:absolute;right:6px;top:6px;width:22px;height:22px;border-radius:7px;background:rgba(var(--ov-rgb),.8);display:none;place-items:center}
@@ -1013,6 +1039,16 @@ img.pr-media{object-position:center 38%}
 .mt-time{font-size:12px;color:var(--dim);min-width:84px;text-align:right;font-variant-numeric:tabular-nums}
 .mt-upbox{display:flex;gap:8px;margin-top:10px}.mt-upbox select{flex:1;min-width:0;padding:6px 8px;border-radius:9px;border:1px solid var(--line-2);background:var(--surface);color:var(--text);font-size:12.5px}
 .mt-sets{display:grid;gap:8px;margin-top:10px}.mt-sets label{display:block;font-size:12px;color:var(--dim)}.mt-sets label[hidden]{display:none}.mt-sets b{color:var(--text)}.mt-sets i{font-style:normal}.mt-sets input{width:100%;accent-color:var(--pink)}
+/* FFmpeg studio: the same reel assembled on the CPU, with transitions, format, titles and music */
+.mt-eng{margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}
+.mt-eng-tabs{display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap}
+.mt-ff .ff-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px 14px}
+.mt-ff .fld{gap:4px;margin:0;font-size:12px;color:var(--dim)}
+.mt-ff .fld b{color:var(--text);font-style:normal}
+.mt-ff input,.mt-ff select{width:100%;padding:6px 8px;border-radius:8px;border:1px solid var(--line);background:var(--surface-2);color:var(--text);font:inherit;font-size:12px}
+.mt-ff input[type=range]{padding:0;border:0;background:transparent;accent-color:var(--pink)}
+.mt-ff .hint{margin-top:8px}
+.ff-state.on{color:var(--text)}
 .mt-pipe{margin-top:10px;padding:10px 12px;border:1px solid var(--line-2);border-radius:10px;font-size:12.5px;line-height:1.7;color:var(--dim)}.mt-pipe[hidden]{display:none}.mt-pipe .ok{color:var(--ok,#3ecf8e);font-weight:700}
 .mt-item .mt-ok{position:absolute;left:5px;bottom:34px;background:#1f9d6b;color:#fff;border-radius:6px;padding:0 6px;font-size:12px;font-weight:700}
 .mt-vh{height:16px;margin-top:2px;cursor:ns-resize;display:grid;place-items:center;touch-action:none}.mt-vh i{width:64px;height:4px;border-radius:3px;background:var(--line-2);transition:.15s}.mt-vh:hover i{background:var(--accent,#c0405a);width:90px}
@@ -1205,6 +1241,10 @@ img.pr-media{object-position:center 38%}
     <button class="nav" data-view="models" title="Здесь выбирается, как работает программа: «Я новичок» или «У меня уже есть ComfyUI», а также модели и файлы">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8 12 3 3 8l9 5 9-5Z"/><path d="m3 13 9 5 9-5M3 18l9 5 9-5" opacity=".5"/></svg>
       Модели <span class="badge" id="modelsBadge" hidden></span><span class="starthere">Начните здесь</span>
+    </button>
+    <button class="nav" data-view="loras" title="Что за файл LoRA, какие у него слова-ключи, с каким весом включать — и где взять ещё">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M5 7l14 10M19 7 5 17"/><circle cx="12" cy="12" r="9"/></svg>
+      LoRA
     </button>
 
     <div class="nav-label">Программа</div>
@@ -1824,8 +1864,11 @@ equirements.txt</code><br>
     </section>
 
     <!-- ============ SETTINGS ============ -->
-    <section class="view" id="view-settings">
-      <div class="head">
+    <!-- ============ LORA (built by JS) ============ -->
+    <section class="view" id="view-loras"></section>
+
+    <!-- ============ SETTINGS ============ -->
+    <section class="view" id="view-settings">      <div class="head">
         <div>
           <h1>Настройки</h1>
           <p>Тема и размер интерфейса. Применяется сразу и запоминается на этом компьютере</p>
@@ -2026,6 +2069,8 @@ function connectEvents() {
     if (m.type === 'setup') { onSetupEvent(m); return; }
     if (m.type === 'agent_setup') { onAgentSetup(m); return; }
     if (m.type === 'mdl') { onMdl(m); return; }
+    if (m.type === 'ffmpegdl') { window.onFFDownload && window.onFFDownload(m); return; }
+    if (m.type === 'loradl') { window.onLoraDownload && window.onLoraDownload(m); return; }
     if (m.type === 'external_job') {   // a job started by another program (agent): show it in the queue like your own
       qAdd(m.prompt_id, m.mode, m.prompt);
       const j = QUEUE.find(x => x.id === m.prompt_id);
@@ -2184,6 +2229,14 @@ $$('.nav[data-view]').forEach(b => b.onclick = () => {
   $$('.nav').forEach(n => n.classList.toggle('active', n === b || (b.classList.contains('sub') && n.dataset.view === 'presets')));   // a section opened from the start page keeps it lit
   $$('.view').forEach(v => v.classList.toggle('active', v.id === 'view-' + b.dataset.view));
 });
+// a link to one section (#montage, #loras, #library…): useful for bookmarks, shortcuts and the test scripts
+const openSection = () => {
+  const h = location.hash.slice(1);
+  const b = h && document.querySelector(`.nav[data-view="${h}"]`);
+  if (b) b.click();
+};
+addEventListener('hashchange', openSection);
+setTimeout(openSection, 0);
 
 /* ---------- one header for the whole window ---------- */
 // Every section owns a .head with its title, hint and action. The active one is moved into the
@@ -3893,7 +3946,7 @@ const fileName = it => `h3_${it.mode}_${it.date.toISOString().slice(0, 16).repla
 /* ---------- общая очередь заданий ---------- */
 const QUEUE = [];
 const QSTAGE = { queued: 'ждёт своей очереди', load: 'загрузка моделей', encode: 'кодирование', sample: 'генерация', sample2: 'проход 2', upscale: 'апскейл',
-  decode: 'сборка видео', save: 'сохранение', cloud_queued: 'в очереди RunningHub', cloud_run: 'считается в облаке' };
+  decode: 'сборка видео', save: 'сохранение', cloud_queued: 'в очереди RunningHub', cloud_run: 'считается в облаке', ffmpeg: 'сборка FFmpeg' };
 function qAdd(id, mode, prompt) {
   const j = { id, mode, prompt: prompt || '', state: 'queued', stage: 'queued', t0: null, detached: false, lastEv: performance.now() };
   QUEUE.push(j);
@@ -3929,7 +3982,7 @@ function qHandle(m) {
   qRender();
   qJobTick();
 }
-const QBASE = { queued: .02, load: .05, encode: .12, sample: .15, upscale: .67, sample2: .7, decode: .92, save: .98, cloud_queued: .05, cloud_run: .4 };
+const QBASE = { queued: .02, load: .05, encode: .12, sample: .15, upscale: .67, sample2: .7, decode: .92, save: .98, cloud_queued: .05, cloud_run: .4, ffmpeg: .02 };
 /* what the user should see about a job: how far it is, and whether it is alive (green), quiet (yellow) or probably stuck (red) */
 function jobView(j) {
   const now = performance.now();
@@ -3939,6 +3992,10 @@ function jobView(j) {
   }
   const samp = String(j.stage).startsWith('sample') && j.max;
   let p = QBASE[j.stage] ?? .3, label = QSTAGE[j.stage] || 'идёт';
+  if (j.stage === 'ffmpeg' && j.max) {   // the FFmpeg studio reports one percent per step, not sampling steps
+    p = .02 + .96 * Math.min(1, (j.step || 0) / j.max);
+    label = 'сборка ' + Math.round(j.step || 0) + '%';
+  }
   if (samp) {
     const f = (j.step || 0) / j.max;
     p = j.stage === 'sample2' ? .7 + .2 * f : .15 + .75 * f;
@@ -8672,7 +8729,27 @@ $('#setReset').onclick = () => {
       <div class="screen"><div class="frame" style="aspect-ratio:16/9;width:100%"><div class="res mt-empty"><b>Монтаж</b>добавьте клипы: здесь можно будет посмотреть, как они идут подряд, а потом появится готовый ролик</div><video class="result mt-pv" playsinline hidden></video><video class="result mt-res" controls loop playsinline hidden></video></div></div>
       <div class="mt-bar" hidden><button type="button" class="btn mt-play" title="Играть / пауза (пробел)">▶</button><input type="range" class="mt-seek" min="0" max="0" value="0" title="Перемотка"><span class="mt-time">0:00 / 0:00</span></div>
       <div class="mt-tabs" hidden><button type="button" class="btn mini on" data-pv="seq">Предпросмотр</button><button type="button" class="btn mini" data-pv="res">Готовый ролик</button></div>
-      <button class="go mt-go"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l2.4 6.6L21 11l-6.6 2.4L12 20l-2.4-6.6L3 11l6.6-2.4z"/></svg>Склеить</button>
+      <div class="mt-eng">
+        <div class="mt-eng-tabs"><button type="button" class="btn mini on" data-eng="comfy">ComfyUI</button><button type="button" class="btn mini" data-eng="ff" title="Собрать тем же FFmpeg: переходы, формат, титры и музыка за секунды, видеокарта не нужна">FFmpeg (быстро)</button></div>
+        <div class="mt-ff" hidden>
+          <div class="hint ff-state" style="margin-bottom:10px"></div>
+          <div class="ff-grid">
+            <label class="fld"><span>Переход</span><select class="ff-transition"><option value="none">без перехода</option><option value="fade" selected>растворение</option><option value="dissolve">наплыв</option><option value="wipeleft">шторка влево</option><option value="wiperight">шторка вправо</option><option value="slideup">скольжение вверх</option><option value="circleopen">круг</option></select></label>
+            <label class="fld"><span>Длина перехода: <b class="ff-tdv">0.4</b> с</span><input type="range" class="ff-trans-dur" min="0.1" max="1.5" step="0.1" value="0.4"></label>
+            <label class="fld"><span>Формат</span><select class="ff-aspect"><option value="original" selected>как первый клип</option><option value="16:9">16:9</option><option value="9:16">9:16 вертикальный</option><option value="1:1">1:1</option><option value="21:9">21:9</option></select></label>
+            <label class="fld"><span>Как вписать в формат</span><select class="ff-fit"><option value="blur" selected>размытый фон</option><option value="crop">обрезать по краям</option><option value="pad">чёрные поля</option></select></label>
+            <label class="fld"><span>Скорость</span><select class="ff-speed"><option value="1" selected>1×</option><option value="0.5">0.5×</option><option value="0.75">0.75×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="2">2×</option></select></label>
+            <label class="fld"><span>Цвет</span><select class="ff-filter"><option value="none" selected>как есть</option><option value="warm">тёплый</option><option value="cold">холодный</option><option value="bw">чёрно-белый</option><option value="vintage">винтаж</option><option value="vignette">виньетка</option></select></label>
+            <label class="fld"><span>Надпись</span><input class="ff-title" maxlength="200" placeholder="необязательно"></label>
+            <label class="fld"><span>Где надпись</span><select class="ff-title-pos"><option value="bottom" selected>внизу</option><option value="center">по центру</option><option value="top">вверху</option></select></label>
+            <label class="fld"><span>Музыка</span><input type="file" class="ff-music" accept="audio/*"></label>
+            <label class="fld"><span>Музыка: <b class="ff-mv">35</b>%</span><input type="range" class="ff-mvol" min="0" max="100" step="5" value="35"></label>
+            <label class="fld"><span>Звук клипов: <b class="ff-vv">100</b>%</span><input type="range" class="ff-vvol" min="0" max="100" step="5" value="100"></label>
+          </div>
+          <div class="hint">Сборка идёт на процессоре и видеокарту не занимает: длинная лента собирается за секунды, а переходы и титры накладывает сам FFmpeg.</div>
+        </div>
+      </div>
+      <button class="go mt-go"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l2.4 6.6L21 11l-6.6 2.4L12 20l-2.4-6.6L3 11l6.6-2.4z"/></svg><span class="mt-go-t">Склеить</span></button>
       <div class="mt-upbox"><select class="mt-upeng" title="Чем увеличивать каждый клип"><option value="relay">Быстро (RelayVSR, в 2 раза)</option><option value="seed">Качественно (SeedVR2, в 2 раза, долго)</option></select><button type="button" class="btn mt-upgo" title="Каждый клип увеличивается отдельно (быстро, память не переполняется), потом увеличенные склеиваются. Исходные клипы остаются.">Увеличить каждый клип и склеить</button></div>
       <div class="mt-sets">
         <label class="mt-s-detail"><span><b>Детали: <i class="mt-dv">70</i>%</b> меньше — мягче, без пересвета лиц; больше — чётче</span><input type="range" class="mt-detail" min="0" max="100" step="5" value="70"></label>
@@ -8873,7 +8950,113 @@ $('#setReset').onclick = () => {
     showDone(it, false);   // shown, but paused: only a join finished right now plays by itself
   };
 
-  $('.mt-go', root).onclick = () => { if (+$('.mt-grain', root).value > 0) chain('none'); else joinNow(MT.ids.slice(), durList()); };
+  $('.mt-go', root).onclick = () => {
+    if (FF.eng === 'ff') { ffJoin(MT.ids.slice(), durList()); return; }
+    if (+$('.mt-grain', root).value > 0) chain('none'); else joinNow(MT.ids.slice(), durList());
+  };
+
+  /* ---------- the same reel assembled by the portable FFmpeg: seconds, no video card ---------- */
+  const FF = { eng: 'comfy', status: null, busy: false };
+  try { FF.eng = localStorage.getItem('h3-mt-eng') || 'comfy'; } catch {}
+  const ffBox = $('.mt-ff', root);
+  function ffPaint() {
+    $$('.mt-eng-tabs [data-eng]', root).forEach(b => b.classList.toggle('on', b.dataset.eng === FF.eng));
+    ffBox.hidden = FF.eng !== 'ff';
+    $('.mt-upbox', root).hidden = FF.eng === 'ff';
+    $('.mt-sets', root).hidden = FF.eng === 'ff';
+    $('.mt-go-t', root).textContent = FF.eng === 'ff' ? 'Собрать (FFmpeg)' : 'Склеить';
+    $('.mt-go', root).disabled = FF.eng === 'ff' && !(FF.status && FF.status.installed);
+  }
+  async function ffStatus() {
+    let s = null;
+    try { s = await (await fetch('/api/ffmpeg/status')).json(); } catch {}
+    FF.status = s;
+    const box = $('.ff-state', root);
+    if (!box) return;
+    if (s && s.downloading && s.progress) {
+      box.textContent = `Скачиваем FFmpeg: ${s.progress.pct}% — ${s.progress.text || ''}`;
+    } else if (s && s.installed) {
+      box.innerHTML = `FFmpeg ${esc(s.version || '')} готов. <button type="button" class="btn mini ff-open">Показать папку</button> <button type="button" class="btn mini ff-inst" data-again="1">Обновить</button>`;
+      box.classList.add('on');
+    } else {
+      box.innerHTML = 'FFmpeg не установлен: он нужен только для этой быстрой сборки. <button type="button" class="btn mini pri ff-inst">Установить (~100 МБ)</button>';
+      box.classList.remove('on');
+    }
+    ffPaint();
+  }
+  window.onFFDownload = m => {
+    const box = $('.ff-state', root);
+    if (!box) return;
+    if (m.done) { ffStatus(); if (m.error) toast('FFmpeg: ' + m.error); return; }
+    if (FF.eng === 'ff') box.textContent = `Скачиваем FFmpeg: ${m.pct}% — ${m.text || ''}`;
+  };
+  root.addEventListener('click', e => {
+    if (e.target.closest('.ff-inst')) {
+      e.target.disabled = true;
+      $('.ff-state', root).textContent = 'Начинаем скачивание…';
+      fetch('/api/ffmpeg/download', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      return;
+    }
+    if (e.target.closest('.ff-open')) fetch('/api/ffmpeg/open-folder', { method: 'POST' });
+  });
+  $$('.mt-eng-tabs [data-eng]', root).forEach(b => b.onclick = () => {
+    FF.eng = b.dataset.eng;
+    try { localStorage.setItem('h3-mt-eng', FF.eng); } catch {}
+    ffPaint();
+    if (FF.eng === 'ff') ffStatus();
+  });
+  [['.ff-trans-dur', '.ff-tdv'], ['.ff-mvol', '.ff-mv'], ['.ff-vvol', '.ff-vv']].forEach(([a, b]) => {
+    $(a, root).oninput = () => { $(b, root).textContent = $(a, root).value; };
+  });
+  async function ffJoin(ids, durs) {
+    const st = $('.mt-status', root);
+    if (FF.busy) return;
+    if (!ids.length) { st.textContent = 'Добавьте хотя бы один клип'; return; }
+    if (!(FF.status && FF.status.installed)) { st.textContent = 'Сначала установите FFmpeg: кнопка в блоке «FFmpeg».'; return; }
+    FF.busy = true; $('.mt-go', root).disabled = true; st.textContent = 'Готовим клипы…';
+    const fd = new FormData();
+    fd.append('ids', JSON.stringify(ids));
+    fd.append('durs', JSON.stringify(durs || []));
+    fd.append('preview', '1');
+    const put = (key, sel) => { const el = $(sel, root); if (el && el.value !== '') fd.append(key, el.value); };
+    put('transition', '.ff-transition'); put('transition_dur', '.ff-trans-dur'); put('aspect', '.ff-aspect');
+    put('fit_mode', '.ff-fit'); put('speed', '.ff-speed'); put('filter', '.ff-filter');
+    put('title', '.ff-title'); put('title_pos', '.ff-title-pos');
+    fd.append('music_vol', String((+$('.ff-mvol', root).value || 0) / 100));
+    fd.append('video_vol', String((+$('.ff-vvol', root).value || 0) / 100));
+    const music = $('.ff-music', root).files[0];
+    if (music) fd.append('music', music, music.name);
+    ids.filter(id => id.startsWith('up:')).forEach(id => {
+      const u = get(id), k = id.slice(3);
+      fd.append('res_' + k, u.res || ''); fd.append('len_' + k, String(u.len || 0)); fd.append('file_' + k, u.file, u.file.name);
+    });
+    let res;
+    try {
+      const r = await fetch('/api/ffmpeg/montage', { method: 'POST', body: fd });
+      const txt = await r.text();
+      try { res = JSON.parse(txt); } catch { res = { error: txt }; }
+      if (!r.ok) throw new Error(res.error || r.statusText);
+    } catch (err) {
+      FF.busy = false; $('.mt-go', root).disabled = false;
+      st.textContent = 'Сборка не удалась: ' + err.message; return;
+    }
+    qAdd(res.prompt_id, 'montage', 'FFmpeg · ' + ids.length + ' клипов');
+    st.textContent = 'Собираем FFmpeg…';
+    onPrompt(res.prompt_id, ev => {
+      if (ev.prompt_id !== res.prompt_id) return;
+      if (ev.type === 'stage') { st.textContent = `Сборка FFmpeg: ${ev.step || 1}%`; return; }
+      if (ev.type === 'done') {
+        offPrompt(res.prompt_id); FF.busy = false; $('.mt-go', root).disabled = false;
+        st.textContent = 'Сборка завершена: ролик ждёт «Добавить в библиотеку».';
+        showDone(normItem(ev.item));
+      } else if (ev.type === 'error') {
+        offPrompt(res.prompt_id); FF.busy = false; $('.mt-go', root).disabled = false;
+        st.textContent = 'Сборка не удалась: ' + ev.message;
+      }
+    });
+  }
+  ffPaint();
+  ffStatus();
   async function joinNow(ids, durs) {
     const st = $('.mt-status', root);
     if (MT.busy && !MT.chaining) return;
@@ -8988,6 +9171,225 @@ $('#setReset').onclick = () => {
   if (window.gridResize) window.gridResize($('.grid', root));
   IMG_PANELS.push(render);
   render();
+})();
+/* ---------- LoRA: what a file means, which combinations fight, and the catalog ---------- */
+(() => {
+  const root = $('#view-loras');
+  if (!root) return;
+  const LR = { items: [], conflicts: [], custom: [], src: 'civitai', busy: false, dl: null, dir: '' };
+  root.innerHTML = `
+    <div class="head"><div><h1>LoRA</h1><p>Что за файл, какие у него слова-ключи и с каким весом включать. Здесь же поиск и скачивание с Civitai и Hugging Face — файл ляжет прямо в папку LoRA вашего ComfyUI.</p></div></div>
+    <div class="grid"><div class="col">
+      <div class="card"><div class="card-h"><h3><span class="n">1</span>Проверка сочетаний</h3><span class="hint lr-cf-n"></span></div><div class="lr-cf"></div></div>
+      <div class="card"><div class="card-h"><h3><span class="n">2</span>Мои LoRA</h3><span class="hint">включённая LoRA подмешивается во все режимы</span></div><div class="lr-mine"></div><div class="hint lr-mine-h" style="margin-top:8px"></div></div>
+      <div class="card"><div class="card-h"><h3>Каталоги</h3></div>
+        <div class="fld"><label>Токен Civitai <span class="hint">(необязательно: часть моделей без него не скачивается)</span></label><div class="path on"><input class="lr-tok-civ" type="password" placeholder="вставьте токен" autocomplete="off"></div></div>
+        <div class="fld"><label>Токен Hugging Face <span class="hint">(для закрытых репозиториев)</span></label><div class="path on"><input class="lr-tok-hf" type="password" placeholder="вставьте токен" autocomplete="off"></div></div>
+        <div class="wz-go"><span class="hint lr-tok-msg"></span><button class="btn lr-tok-save" type="button">Сохранить токены</button><button class="btn lr-folder" type="button">Папка LoRA</button></div>
+      </div>
+    </div><div class="preview">
+      <div class="card"><div class="card-h"><h3><span class="n">3</span>Каталог</h3><span class="mt-eng-tabs lr-src"><button type="button" class="btn mini on" data-src="civitai">Civitai</button><button type="button" class="btn mini" data-src="hf">Hugging Face</button></span></div>
+        <div class="lr-qrow"><div class="path on"><input class="lr-q" placeholder="Что искать: film grain, realism, camera motion"><button class="btn pri lr-find" type="button">Искать</button></div></div>
+        <div class="hint lr-dl" style="margin-top:8px"></div>
+        <div class="lr-res"></div>
+      </div>
+    </div></div>`;
+
+  const fileOf = it => String(it && it.file || '');
+  const customOf = f => LR.custom.find(x => x.file === f);
+  const recOf = f => {
+    const c = customOf(f);
+    return c && typeof c.strength === 'number' ? c.strength : 0.8;
+  };
+
+  async function load() {
+    const box = $('.lr-mine', root);
+    try {
+      const reg = await fetch('/api/loras/registry').then(r => r.json());
+      LR.items = reg.items || []; LR.conflicts = reg.conflicts || []; LR.dir = reg.dir || '';
+    } catch { LR.items = []; LR.conflicts = []; }
+    try {
+      const tok = await fetch('/api/loras/tokens').then(r => r.json());
+      $('.lr-tok-civ', root).placeholder = tok.civitai ? 'токен сохранён (введите новый, чтобы заменить)' : 'вставьте токен';
+      $('.lr-tok-hf', root).placeholder = tok.hf ? 'токен сохранён (введите новый, чтобы заменить)' : 'вставьте токен';
+    } catch {}
+    try {
+      const c = await fetch('/api/loras/custom').then(r => r.json());
+      LR.custom = c.items || [];
+    } catch {
+      LR.custom = LR.items.filter(it => it.mine).map(it => ({ file: it.file, strength: it.recommended_weight || 0.8, on: true }));
+    }
+    $('.lr-mine-h', root).textContent = LR.dir ? `Папка LoRA: ${LR.dir}` : 'Папка models вашего ComfyUI не выбрана: укажите её в разделе «Модели».';
+    renderMine(); renderConflicts();
+  }
+
+  function renderMine() {
+    const box = $('.lr-mine', root);
+    const known = new Map(LR.items.map(it => [it.file, it]));
+    const files = LR.items.map(it => it.file);
+    for (const c of LR.custom) if (!files.includes(c.file)) files.push(c.file);
+    if (!files.length) { box.innerHTML = '<div class="lr-empty">ComfyUI не видит ни одной LoRA: положите файл .safetensors в папку LoRA и нажмите «Обновить» в «Моделях», либо скачайте из каталога справа.</div>'; return; }
+    files.sort((a, b) => {   // enabled ones first, then by name
+      const onA = (customOf(a) || {}).on !== false && !!customOf(a), onB = (customOf(b) || {}).on !== false && !!customOf(b);
+      if (onA !== onB) return onA ? -1 : 1;
+      return (known.get(a)?.name || a).localeCompare(known.get(b)?.name || b, 'ru');
+    });
+    box.innerHTML = files.map((f, i) => {
+      const it = known.get(f) || { file: f, name: f, category: '', desc: '', triggers: [], recommended_weight: 0.8 };
+      const c = customOf(f) || { file: f, strength: it.recommended_weight || 0.8, on: false };
+      const on = c.on !== false;
+      return `<div class="lr-item" data-file="${esc(f)}">
+        <div class="lr-top"><span><span class="lr-name">${esc(it.name || f)}</span> <span class="btn mini lr-sw${on ? ' on' : ''}" role="button" title="Включить или выключить эту LoRA">${on ? 'включена' : 'выключена'}</span></span><span class="hint">${esc(it.category || '')}</span></div>
+        <div class="lr-file">${esc(f)}</div>
+        <div class="lr-row"><input type="range" class="lr-w" min="0" max="2" step="0.05" value="${c.strength ?? 0.8}"><b class="lr-wv">${(+c.strength || 0).toFixed(2)}</b></div>
+        <div class="lr-tags">${(it.triggers || []).map(t => `<span class="lr-chip">${esc(t)}</span>`).join('') || '<span class="hint">слова-ключи неизвестны: добавьте их ниже, чтобы агент подставлял их в промпт</span>'}</div>
+        <details class="lr-meta"><summary>Слова-ключи, название и вес</summary>
+          <div class="fld"><label>Название</label><input class="lr-m-name" value="${esc(it.name || '')}"></div>
+          <div class="fld"><label>Слова-ключи <span class="hint">(через запятую)</span></label><input class="lr-m-trig" value="${esc((it.triggers || []).join(', '))}"></div>
+          <div class="fld"><label>Рекомендуемый вес</label><input class="lr-m-rec" type="number" min="0" max="2" step="0.05" value="${(+it.recommended_weight || 0.8).toFixed(2)}"></div>
+          <div class="wz-go"><span class="hint lr-m-msg"></span><button class="btn lr-m-save" type="button">Сохранить</button></div>
+        </details>
+      </div>`;
+    }).join('');
+  }
+
+  function renderConflicts() {
+    const box = $('.lr-cf', root), n = $('.lr-cf-n', root);
+    const list = LR.conflicts || [];
+    n.textContent = list.length ? `${list.length} замечани${list.length === 1 ? 'е' : list.length < 5 ? 'я' : 'й'}` : '';
+    box.innerHTML = list.length ? list.map(c => `<div class="lr-cf ${esc(c.level || 'caution')}"><b>${esc(c.title || '')}</b>${esc(c.desc || '')}${(c.culprits || []).length ? `<div class="hint" style="margin-top:4px">${(c.culprits || []).map(esc).join(', ')}</div>` : ''}</div>`).join('')
+      : '<div class="hint">Включённые LoRA не мешают друг другу.</div>';
+  }
+
+  async function saveCustom() {
+    try {
+      const r = await fetch('/api/loras/custom', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items: LR.custom }) });
+      if (!r.ok) throw new Error((await r.text()) || r.statusText);
+      const cf = await fetch('/api/loras/conflicts').then(r => r.json());
+      LR.conflicts = cf.conflicts || []; renderConflicts();
+    } catch (e) { toast('Не удалось сохранить список LoRA: ' + e.message); }
+  }
+
+  root.addEventListener('click', async e => {
+    const item = e.target.closest('.lr-item');
+    if (item) {
+      const f = item.dataset.file;
+      if (e.target.closest('.lr-sw')) {
+        const c = customOf(f) || (LR.custom.push({ file: f, strength: recOf(f), on: false }), LR.custom[LR.custom.length - 1]);
+        c.on = !(c.on !== false);
+        await saveCustom(); renderMine(); return;
+      }
+      if (e.target.closest('.lr-m-save')) {
+        const msg = $('.lr-m-msg', item);
+        msg.textContent = 'Сохраняем…';
+        try {
+          const r = await fetch('/api/loras/meta', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
+            file: f, name: $('.lr-m-name', item).value, triggers: $('.lr-m-trig', item).value,
+            recommended_weight: +$('.lr-m-rec', item).value || 0.8 }) });
+          if (!r.ok) throw new Error((await r.text()) || r.statusText);
+          msg.textContent = 'Сохранено';
+          await load();
+        } catch (err) { msg.textContent = 'Не удалось: ' + err.message; }
+        return;
+      }
+      return;
+    }
+    if (e.target.closest('.lr-find')) { find(); return; }
+    if (e.target.closest('.lr-folder')) { fetch('/api/loras/open-folder', { method: 'POST' }).then(r => r.json()).then(j => { if (j.error) toast(j.error); }).catch(() => {}); return; }
+    if (e.target.closest('.lr-tok-save')) {
+      const msg = $('.lr-tok-msg', root);
+      const body = { civitai: $('.lr-tok-civ', root).value.trim(), hf: $('.lr-tok-hf', root).value.trim() };
+      try {
+        const r = await fetch('/api/loras/tokens', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        if (!r.ok) throw new Error(r.statusText);
+        msg.textContent = 'Токены сохранены';
+        $('.lr-tok-civ', root).value = ''; $('.lr-tok-hf', root).value = '';
+      } catch (err) { msg.textContent = 'Не удалось: ' + err.message; }
+      return;
+    }
+    const src = e.target.closest('[data-src]');
+    if (src) {
+      LR.src = src.dataset.src;
+      $$('[data-src]', root).forEach(b => b.classList.toggle('on', b === src));
+      find();
+    }
+  });
+
+  root.addEventListener('input', e => {
+    const item = e.target.closest('.lr-item');
+    if (!item || !e.target.classList.contains('lr-w')) return;
+    const f = item.dataset.file;
+    $('.lr-wv', item).textContent = (+e.target.value).toFixed(2);
+  });
+  root.addEventListener('change', async e => {
+    const item = e.target.closest('.lr-item');
+    if (!item || !e.target.classList.contains('lr-w')) return;
+    const f = item.dataset.file;
+    const c = customOf(f) || (LR.custom.push({ file: f, strength: 0.8, on: false }), LR.custom[LR.custom.length - 1]);
+    c.strength = Math.round((+e.target.value) * 100) / 100;
+    await saveCustom(); renderMine();
+  });
+  $('.lr-q', root).addEventListener('keydown', e => { if (e.key === 'Enter') find(); });
+
+  async function find() {
+    const box = $('.lr-res', root), q = $('.lr-q', root).value.trim();
+    box.innerHTML = '<div class="hint">Ищем…</div>';
+    const url = LR.src === 'civitai' ? `/api/civitai/search?q=${encodeURIComponent(q)}` : `/api/hf/search?q=${encodeURIComponent(q)}`;
+    let data;
+    try { data = await fetch(url).then(r => r.json()); }
+    catch { box.innerHTML = '<div class="hint">Нет связи с каталогом: проверьте интернет.</div>'; return; }
+    const items = data.items || [];
+    if (!items.length) {
+      box.innerHTML = `<div class="hint">${esc(data.error || 'Ничего не нашлось: попробуйте другие слова.')}</div>`
+        + (data.needsToken ? '<div class="hint">Для этого каталога нужен токен: вставьте его слева.</div>' : '')
+        + '<div class="hint">Подсказка: LoRA для H3 ищутся по тегам вроде «minimax h3» или по названию эффекта.</div>';
+      return;
+    }
+    box.innerHTML = items.map((it, i) => {
+      const v = (it.versions || [])[0] || {};
+      const img = (it.images || [])[0] || '';
+      const trig = (v.trainedWords || []).slice(0, 6).join(', ');
+      return `<div class="lr-card"><img src="${esc(img)}" alt="" loading="lazy" onerror="this.style.display='none'">
+        <div class="lr-b"><div class="lr-n">${esc(it.name || '')}</div>
+          <div class="lr-m">${esc(it.creator || '')}${v.sizeMB ? ' · ' + v.sizeMB + ' МБ' : ''}${v.baseModel ? ' · ' + esc(v.baseModel) : ''}</div>
+          <div class="lr-t">${esc(trig || (it.description || '').slice(0, 140))}</div>
+          <button class="btn pri lr-dl" type="button" data-i="${i}">Скачать</button></div></div>`;
+    }).join('');
+    $$('.lr-dl', box).forEach(b => b.onclick = () => download(items[+b.dataset.i]));
+  }
+
+  async function download(it) {
+    const v = (it.versions || [])[0] || {};
+    if (!v.downloadUrl) { toast('У этой записи нет файла для скачивания'); return; }
+    const msg = $('.lr-dl', root);
+    msg.textContent = 'Скачиваем…';
+    try {
+      const r = await fetch('/api/loras/download', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: v.downloadUrl, filename: v.filename }) });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || r.statusText);
+      LR.dl = j.name;
+      msg.textContent = `Скачиваем ${j.name}: 0%`;
+    } catch (e) {
+      msg.textContent = '';
+      toast('Не удалось скачать: ' + e.message);
+    }
+  }
+
+  window.onLoraDownload = m => {
+    const msg = $('.lr-dl', root);
+    if (!msg) return;
+    if (m.error) { msg.textContent = ''; toast('Скачивание не удалось: ' + m.error); return; }
+    if (m.cancelled) { msg.textContent = ''; toast('Скачивание остановлено'); return; }
+    if (m.finished) { msg.textContent = ''; toast('LoRA скачана: ' + (m.name || '') + '. Она появится в папке LoRA — нажмите «Обновить список» в «Моделях».'); load(); return; }
+    msg.textContent = `Скачиваем ${m.name || ''}: ${m.percent || 0}%${m.speed ? ' · ' + m.speed : ''}`;
+  };
+
+  IMG_PANELS.push(() => {});
+  // the list of LoRAs comes from ComfyUI: refresh it every time the section is opened
+  new MutationObserver(() => { if (root.classList.contains('active')) load(); })
+    .observe(root, { attributes: true, attributeFilter: ['class'] });
+  load();
 })();
 ['#vPrompt', '#lPrompt', '.kr-prompt', '.qw-prompt', '.ip-prompt'].forEach(sel => $$(sel).forEach(attachRu));   // every prompt field gets «Показать по-русски»
 

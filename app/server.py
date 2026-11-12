@@ -20,6 +20,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import threading
 import time
 import uuid
 import urllib.parse
@@ -33,9 +34,13 @@ from aiohttp import web
 import agent as ag
 import agentapi
 import catalog
+import civitai_client
 import cloud
 import customwf
 import engine
+import ffmpeg_mgr
+import hf_client
+import loras_registry
 import monitor
 import mp4info
 import report
@@ -342,6 +347,7 @@ ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 HOME = Path(sys.executable).parent if getattr(sys, "frozen", False) else ROOT
 UI_DIR = ROOT / "ui"
 DATA_DIR = Path(os.environ.get("H3STUDIO_DATA", HOME / "data"))
+TOOLS_DIR = Path(os.environ.get("H3STUDIO_TOOLS") or HOME / "tools")  # portable FFmpeg and other helpers
 LONG_DIR = DATA_DIR / "long"   # saved scene states of the long video made scene by scene
 LIBRARY_FILE = DATA_DIR / "library.json"
 QUEUE_FILE = DATA_DIR / "queue.json"
@@ -355,13 +361,85 @@ CLIENT_ID = "h3studio-" + uuid.uuid4().hex[:8]
 BIN_PREVIEW = 1
 BIN_PREVIEW_META = 4
 
+# ---------- who is allowed to talk to the local server ----------
+# The server listens on 127.0.0.1, but any page in any browser on this computer can still reach it:
+# a form-encoded POST is a "simple" request that needs no CORS preflight, and a WebSocket is not
+# covered by the same-origin policy at all. Without a check, a random site could queue jobs, wipe
+# the library or drive the agent. So every state-changing request (and the event socket) must come
+# from our own page: the same local host and the very port this process listens on. Requests with no
+# Origin header (curl, the MCP server, other programs) are allowed - they are not a web page acting
+# on behalf of somebody else.
+
+LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
+SAFE_METHODS = ("GET", "HEAD", "OPTIONS")
+
+
+def origin_ok(origin, port):
+    """True when `origin` is our own page (or there is no origin at all)."""
+    if not origin:
+        return True                      # not a browser, or a navigation without Origin
+    if origin == "null":
+        return False                     # sandboxed iframe / file:// context: never ours
+    try:
+        parts = urllib.parse.urlsplit(origin)
+        if parts.scheme not in ("http", "https"):
+            return False
+        origin_port = parts.port or (80 if parts.scheme == "http" else 443)
+    except ValueError:
+        return False                     # malformed Origin: reject, do not raise
+    host = (parts.hostname or "").lower()
+    if host == "::1":
+        host = "127.0.0.1"
+    return host in LOCAL_HOSTS and origin_port == port
+
+
+@web.middleware
+async def same_origin_only(request, handler):
+    """Reject state-changing requests and WebSocket upgrades that come from another site."""
+    upgrade = (request.headers.get("Upgrade") or "").lower()
+    if request.method not in SAFE_METHODS or upgrade == "websocket":
+        if not origin_ok(request.headers.get("Origin"), request.url.port):
+            return web.json_response({"error": "cross-origin request rejected"}, status=403)
+    return await handler(request)
+
+
+def safe_lora_name(name):
+    """A LoRA file name as ComfyUI lists it: no folders, no drive letters, no parent references."""
+    name = str(name or "").strip().replace("/", "\\")
+    if not name or name.startswith("\\") or ":" in name or ".." in name:
+        return ""
+    return name
+
+
+def open_in_explorer(path):
+    """Show a folder (or a file) in Explorer; quietly does nothing when the system refuses."""
+    try:
+        if sys.platform == "win32":
+            subprocess.Popen(["explorer", str(path)], creationflags=0x08000000)
+        else:
+            webbrowser.open(Path(path).as_uri())
+    except Exception:
+        pass
+
 
 class Library:
     def __init__(self, path):
         self.path = path
         self.items = []
-        if path.exists():
-            self.items = json.loads(path.read_text(encoding="utf-8"))
+        if not path.exists():
+            return
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(loaded, list):
+                raise ValueError("library.json: expected a JSON array")
+            self.items = [x for x in loaded if isinstance(x, dict) and x.get("id")]
+        except (OSError, ValueError):
+            # A broken list must not stop the app from starting: keep the file for the user and go on empty.
+            try:
+                path.replace(path.with_name(f"{path.name}.broken-{time.strftime('%Y%m%d-%H%M%S')}"))
+            except OSError:
+                pass
+            self.items = []
 
     def save(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -423,6 +501,9 @@ class App:
         self.ext_proc = None     # the user's own ComfyUI, when we had to start it again
         self.ext_log = DATA_DIR / "comfyui-external.log"
         self._restarting = False
+        self.ffmpeg_dl = None    # the running portable-FFmpeg download: {"cancel": Event, "pct": 0, "text": "", "done": False}
+        self.ffmpeg_jobs = {}    # prompt_id -> {"cancel": Event, "task": Task, "dest": Path}
+        self.lora_dl = None      # the running LoRA download from Civitai / Hugging Face
 
     def llm_root(self):
         if self.config.get("llm_dir"):
@@ -2578,9 +2659,9 @@ class App:
                 strength = max(-4.0, min(4.0, float(x.get("strength", 0.8))))
             except (TypeError, ValueError):
                 strength = 0.8
-            if isinstance(x.get("file"), str) and x["file"]:
+            if isinstance(x.get("file"), str) and safe_lora_name(x.get("file")):
                 skip = [m for m in (x.get("skip") or []) if m in catalog.MODE_ROLES][:20]
-                items.append({"file": x["file"], "strength": strength, "on": bool(x.get("on", True)), "skip": skip})
+                items.append({"file": safe_lora_name(x["file"]), "strength": strength, "on": bool(x.get("on", True)), "skip": skip})
         self.config.update(custom_loras=items)
         return web.json_response({"ok": True})
 
@@ -2600,6 +2681,202 @@ class App:
         hit["skip"] = skip
         self.config.update(custom_loras=items)
         return web.json_response({"ok": True})
+
+    # ---------- LoRA catalog: what a LoRA means, and where to get more ----------
+    # The models screen only lists file names. Here a LoRA gets a human name, trigger words and a
+    # suggested weight (from a small built-in list, the .safetensors header, or the user's own edits),
+    # conflicting combinations are flagged, and Civitai / Hugging Face can be searched and downloaded
+    # straight into the LoRA folder of the ComfyUI in use.
+
+    def loras_folder(self, folder=""):
+        """The LoRA folder of the ComfyUI in use (created for our own install); None when it is unknown."""
+        managed = self.config.get("engine") == "managed"
+        if managed:
+            base = Path(self.config.get("install_dir") or "") / catalog.COMFY_DIRNAME / "ComfyUI" / "models"
+        else:
+            raw = str(folder or self.config.get("ext_models_dir") or "").strip()
+            if not raw:
+                return None            # the user's own ComfyUI: its models folder is chosen on the Models screen
+            base = Path(raw)
+        p = base / "loras"
+        if managed:
+            p.mkdir(parents=True, exist_ok=True)
+        return p
+
+    def lora_meta(self):
+        return self.config.get("lora_meta") or {}
+
+    def lora_conflicts(self, meta=None):
+        active = [x for x in self.unique_loras() if x.get("on", True)]
+        return loras_registry.analyze_lora_conflicts(active, custom_meta=self.lora_meta() if meta is None else meta)
+
+    async def h_loras_registry(self, _req):
+        """Every LoRA ComfyUI sees, with its meaning, trigger words and suggested weight."""
+        try:
+            _, files = await self.comfy_json("GET", "/models/loras", timeout=aiohttp.ClientTimeout(total=20))
+        except Exception:
+            files = []
+        meta = self.lora_meta()
+        root = self.loras_folder()
+        mine = {x.get("file") for x in self.unique_loras()}
+        items = []
+        for f in files or []:
+            full = root / f if root and (root / f).is_file() else None
+            m = loras_registry.get_lora_metadata(f, full_file_path=str(full) if full else None, custom_meta=meta)
+            items.append({**m, "mine": f in mine})
+        return web.json_response({"items": items, "conflicts": self.lora_conflicts(meta), "dir": str(root or "")})
+
+    async def h_loras_conflicts(self, _req):
+        return web.json_response({"conflicts": self.lora_conflicts()})
+
+    async def h_loras_meta_save(self, req):
+        """The user's own name, description, trigger words and weight for a LoRA file."""
+        body = await req.json()
+        file = safe_lora_name(body.get("file"))
+        if not file:
+            raise web.HTTPBadRequest(text="Неизвестная LoRA")
+        meta = dict(self.lora_meta())
+        entry = dict(meta.get(file) or {})
+        for key, limit in (("name", 120), ("desc", 400), ("category", 60)):
+            if key in body:
+                value = str(body.get(key) or "").strip()[:limit]
+                if value:
+                    entry[key] = value
+                else:
+                    entry.pop(key, None)
+        if "triggers" in body:
+            raw = body["triggers"]
+            parts = raw if isinstance(raw, list) else str(raw).replace(";", ",").split(",")
+            triggers = [str(x).strip()[:80] for x in parts if str(x).strip()][:20]
+            if triggers:
+                entry["triggers"] = triggers
+            else:
+                entry.pop("triggers", None)
+        if "recommended_weight" in body:
+            try:
+                entry["recommended_weight"] = max(0.0, min(2.0, float(body["recommended_weight"])))
+            except (TypeError, ValueError):
+                raise web.HTTPBadRequest(text="Вес должен быть числом от 0 до 2")
+        if entry:
+            meta[file] = entry
+        else:
+            meta.pop(file, None)
+        self.config.update(lora_meta=meta)
+        return web.json_response({"ok": True, "meta": entry})
+
+    async def h_loras_tokens_get(self, _req):
+        """Whether an access token is saved (the token itself never comes back to the page)."""
+        return web.json_response({"civitai": bool((self.config.get("civitai_token") or "").strip()),
+                                  "hf": bool((self.config.get("hf_token") or "").strip())})
+
+    async def h_loras_tokens_save(self, req):
+        body = await req.json()
+        upd = {}
+        for key, cfg in (("civitai", "civitai_token"), ("hf", "hf_token")):
+            if key in body:
+                upd[cfg] = str(body.get(key) or "").strip()[:200]
+        if upd:
+            self.config.update(**upd)
+        return web.json_response({"ok": True})
+
+    def civitai_token(self):
+        return (self.config.get("civitai_token") or "").strip()
+
+    def hf_token(self):
+        return (self.config.get("hf_token") or "").strip()
+
+    async def h_civitai_search(self, req):
+        try:
+            page = max(1, int(req.query.get("page") or 1))
+        except ValueError:
+            page = 1
+        res = await civitai_client.search_loras(self.session, query=req.query.get("q", "").strip(), page=page,
+                                                limit=20, token=self.civitai_token())
+        return web.json_response(res)
+
+    async def h_civitai_resolve(self, req):
+        try:
+            res = await civitai_client.resolve_url_or_id(self.session, str((await req.json()).get("text") or ""))
+        except Exception as ex:  # noqa: BLE001 - the message is what the user needs
+            raise web.HTTPBadRequest(text=str(ex)[:300])
+        return web.json_response(res)
+
+    async def h_hf_search(self, req):
+        res = await hf_client.search_loras(self.session, query=req.query.get("q", "").strip(), limit=30,
+                                           token=self.hf_token())
+        return web.json_response(res)
+
+    async def h_hf_resolve(self, req):
+        try:
+            res = await hf_client.resolve_url_or_repo(self.session, str((await req.json()).get("text") or ""),
+                                                      token=self.hf_token())
+        except Exception as ex:  # noqa: BLE001
+            raise web.HTTPBadRequest(text=str(ex)[:300])
+        return web.json_response(res)
+
+    async def h_loras_download(self, req):
+        """Download a LoRA file into the LoRA folder of ComfyUI, with progress in the UI."""
+        body = await req.json()
+        url = str(body.get("url") or "").strip()
+        if not url.startswith("https://"):
+            raise web.HTTPBadRequest(text="Скачивать можно только по https")
+        name = safe_lora_name(body.get("filename") or "")
+        if not name:
+            name = f"lora_{uuid.uuid4().hex[:8]}.safetensors"
+        if not name.lower().endswith(".safetensors"):
+            name += ".safetensors"
+        if self.lora_dl and not self.lora_dl.get("done"):
+            raise web.HTTPConflict(text="Скачивание уже идёт: дождитесь его или остановите")
+        folder = self.loras_folder(str(body.get("folder") or ""))
+        if not folder or not folder.parent.is_dir():
+            raise web.HTTPBadRequest(text="Не найдена папка models вашего ComfyUI: укажите её в разделе «Модели»")
+        folder.mkdir(parents=True, exist_ok=True)
+        dest = folder / name
+        if dest.exists():
+            raise web.HTTPConflict(text=f"Файл «{name}» уже есть в папке LoRA")
+        host = urllib.parse.urlsplit(url).hostname or ""
+        token = self.civitai_token() if "civitai" in host else self.hf_token() if "huggingface" in host or host.endswith("hf.co") else ""
+        state = {"done": False, "error": None, "name": name, "task": None}
+        self.lora_dl = state
+
+        async def work():
+            try:
+                dl = asyncio.create_task(civitai_client.download_file_stream(self.session, url, str(dest), token))
+                state["task"] = dl
+                while not dl.done():
+                    await asyncio.sleep(0.5)
+                    cur = civitai_client.CURRENT_DOWNLOAD
+                    await self.broadcast({"type": "loradl", "name": name, "done_bytes": cur.get("done"),
+                                          "total": cur.get("total"), "percent": cur.get("percent"),
+                                          "speed": cur.get("speed")})
+                await dl
+                await self.broadcast({"type": "loradl", "name": name, "percent": 100, "finished": True})
+            except asyncio.CancelledError:
+                dest.unlink(missing_ok=True)
+                await self.broadcast({"type": "loradl", "name": name, "cancelled": True})
+            except Exception as ex:  # noqa: BLE001
+                dest.unlink(missing_ok=True)
+                await self.broadcast({"type": "loradl", "name": name, "error": str(ex)[:300]})
+            finally:
+                state["done"] = True
+
+        self.lora_dl_task = asyncio.create_task(work())
+        return web.json_response({"ok": True, "name": name, "dir": str(folder)})
+
+    async def h_loras_download_cancel(self, _req):
+        dl = (self.lora_dl or {}).get("task")
+        if dl and not dl.done():
+            dl.cancel()
+            return web.json_response({"ok": True})
+        return web.json_response({"ok": False})
+
+    async def h_loras_open_folder(self, _req):
+        folder = self.loras_folder()
+        if not folder or not folder.parent.is_dir():
+            raise web.HTTPBadRequest(text="Не найдена папка models вашего ComfyUI")
+        folder.mkdir(parents=True, exist_ok=True)
+        open_in_explorer(folder)
+        return web.json_response({"ok": True, "dir": str(folder)})
 
     def optional_loras(self, form, pairs):
         """(file name, strength) for the optional LoRAs the user switched on and this ComfyUI has."""
@@ -3061,6 +3338,265 @@ class App:
             "mode": "montage", "sub": "Зерно плёнки", "prompt": (item.get("prompt") or name or "")[:100], "aspect": item.get("aspect", ""), "q": "",
             "len": ln, "res": item.get("res", ""), "seed": 0,
             "inputs": [media_input("Клип", "video", comfy=res["name"], len=ln)]}, last_output=True)
+
+    # ---------- FFmpeg: the portable build and the fast montage studio ----------
+    # The app itself never needs FFmpeg: ComfyUI joins the clips. This studio is for the case when a join
+    # must take seconds (a long reel, a re-cut, a title) and must not occupy the video card at all.
+
+    def ffmpeg_dir(self):
+        """Where the portable FFmpeg lives: the folder the user chose, else <app folder>/tools/ffmpeg."""
+        return ffmpeg_mgr.get_ffmpeg_dir(self.config, TOOLS_DIR)
+
+    def ffmpeg_status(self):
+        st = ffmpeg_mgr.get_ffmpeg_status(self.config, TOOLS_DIR)
+        dl = self.ffmpeg_dl
+        st["downloading"] = bool(dl and not dl.get("done"))
+        st["progress"] = {"pct": dl.get("pct", 0), "text": dl.get("text", "")} if st["downloading"] else None
+        return st
+
+    async def h_ffmpeg_status(self, _req):
+        return web.json_response(self.ffmpeg_status())
+
+    async def h_ffmpeg_download(self, req):
+        """Install (or update) the portable FFmpeg into the app's own folder, with progress in the UI."""
+        body = {}
+        if req.can_read_body:
+            try:
+                body = await req.json() or {}
+            except ValueError:
+                body = {}
+        if self.ffmpeg_dl and not self.ffmpeg_dl.get("done"):
+            raise web.HTTPConflict(text="FFmpeg уже скачивается")
+        folder = Path(str(body.get("folder") or self.ffmpeg_dir()))
+        cancel = threading.Event()
+        state = {"cancel": cancel, "pct": 0, "text": "Начинаем…", "done": False}
+        self.ffmpeg_dl = state
+        loop = asyncio.get_running_loop()
+
+        def prog(pct, text):
+            state["pct"], state["text"] = int(pct), str(text)
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    self.broadcast({"type": "ffmpegdl", "pct": state["pct"], "text": state["text"]}), loop)
+            except Exception:
+                pass
+
+        async def work():
+            try:
+                res = await asyncio.to_thread(ffmpeg_mgr.download_and_extract_ffmpeg_sync, folder, prog, cancel)
+            except Exception as ex:  # noqa: BLE001 - the UI needs a message, not a traceback
+                res = {"ok": False, "error": str(ex)}
+            state["done"] = True
+            if res.get("ok"):
+                self.config.update(ffmpeg_dir=str(folder))
+                await self.broadcast({"type": "ffmpegdl", "done": True, "pct": 100, "text": "FFmpeg установлен"})
+            else:
+                await self.broadcast({"type": "ffmpegdl", "done": True, "error": res.get("error") or "не удалось установить FFmpeg",
+                                      "cancelled": bool(res.get("cancelled"))})
+
+        self.ffmpeg_dl_task = asyncio.create_task(work())
+        return web.json_response({"started": True})
+
+    async def h_ffmpeg_download_cancel(self, _req):
+        if self.ffmpeg_dl:
+            self.ffmpeg_dl["cancel"].set()
+        return web.json_response({"ok": True})
+
+    async def h_ffmpeg_set_folder(self, req):
+        folder = Path(str((await req.json()).get("folder") or ""))
+        ff, fp = ffmpeg_mgr.find_ffmpeg(folder)
+        if not (ff and fp):
+            raise web.HTTPBadRequest(text="В этой папке нет ffmpeg.exe и ffprobe.exe. Укажите папку, где они лежат.")
+        self.config.update(ffmpeg_dir=str(folder))
+        return web.json_response(self.ffmpeg_status())
+
+    async def h_ffmpeg_reset_folder(self, _req):
+        self.config.update(ffmpeg_dir="")
+        return web.json_response(self.ffmpeg_status())
+
+    async def h_ffmpeg_open_folder(self, _req):
+        folder = self.ffmpeg_dir()
+        folder.mkdir(parents=True, exist_ok=True)
+        open_in_explorer(folder)
+        return web.json_response({"ok": True, "dir": str(folder)})
+
+    async def h_ffmpeg_check_update(self, _req):
+        st = self.ffmpeg_status()
+        res = await asyncio.to_thread(ffmpeg_mgr.check_ffmpeg_update, st.get("version"))
+        return web.json_response({**res, "current": st.get("version")})
+
+    async def ffmpeg_clip_file(self, item, tmp):
+        """A file on disk for one clip of the montage (a Library item or a waiting draft)."""
+        p = self.file_path(item)
+        if p and p.exists():
+            return p
+        f = item.get("file") or {}
+        if f.get("type") == "local":
+            raise web.HTTPBadRequest(text="Один из клипов удалён с диска: «" + str(item.get("prompt") or item.get("id"))[:40] + "»")
+        dest = tmp / f"h3s_ff_{uuid.uuid4().hex[:10]}.{item.get('ext') or 'mp4'}"
+        params = {"filename": f["filename"], "subfolder": f.get("subfolder", ""), "type": f.get("type", "output")}
+        async with self.session.get(self.comfy + "/view", params=params) as r:
+            if r.status != 200:
+                raise web.HTTPBadRequest(text="Не удалось найти один из клипов: он удалён с диска?")
+            with open(dest, "wb") as out:
+                async for chunk in r.content.iter_chunked(1 << 20):
+                    out.write(chunk)
+        return dest
+
+    async def h_ffmpeg_montage(self, req):
+        """Join clips with the portable FFmpeg (fast, no video card): returns the id of a background job."""
+        st = self.ffmpeg_status()
+        if not st["installed"]:
+            raise web.HTTPBadRequest(text="Сначала установите FFmpeg: одна кнопка, около 100 МБ, ставится в папку программы.")
+        form, files = {}, {}
+        async for field in await req.multipart():
+            if field.name.startswith("file_") or field.name == "music":
+                data = await field.read()
+                if field.name == "music" and len(data) > 40 * 1024 * 1024:
+                    raise web.HTTPBadRequest(text="Музыкальный файл больше 40 МБ: возьмите дорожку покороче.")
+                key = "music" if field.name == "music" else field.name[5:]
+                files[key] = (field.filename or "", data)
+            else:
+                form[field.name] = await field.text()
+        try:
+            ids = [i for i in json.loads(form.get("ids") or "[]") if isinstance(i, str)][:30]
+        except ValueError:
+            ids = []
+        try:
+            durs = json.loads(form.get("durs") or "[]")
+        except ValueError:
+            durs = []
+        if not ids:
+            raise web.HTTPBadRequest(text="Добавьте хотя бы один клип")
+        tmp = DATA_DIR / "cache" / "ffmpeg"
+        tmp.mkdir(parents=True, exist_ok=True)
+        paths, cleanup = [], []
+        for i in ids:
+            if i.startswith("up:"):
+                k = i[3:]
+                if k not in files:
+                    raise web.HTTPBadRequest(text="Файл с компьютера не дошёл до программы, добавьте его ещё раз")
+                ext = (Path(files[k][0]).suffix.lstrip(".").lower() or "mp4")[:5]
+                p = tmp / f"h3s_ff_{uuid.uuid4().hex[:10]}.{ext}"
+                p.write_bytes(files[k][1])
+                cleanup.append(p)
+            else:
+                item = self.find_item(i)   # a Library clip or a draft
+                if not item or item.get("kind") == "image":
+                    raise web.HTTPBadRequest(text="Один из клипов не найден: возможно, его убрали из Библиотеки")
+                p = await self.ffmpeg_clip_file(item, tmp)
+                if p.parent == tmp:
+                    cleanup.append(p)
+            paths.append(p)
+
+        def num(key, default, low=None, high=None):
+            try:
+                v = float(form.get(key)) if form.get(key) not in (None, "") else default
+            except ValueError:
+                v = default
+            if low is not None:
+                v = max(low, v)
+            if high is not None:
+                v = min(high, v)
+            return v
+
+        options = {
+            "cuts": [round(float(d), 3) if isinstance(d, (int, float)) and 0.3 <= d < 3600 else None
+                     for d in (durs[:len(ids)] + [None] * len(ids))[:len(ids)]],
+            "speed": num("speed", 1.0, 0.25, 4.0),
+            "transition": form.get("transition") or "none",
+            "transition_dur": num("transition_dur", 0.5, 0.1, 3.0),
+            "aspect": form.get("aspect") or "original",
+            "fit_mode": form.get("fit_mode") or "blur",
+            "color": {"brightness": num("brightness", 0.0, -1.0, 1.0),
+                      "contrast": num("contrast", 1.0, 0.0, 3.0),
+                      "saturation": num("saturation", 1.0, 0.0, 3.0),
+                      "filter": form.get("filter") or "none"},
+            "title": {"text": (form.get("title") or "")[:200],
+                      "position": form.get("title_pos") or "bottom",
+                      "size": num("title_size", 42, 12, 160),
+                      "color": form.get("title_color") or "#ffffff"},
+        }
+        if "music" in files:
+            music = tmp / f"h3s_ff_music_{uuid.uuid4().hex[:8]}{Path(files['music'][0]).suffix or '.mp3'}"
+            music.write_bytes(files["music"][1])
+            cleanup.append(music)
+            options["audio_path"] = str(music)
+            options["audio_opts"] = {"loop": True, "mode": form.get("music_mode") or "mix",
+                                     "music_vol": num("music_vol", 0.35, 0.0, 1.5),
+                                     "video_vol": num("video_vol", 1.0, 0.0, 1.5),
+                                     "fade": num("music_fade", 1.0, 0.0, 10.0)}
+        preview = form.get("preview") == "1"   # the Library waits for «Добавить в библиотеку», as in the ComfyUI join
+        out_dir = self.results_dir()
+        try:
+            out_dir.mkdir(parents=True, exist_ok=True)
+            probe = out_dir / f".h3s_{uuid.uuid4().hex[:6]}.tmp"
+            probe.write_bytes(b"")
+            probe.unlink()
+        except OSError:
+            raise web.HTTPBadRequest(text=f"Папка результатов недоступна для записи: {out_dir}. Выберите другую в разделе «Настройки».")
+        dest = out_dir / f"{datetime.now():%Y%m%d}_{uuid.uuid4().hex[:8]}.mp4"
+        pid = "ff-" + uuid.uuid4().hex[:10]
+        cancel = threading.Event()
+        task = asyncio.create_task(self.run_ffmpeg_job(pid, dest, paths, cleanup, options, cancel, len(ids), preview))
+        self.ffmpeg_jobs[pid] = {"cancel": cancel, "task": task, "dest": dest}
+        return web.json_response({"prompt_id": pid})
+
+    async def run_ffmpeg_job(self, pid, dest, paths, cleanup, options, cancel, count, preview):
+        """The montage itself: FFmpeg in a worker thread, progress into the queue dock, the result into the Library."""
+        st = self.ffmpeg_status()
+        loop = asyncio.get_running_loop()
+        last = {"pct": -1}
+
+        def prog(pct, _text):
+            pct = max(0, min(100, int(pct)))
+            if pct == last["pct"]:
+                return                      # one message per percent, not per line of ffmpeg output
+            last["pct"] = pct
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    self.broadcast({"type": "stage", "prompt_id": pid, "stage": "ffmpeg", "step": pct, "max": 100}), loop)
+            except Exception:
+                pass
+
+        try:
+            await asyncio.to_thread(ffmpeg_mgr.run_studio_montage, st["ffmpeg_path"], st["ffprobe_path"],
+                                    [str(p) for p in paths], str(dest), options, prog, cancel)
+            info = await asyncio.to_thread(ffmpeg_mgr.probe_media, st["ffprobe_path"], str(dest))
+            v = (info or {}).get("video") or None
+            res = f'{v["width"]}×{v["height"]}' if v else ""
+            word = "клип" if count == 1 else "клипа" if count < 5 else "клипов"
+            item = {"id": uuid.uuid4().hex[:12], "kind": "video", "mode": "montage",
+                    "sub": f"FFmpeg · {count} {word}", "prompt": "",
+                    "aspect": options.get("aspect") if options.get("aspect") != "original" else "",
+                    "q": "", "len": round(float((info or {}).get("duration") or 0), 1), "res": res,
+                    "seed": 0, "prompt_id": pid, "date": datetime.now().isoformat(timespec="seconds"),
+                    "file": {"type": "local", "path": str(dest), "filename": dest.name},
+                    "origin": {"kind": "ffmpeg"}}
+            if preview:
+                self.hold_preview(item)
+            else:
+                self.library.add(item)
+            await self.broadcast({"type": "done", "prompt_id": pid, "item": self.public(item)})
+        except Exception as ex:  # noqa: BLE001 - cancel and ffmpeg errors both land here
+            dest.unlink(missing_ok=True)
+            msg = "Сборка остановлена" if cancel.is_set() else f"FFmpeg не справился: {ex}"
+            await self.broadcast({"type": "error", "prompt_id": pid, "message": str(msg)[:300]})
+        finally:
+            for p in cleanup:
+                try:
+                    Path(p).unlink(missing_ok=True)
+                except OSError:
+                    pass
+            self.ffmpeg_jobs.pop(pid, None)
+
+    async def h_ffmpeg_cancel(self, req):
+        body = await req.json()
+        job = self.ffmpeg_jobs.get(str(body.get("prompt_id") or ""))
+        if not job:
+            raise web.HTTPNotFound()
+        job["cancel"].set()
+        return web.json_response({"ok": True})
 
     async def h_generate_actor(self, req):
         await self.need_models("actor")
@@ -3988,6 +4524,7 @@ def send_to_recycle_bin(paths):
 def build_app(comfy_override=None, port=None):
     state = App(comfy_override, port)
     app = web.Application(client_max_size=300 * 1024 * 1024)
+    app.middlewares.append(same_origin_only)  # a foreign page must not drive the server (form POST, WebSocket)
     app.middlewares.append(state.agents.middleware)  # only /api/agent/v1/ is guarded: the window needs no key
     app.on_startup.append(state.start)
     app.on_cleanup.append(state.stop)
@@ -4054,6 +4591,27 @@ def build_app(comfy_override=None, port=None):
         web.post("/api/generate/swap", state.h_generate_swap),
         web.post("/api/generate/long", state.h_generate_long),
         web.post("/api/montage", state.h_montage),
+        web.get("/api/ffmpeg/status", state.h_ffmpeg_status),
+        web.post("/api/ffmpeg/download", state.h_ffmpeg_download),
+        web.post("/api/ffmpeg/download/cancel", state.h_ffmpeg_download_cancel),
+        web.post("/api/ffmpeg/set-folder", state.h_ffmpeg_set_folder),
+        web.post("/api/ffmpeg/reset-folder", state.h_ffmpeg_reset_folder),
+        web.post("/api/ffmpeg/open-folder", state.h_ffmpeg_open_folder),
+        web.get("/api/ffmpeg/check-update", state.h_ffmpeg_check_update),
+        web.post("/api/ffmpeg/montage", state.h_ffmpeg_montage),
+        web.post("/api/ffmpeg/cancel", state.h_ffmpeg_cancel),
+        web.get("/api/loras/registry", state.h_loras_registry),
+        web.get("/api/loras/conflicts", state.h_loras_conflicts),
+        web.post("/api/loras/meta", state.h_loras_meta_save),
+        web.get("/api/loras/tokens", state.h_loras_tokens_get),
+        web.post("/api/loras/tokens", state.h_loras_tokens_save),
+        web.post("/api/loras/open-folder", state.h_loras_open_folder),
+        web.post("/api/loras/download", state.h_loras_download),
+        web.post("/api/loras/download/cancel", state.h_loras_download_cancel),
+        web.get("/api/civitai/search", state.h_civitai_search),
+        web.post("/api/civitai/resolve", state.h_civitai_resolve),
+        web.get("/api/hf/search", state.h_hf_search),
+        web.post("/api/hf/resolve", state.h_hf_resolve),
         web.get("/api/long/state", state.h_long_state),
         web.get("/api/long/project", state.h_long_project),
         web.post("/api/long/project", state.h_long_project),
