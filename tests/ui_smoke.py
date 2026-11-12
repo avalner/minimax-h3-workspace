@@ -115,7 +115,8 @@ class CDP:
         if result.get("exceptionDetails"):
             detail = result["exceptionDetails"]
             text = (detail.get("exception") or {}).get("description") or detail.get("text")
-            raise RuntimeError(f"JS: {text}")
+            page = " | ".join(self.exceptions()[-3:])
+            raise RuntimeError(f"JS: {text}" + (f" [page: {page}]" if page else ""))
         return (result.get("result") or {}).get("value")
 
     async def wait_for(self, expression: str, timeout: float = 30.0, step: float = 0.15):
@@ -318,8 +319,31 @@ async def run_page(base: str, browser: str, shots: Path):
                 check("the module hands the selected fragment to the chat as a WAV file",
                       lips and lips["clip"] > 44, str(lips))
 
+                # The shared factory: five sections in one module, built at load because the
+                # remembered files and the details window need their slots during setup.
+                refs = await cdp.evaluate(
+                    "(() => { document.querySelector('.nav[data-view=\"refs\"]').click();"
+                    " const params = document.querySelector('#view-refs .rm-params');"
+                    " params.querySelector('.chip[data-a=\"9:16\"]').click();"
+                    " window.h3Refs.modelsChanged();"
+                    " return {modes: Object.keys(window.RM).sort(),"
+                    "  aspect: window.RM.refs.S.aspect,"
+                    "  slots: document.querySelectorAll('#view-refs .ref').length,"
+                    "  built: ['refs', 'actor', 'swap', 'action', 'long'].every(m =>"
+                    "   window.RM[m] && window.RM[m].root && window.RM[m].root.childElementCount > 0),"
+                    "  flush: typeof window.RM.long.root._flush,"
+                    "  preview: typeof window.RM.refs.prev.pause}; })()")
+                check("the refs family publishes five built sections through window.RM",
+                      refs and refs["modes"] == ["action", "actor", "long", "refs", "swap"]
+                      and refs["built"] and refs["slots"] == 9, str(refs))
+                check("a format click in the shared parameters reaches the mode state",
+                      refs and refs["aspect"] == "9:16", str(refs))
+                check("the long project can be flushed and the preview paused",
+                      refs and refs["flush"] == "function" and refs["preview"] == "function", str(refs))
+
                 # The same two sections twice more, with the screenshots a human can look at.
                 for view, name in (("video", "video"), ("krea", "krea"), ("lipsync", "lipsync"),
+                                   ("refs", "refs"), ("long", "long"),
                                    ("montage", "montage"), ("library", "library"), ("settings", "settings")):
                     opened = await cdp.evaluate(
                         f"(() => {{ const b = document.querySelector('.nav[data-view=\"{view}\"]');"
