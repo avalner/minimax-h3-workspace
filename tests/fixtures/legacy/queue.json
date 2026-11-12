@@ -1,0 +1,25 @@
+[
+ {
+  "graph": {"1": {"class_type": "UNETLoader", "inputs": {"unet_name": "test.safetensors"}},
+            "2": {"class_type": "SaveVideo", "inputs": {"images": ["1", 0], "filename_prefix": "h3s"}}},
+  "stages": {"2": "save"},
+  "meta": {"mode": "video", "prompt": "задание, которое шло при закрытии", "seed": 42, "res": "1280×720"},
+  "last_output": false,
+  "titles": {"2": "Результат"},
+  "pid": "aaaa-bbbb-cccc-dddd",
+  "preview": false,
+  "finalizing": false,
+  "saved": 1763000000.0
+ },
+ {
+  "graph": {"1": {"class_type": "UNETLoader", "inputs": {"unet_name": "test.safetensors"}}},
+  "stages": {},
+  "meta": {"mode": "krea", "prompt": "черновик картинки", "seed": 7},
+  "last_output": true,
+  "titles": {},
+  "pid": "eeee-ffff-0000-1111",
+  "preview": true,
+  "finalizing": true,
+  "saved": 1763000100.0
+ }
+]

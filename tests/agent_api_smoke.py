@@ -31,6 +31,8 @@ from pathlib import Path
 APP_DIR = Path(__file__).resolve().parent.parent / "app"
 PREFIX = "/api/agent/v1/"
 
+from tempdir import make_temp_dir  # noqa: E402  (the test runs as a script from tests/)
+
 
 def free_port():
     with socket.socket() as s:
@@ -252,7 +254,7 @@ def main():
         print(f"FAIL  {args.python} has no aiohttp: pass --python with an interpreter that has it")
         return 2
 
-    root = Path(tempfile.mkdtemp(prefix="h3s-agent-", dir=args.tmp))
+    root = make_temp_dir("h3s-agent-", args.tmp)
     data = root / "data"
     roots = root / "roots"
     roots.mkdir(parents=True)

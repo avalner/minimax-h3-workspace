@@ -30,6 +30,8 @@ SERVER = ROOT / "mcp" / "h3studio.js"
 TOOLS = {"studio_status", "studio_capabilities", "studio_asset", "studio_image_to_video",
          "studio_job", "studio_wait", "studio_cancel", "studio_library"}
 
+from tempdir import make_temp_dir  # noqa: E402  (the test runs as a script from tests/)
+
 
 def make_png(path, w=4, h=3):
     raw = b"".join(b"\x00" + bytes([240, 180, 40]) * w for _ in range(h))
@@ -137,7 +139,7 @@ def main():
         text = caps["content"][0]["text"]
         check("studio_capabilities shows modes and limits", "modes:" in text and "limits:" in text, text[:200])
 
-        tmp = Path(tempfile.mkdtemp(prefix="h3s-mcp-"))
+        tmp = make_temp_dir("h3s-mcp-")
         png = tmp / "frame.png"
         make_png(png)
         asset = mcp.tool("studio_asset", {"path": str(png)})

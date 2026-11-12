@@ -1,0 +1,43 @@
+[
+ {
+  "id": "a1b2c3d4e5f6",
+  "prompt_id": "0f0e1d2c-1111-2222-3333-444455556666",
+  "mode": "video",
+  "prompt": "тестовый кадр",
+  "seed": 42,
+  "res": "1280×720",
+  "len": 5,
+  "date": "2026-10-01T12:00:00",
+  "fav": true,
+  "kind": "video",
+  "ext": "mp4",
+  "file": {"filename": "h3s_0001.mp4", "subfolder": "h3studio", "type": "output", "metadata": {"width": 1280, "height": 720}},
+  "local": "D:\\My Library\\20261001_a1b2c3d4e5f6_h3s_0001.mp4",
+  "label": "основной"
+ },
+ {
+  "id": "b2c3d4e5f6a1",
+  "prompt_id": "0f0e1d2c-1111-2222-3333-444455556667",
+  "mode": "krea",
+  "prompt": "тестовая картинка",
+  "seed": 7,
+  "date": "2026-10-02T09:30:00",
+  "fav": false,
+  "kind": "image",
+  "ext": "png",
+  "file": {"filename": "h3s_0002.png", "subfolder": "h3studio", "type": "output"},
+  "note": "поле, которого текущая версия не знает"
+ },
+ {
+  "id": "c3d4e5f6a1b2",
+  "mode": "video",
+  "prompt": "клип без собственной копии",
+  "seed": 1,
+  "date": "2026-10-03T18:05:00",
+  "fav": false,
+  "kind": "video",
+  "ext": "mp4",
+  "file": {"filename": "h3s_0003.mp4", "subfolder": "", "type": "local", "path": "E:\\Clips\\my_clip.mp4"},
+  "missing": true
+ }
+]

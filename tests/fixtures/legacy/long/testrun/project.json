@@ -1,0 +1,10 @@
+{
+ "title": "Тестовый длинный проект",
+ "scenes": [
+  {"id": "s1", "text": "первая сцена", "seconds": 5},
+  {"id": "s2", "text": "вторая сцена", "seconds": 5}
+ ],
+ "res": "1280x720",
+ "fps": 24,
+ "unknown_future_field": {"nested": [1, 2, 3]}
+}
