@@ -40,6 +40,7 @@ import aiohttp
 from aiohttp import web
 
 import workflows as wf
+from storage.atomic import atomic_write_json
 from version import APP_VERSION
 
 PREFIX = "/api/agent/v1/"
@@ -181,7 +182,8 @@ class Assets:
             size_ = image_size(dest)
             if size_:
                 meta["width"], meta["height"] = int(size_[0]), int(size_[1])
-        self._meta_path(asset_id).write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+        self._meta_path(asset_id).parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(self._meta_path(asset_id), meta)
         return meta, False
 
 
@@ -215,9 +217,7 @@ class AgentAPI:
                 "url": f"http://127.0.0.1:{port}{PREFIX}"}
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = path.with_name(path.name + ".tmp")
-            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
-            tmp.replace(path)
+            atomic_write_json(path, data, indent=1)
             _restrict_to_user(path)
         except OSError:
             return None

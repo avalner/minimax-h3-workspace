@@ -64,7 +64,7 @@ python app/main.py
 
 Сборка установщика: PyInstaller (`app/build/h3studio.spec`) и Inno Setup (`app/build/h3studio.iss`).
 
-Проверка агентского API: `python tests/agent_api_smoke.py --python <python, в котором есть aiohttp>`; описание — в `docs/agent-api.md`.
+Проверки: `python tests/run.py` — все проверки по группам (`python tests/run.py --list`), каждая в своей временной папке данных, без рабочего ComfyUI; как это запускается на машине без пакетов в интерпретаторе — в `docs/refactoring/stage-0-baseline.md`. Отдельно агентский API: `python tests/agent_api_smoke.py --python <python, в котором есть aiohttp>`; описание — в `docs/agent-api.md`.
 
 ## Что скачивается и откуда
 
@@ -105,6 +105,7 @@ ComfyUI» на случай, когда перезапустить хочетс�
 |---|---|
 | `app/main.py` | окно приложения (WebView2) |
 | `app/server.py` | локальный сервер: связь с ComfyUI, библиотека, агент, облако |
+| `app/storage/atomic.py` | запись небольших файлов состояния (настройки, библиотека, очередь): сбой не оставляет половину файла |
 | `app/workflows.py` | графы ComfyUI для всех режимов |
 | `app/catalog.py` | какие модели и ноды нужны, подбор под видеокарту |
 | `app/engine.py` | определение железа, установка и запуск ComfyUI, докачка |

@@ -47,6 +47,7 @@ import report
 import speech
 import updater
 import watchdog
+from storage.atomic import atomic_write_json, atomic_write_text
 from version import APP_VERSION
 
 
@@ -442,21 +443,28 @@ class Library:
             self.items = []
 
     def save(self):
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(self.items, ensure_ascii=False, indent=1), encoding="utf-8")
-        tmp.replace(self.path)
+        """Write the whole list in one atomic step: a crash must not leave half a library."""
+        atomic_write_json(self.path, self.items, indent=1)
 
     def get(self, item_id):
         return next((x for x in self.items if x["id"] == item_id), None)
 
     def add(self, item):
         self.items.insert(0, item)
-        self.save()
+        try:
+            self.save()
+        except OSError:
+            self.items.pop(0)   # never keep an item in memory that is not on disk
+            raise
 
     def remove(self, item_id):
-        self.items = [x for x in self.items if x["id"] != item_id]
-        self.save()
+        old = self.items
+        self.items = [x for x in old if x["id"] != item_id]
+        try:
+            self.save()
+        except OSError:
+            self.items = old
+            raise
 
 
 class App:
@@ -469,6 +477,7 @@ class App:
         self.history = {}  # prompt_id -> what a failed or stopped job was made from (the details window asks later)
         self.session = None
         self.browsers = set()
+        self.queue_save_error = None   # the last failure to write queue.json, shown in the window instead of a silent loss
         self.saved_queue = self.load_queue()  # unfinished jobs of the previous run (asked about at start)
         self.jobs = JobStore(self.save_queue)  # prompt_id -> job dict
         self.library = Library(LIBRARY_FILE)
@@ -908,7 +917,9 @@ class App:
 
     async def drop_engine_jobs(self, message=None, kind="error"):
         """The engine was replaced, so its queue is gone: nothing of what it had will finish now."""
-        for jid in [j for j, job in self.jobs.items() if not job.get("task")]:
+        for jid in [j for j, job in self.jobs.items() if not job.get("task") and not job.get("finalizing")]:
+            # a job that is being finalized has already finished in the engine: only its result is
+            # being written, so a replaced engine is not a reason to declare it lost
             self.keep_meta(self.jobs.get(jid))
             self.jobs.pop(jid, None)
             await self.broadcast({"type": kind, "prompt_id": jid, **({"message": message} if message else {})})
@@ -1074,9 +1085,36 @@ class App:
         return {}
 
     async def finish_job(self, job):
+        """Register the result of a job that ComfyUI has finished.
+
+        Four different places ask for this — the websocket event, the reconnect reconciliation, the
+        cancel race and the lost-job watch — and any of them can arrive twice or at the same moment.
+        So the registration happens once per job, and the job leaves the queue only *after* its result
+        is registered: between the generation and the library record the job stays visible, and a
+        restart in that window can pick the result up instead of rendering it again.
+
+        A failure here is not fatal: the job stays in the queue marked for retry, the error is shown,
+        and the next event (or the watch) tries again — the clip on disk is not generated twice.
+        """
+        if job.get("finalizing") or job.get("finalized"):
+            return   # a second event for the same job: the first one is registering its result
+        pid = job["prompt_id"]
+        job["finalizing"] = True
+        job["finalize_tries"] = job.get("finalize_tries", 0) + 1
+        self.save_queue()   # a crash in the middle of finalization must be known to the next start
+        try:
+            await self._finish_job(job)
+        except Exception as e:  # noqa: BLE001 - a lost library record is better than a lost clip
+            job["finalizing"] = False
+            self.note_error(f"Результат задания {pid} сгенерирован, но не сохранился: {type(e).__name__}: {e}")
+            await self.broadcast({"type": "notice", "text": (
+                "Результат готов, но записать его в Библиотеку не удалось: " + str(e) +
+                ". Задание осталось в очереди — можно повторить.")})
+            self.save_queue()
+
+    async def _finish_job(self, job):
         pid = job["prompt_id"]
         self.keep_meta(job)
-        self.jobs.pop(pid, None)
         outputs = await self.job_outputs(pid)
         tagged = [(nid, f) for nid, out in outputs.items() for lst in out.values() if isinstance(lst, list)
                   for f in lst if isinstance(f, dict) and "filename" in f]
@@ -1097,14 +1135,15 @@ class App:
                         d.mkdir(parents=True, exist_ok=True)
                         sfx = "_d" if lg.get("draft") else ""
                         (d / f"state_{lg['part']}{sfx}.latent").write_bytes(body)
-                        (d / f"state_{lg['part']}{sfx}.json").write_text(
-                            json.dumps({"res": (job.get("meta") or {}).get("res", "")}, ensure_ascii=False), encoding="utf-8")
+                        atomic_write_json(d / f"state_{lg['part']}{sfx}.json",
+                                          {"res": (job.get("meta") or {}).get("res", "")})
                 except Exception as e:
                     self.note_error(f"Не удалось сохранить состояние сцены: {e}")
         images = [f for f in files if f["filename"].lower().endswith((".png", ".jpg", ".jpeg", ".webp"))
                   and f.get("type", "output") == "output"]
         if not videos and not images:
             self.note_error(f"ComfyUI закончил работу, но в истории нет файлов (папка {self.output_dir or 'output'})")
+            self.jobs.pop(pid, None)   # there is nothing to wait for any more
             await self.broadcast({"type": "error", "prompt_id": pid,
                                   "message": "ComfyUI не вернул ни видео, ни изображение: проверьте папку output"})
             return
@@ -1134,9 +1173,12 @@ class App:
             if preview:   # the picture sections: wait for «Добавить в библиотеку»
                 self.hold_preview(item)
             else:
-                self.library.add(item)
+                self.library.add(item)   # may raise: then the job stays and this is tried again
                 await self.archive_item(item)
             items.append(self.public(item))
+        job["finalized"] = True
+        job["finalizing"] = False
+        self.jobs.pop(pid, None)   # the result is registered: only now the job leaves the queue
         await self.broadcast({"type": "done", "prompt_id": pid, "item": items[0], "items": items})
 
     async def broadcast(self, payload):
@@ -1294,7 +1336,9 @@ class App:
 
     async def h_status(self, _req):
         base = {"configured": bool(self.config.configured or self.comfy_override),
-                "engine": self.config.get("engine"), "installing": bool(self.installer)}
+                "engine": self.config.get("engine"), "installing": bool(self.installer),
+                # a queue that could not be written is not a saved queue: the window says so instead of hiding it
+                "queue_save_error": self.queue_save_error}
         try:
             stats = await self.system_stats()
         except Exception:
@@ -1791,39 +1835,128 @@ class App:
         return [j for j in data if isinstance(j, dict) and j.get("graph") and j.get("saved", 0) > week]
 
     def save_queue(self):
+        """Write the jobs that are not finished yet, atomically, so a restart can pick them up.
+
+        Called on every change of the job list, so it must not raise into the caller's state change:
+        a failed write is remembered (`queue_save_error`) and reported in the window, because the
+        queue on disk then does not match what the user sees.
+        """
         items = list(self.saved_queue) + [
             {"graph": j["graph"], "stages": j.get("stages") or {}, "meta": j.get("meta") or {}, "last_output": j.get("last_output", False),
              "titles": j.get("titles") or {}, "pid": j.get("prompt_id"), "preview": j.get("preview", False),
-             "saved": datetime.now().timestamp()}
+             "finalizing": bool(j.get("finalizing")), "saved": datetime.now().timestamp()}
             for j in dict.values(self.jobs) if j.get("graph")]
         try:
             if items:
-                QUEUE_FILE.write_text(json.dumps(items, ensure_ascii=False), encoding="utf-8")
+                atomic_write_json(QUEUE_FILE, items)
             elif QUEUE_FILE.exists():
                 QUEUE_FILE.unlink()
-        except OSError:
-            pass
+            self.queue_save_error = None
+        except OSError as e:
+            self.queue_save_error = str(e)
+            self.note_error(f"Не удалось сохранить очередь заданий: {e}")
 
     async def h_queue_saved(self, _req):
         return web.json_response({"count": len(self.saved_queue),
                                   "items": [{"mode": j["meta"].get("mode"), "prompt": (j["meta"].get("prompt") or "")[:80]} for j in self.saved_queue]})
 
-    async def h_queue_resume(self, _req):
-        items, self.saved_queue = list(self.saved_queue), []
-        self.save_queue()
-        out = []
-        try:  # a job that ComfyUI still has (or already finished) while only the program was closed is not run twice
-            _, q = await self.comfy_json("GET", "/queue")
-            alive = {str(x[1]) for key in ("queue_running", "queue_pending") for x in (q or {}).get(key, []) if len(x) > 1}
+    def restore_job(self, saved, pid, state="queued"):
+        """A job of the previous run, put back into the live queue so the watch, the details window and
+        the agent API see it again. The `finalizing` mark is not restored: whoever resumes a job decides
+        whether it still has to be finalized."""
+        now = datetime.now().timestamp()
+        return {"prompt_id": pid, "state": state, "stages": saved.get("stages") or {}, "stage": None,
+                "meta": saved.get("meta") or {}, "last_output": saved.get("last_output", False),
+                "titles": saved.get("titles") or {}, "graph": saved.get("graph"), "scenes": None,
+                "t0": now, "last_ev": now, "preview": saved.get("preview", False)}
+
+    async def _history_done(self, pid):
+        """What ComfyUI's history says about a job of the previous run: finished, failed or unknown."""
+        try:
+            _, hist = await self.comfy_json("GET", f"/history/{pid}", timeout=aiohttp.ClientTimeout(total=10))
         except Exception:
-            alive = set()
-        for j in items:
-            if j.get("pid") and (j["pid"] in alive):
+            return "unknown"
+        entry = (hist or {}).get(pid)
+        if not entry:
+            return "unknown"
+        if entry.get("status", {}).get("status_str") == "error":
+            return "failed"
+        return "finished" if entry.get("outputs") else "unknown"
+
+    async def _resume_one(self, saved, running, pending, backend_ok, out):
+        """Resume one saved job; True when it may leave the saved list, False when it has to be kept."""
+        meta = saved.get("meta") or {}
+        mode, prompt = meta.get("mode"), (meta.get("prompt") or "")[:80]
+        pid = saved.get("pid")
+        live = ("running" if pid in running else "queued" if pid in pending else None) if pid else None
+        if live:  # ComfyUI still has it (or is running it): watch it instead of sending it twice
+            if pid not in self.jobs:
+                self.jobs[pid] = self.restore_job(saved, pid, state=live)
+            out.append({"prompt_id": pid, "mode": mode, "prompt": prompt, "state": live})
+            return True
+        if not backend_ok:
+            return False  # an engine that does not answer has not lost anything: keep the record as it is
+        if pid:
+            done = await self._history_done(pid)
+            if done == "finished":  # it finished while the window was closed: collect the result, do not render again
+                job = self.restore_job(saved, pid, state="running")
+                self.jobs[pid] = job
+                await self.finish_job(job)
+                if not job.get("finalized"):
+                    # the result could not be registered (e.g. the disk refused the Library write):
+                    # the record stays in the saved queue, which is what the next start retries from
+                    self.jobs.pop(pid, None)
+                    out.append({"prompt_id": pid, "mode": mode, "prompt": prompt, "state": "queued"})
+                    return False
+                out.append({"prompt_id": pid, "mode": mode, "prompt": prompt, "state": "done"})
+                return True
+            if done == "failed":
+                self.recent[pid] = {"state": "error", "at": datetime.now().isoformat(timespec="seconds"),
+                                    "message": "ComfyUI закончил это задание с ошибкой, пока окно было закрыто"}
+                out.append({"prompt_id": pid, "mode": mode, "prompt": prompt, "state": "error"})
+                return True
+        resp = await self.queue(saved["graph"], saved.get("stages") or {}, meta, saved.get("last_output", False),
+                                saved.get("titles"), saved.get("preview", False))
+        body = json.loads(resp.text)
+        if resp.status != 200 or not body.get("prompt_id"):
+            raise RuntimeError(body.get("error") or f"ComfyUI отклонил задание ({resp.status})")
+        out.append({"prompt_id": body["prompt_id"], "mode": mode, "prompt": prompt, "state": "queued"})
+        return True
+
+    async def h_queue_resume(self, _req):
+        """Bring back the unfinished jobs of the previous run, each one on its own.
+
+        The saved list is not cleared up front: an item leaves it only after it was really resumed
+        (re-attached to a live job, taken from the history, or submitted again), so one broken item or
+        an engine that is not up yet cannot lose the rest. A ComfyUI that does not answer is not an
+        empty queue and its jobs are never sent to it blindly.
+        """
+        items = list(self.saved_queue)
+        if not items:
+            return web.json_response({"jobs": [], "restored": 0, "kept": 0, "unreachable": False})
+        running, pending, backend_ok = set(), set(), True
+        try:
+            _, q = await self.comfy_json("GET", "/queue")
+            for key, bucket in (("queue_running", running), ("queue_pending", pending)):
+                bucket.update(str(x[1]) for x in (q or {}).get(key, []) if len(x) > 1)
+        except Exception as e:
+            backend_ok = False
+            self.note_error(f"Очередь прошлого запуска ждёт ComfyUI: он не отвечает ({type(e).__name__})")
+        out, kept = [], 0
+        for saved in items:
+            try:
+                resumed = await self._resume_one(saved, running, pending, backend_ok, out)
+            except Exception as e:
+                self.note_error(f"Не удалось восстановить задание из прошлой очереди: {e}")
+                resumed = False
+            if not resumed:
+                kept += 1
                 continue
-            resp = await self.queue(j["graph"], j.get("stages") or {}, j.get("meta") or {}, j.get("last_output", False), j.get("titles"), j.get("preview", False))
-            pid = json.loads(resp.text)["prompt_id"]
-            out.append({"prompt_id": pid, "mode": j["meta"].get("mode"), "prompt": j["meta"].get("prompt", "")})
-        return web.json_response({"jobs": out})
+            self.saved_queue = [s for s in self.saved_queue if s is not saved]
+            self.save_queue()   # after every item: a crash in the middle must not submit anything twice
+        return web.json_response({
+            "jobs": out, "restored": len(out), "kept": kept, "unreachable": not backend_ok,
+            "error": None if backend_ok else "ComfyUI не отвечает: очередь сохранена и будет восстановлена позже"})
 
     async def h_queue_discard(self, _req):
         self.saved_queue = []
@@ -1837,7 +1970,8 @@ class App:
         job = self.jobs.get(pid)
         if job:
             out.update(state=job.get("state") or "queued", stage=job.get("stage"), step=job.get("step"),
-                       max=job.get("step_max"), created=job.get("t0"), meta=job.get("meta") or {})
+                       max=job.get("step_max"), created=job.get("t0"), meta=job.get("meta") or {},
+                       finalizing=bool(job.get("finalizing")))
             return web.json_response(out)
         items = [self.public(x) for x in (*self.library.items, *self.pending.values()) if x.get("prompt_id") == pid]
         if items:   # finished: the Library record keeps the job's own meta (prompt, format, inputs)
@@ -2060,7 +2194,14 @@ class App:
                     if job.get("preview"):
                         self.hold_preview(item)
                     else:
-                        self.library.add(item)
+                        try:
+                            self.library.add(item)
+                        except OSError as e:
+                            # the file is already on disk: report where it is instead of losing it
+                            self.note_error(f"Облачный результат не записался в Библиотеку: {e}")
+                            await self.broadcast({"type": "error", "prompt_id": pid, "message": (
+                                f"Видео скачано в файл {dest}, но в Библиотеку не попало: {e}")})
+                            return
                     await self.broadcast({"type": "done", "prompt_id": pid, "item": self.public(item)})
                     return
                 if status == "FAILED":
@@ -2170,7 +2311,7 @@ class App:
         WORKFLOWS_DIR.mkdir(parents=True, exist_ok=True)
         wid = uuid.uuid4().hex[:10]
         name = (body.get("name") or "Мой workflow").strip()[:80]
-        self.wf_path(wid).write_text(json.dumps({"name": name, "graph": graph}, ensure_ascii=False), encoding="utf-8")
+        atomic_write_json(self.wf_path(wid), {"name": name, "graph": graph})
         return web.json_response({"id": wid, "name": name})
 
     async def h_wf_delete(self, req):
@@ -3014,7 +3155,7 @@ class App:
                 raise web.HTTPBadRequest(text="bad project")
             d = LONG_DIR / run
             d.mkdir(parents=True, exist_ok=True)
-            (d / "project.json").write_text(json.dumps(body["project"], ensure_ascii=False), encoding="utf-8")
+            atomic_write_json(d / "project.json", body["project"])
             return web.json_response({"ok": True})
         run = re.sub(r"[^A-Za-z0-9]", "", req.query.get("run", ""))[:32]
         if not run and req.query.get("last"):   # the most recently saved project
@@ -3578,7 +3719,15 @@ class App:
             if preview:
                 self.hold_preview(item)
             else:
-                self.library.add(item)
+                try:
+                    self.library.add(item)
+                except OSError as e:
+                    # the built clip is on disk: a failed list write must not delete it as if the
+                    # build itself had failed
+                    self.note_error(f"Сборка готова, но не записалась в Библиотеку: {e}")
+                    await self.broadcast({"type": "error", "prompt_id": pid, "message": (
+                        f"Видео собрано и сохранено в файл {dest}, но в Библиотеку не попало: {e}")})
+                    return
             await self.broadcast({"type": "done", "prompt_id": pid, "item": self.public(item)})
         except Exception as ex:  # noqa: BLE001 - cancel and ffmpeg errors both land here
             dest.unlink(missing_ok=True)
@@ -3815,6 +3964,11 @@ class App:
     async def cancel_job(self, pid):
         """Stop one job: a cloud task, a waiting one, or the running one (ComfyUI has one running prompt at a time)."""
         job = self.jobs.get(pid)
+        if job and job.get("finalizing"):
+            # the generation is already over and its result is being written: interrupting the engine
+            # now would throw away a clip that exists on disk
+            await self.broadcast({"type": "notice", "text": "Генерация уже закончилась: результат сохраняется."})
+            return
         if job and job.get("task"):  # cloud task
             self.keep_meta(job)
             self.jobs.pop(pid, None)
@@ -3907,6 +4061,8 @@ class App:
             for pid, job in list(self.jobs.items()):
                 if job.get("task"):   # cloud (RunningHub) jobs are watched by their own poller
                     continue
+                if job.get("finalizing"):   # the result is being written: this is not a silent generation
+                    continue
                 age, silent = now - job.get("t0", now), now - job.get("last_ev", job.get("t0", now))
                 if pid in queued_ids:
                     if job["state"] == "running" and silent > 600:
@@ -3965,14 +4121,31 @@ class App:
         return web.json_response([self.public(x) for x in self.library.items])
 
     async def h_preview_keep(self, req):
-        """«Добавить в библиотеку»: the picture waits in `pending` until this moment, so nothing was archived before."""
-        body = await req.json()
-        item = self.pending.pop(str(body.get("id") or ""), None)
-        if not item:
+        """«Добавить в библиотеку»: the picture waits in `pending` until this moment, so nothing was archived before.
+
+        The record leaves `pending` only once it is in the Library. A second press (a double click, or a
+        retry after a failed save) returns the same item instead of a duplicate or an error, and a failed
+        write leaves the draft where it was so the button still works.
+        """
+        iid = str((await req.json()).get("id") or "")
+        item = self.pending.get(iid)
+        if item is None:
+            known = self.library.get(iid)
+            if known is not None:   # already kept: the same answer, no second copy
+                return web.json_response({"item": self.public(known), "kept": True})
             raise web.HTTPBadRequest(text="Эта картинка уже не ждёт: возможно, её уже добавили в Библиотеку. Сгенерируйте заново")
+        if self.library.get(iid) is not None:   # the list was written, the draft was not dropped yet
+            self.pending.pop(iid, None)
+            return web.json_response({"item": self.public(self.library.get(iid)), "kept": True})
         item.pop("preview", None)
-        self.library.add(item)
-        await self.archive_item(item)   # the program's own copy, as for every Library result
+        try:
+            self.library.add(item)          # writes the whole list; raises if the file cannot be replaced
+        except OSError as e:
+            item["preview"] = True          # still a draft: «Добавить в библиотеку» can be pressed again
+            self.note_error(f"Не удалось добавить картинку в Библиотеку: {e}")
+            raise web.HTTPInternalServerError(text=f"Не удалось записать Библиотеку: {e}. Попробуйте ещё раз.")
+        await self.archive_item(item)       # the program's own copy, as for every Library result
+        self.pending.pop(iid, None)
         return web.json_response({"item": self.public(item)})
 
     async def h_library_patch(self, req):
@@ -4441,7 +4614,7 @@ class App:
         data = {"title": (body.get("title") or first).strip().replace("\n", " ")[:80], "target": body.get("target", "video"),
                 "updated": datetime.now().isoformat(timespec="seconds"), "messages": msgs}
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        atomic_write_json(p, data)
         return web.json_response({"ok": True, "title": data["title"]})
 
     async def h_chat_delete(self, req):

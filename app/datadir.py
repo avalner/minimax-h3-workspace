@@ -10,6 +10,8 @@ import json
 import shutil
 from pathlib import Path
 
+from storage.atomic import atomic_write_json, atomic_write_text
+
 
 def move_all(src, dst):
     dst.mkdir(parents=True, exist_ok=True)
@@ -53,7 +55,7 @@ def locate(app_dir, local_appdata):
                     cfg = json.loads(cfg_path.read_text(encoding="utf-8")) if cfg_path.exists() else {}
                     if not cfg.get("llm_dir") and cfg.get("engine") != "managed":
                         cfg["llm_dir"] = str(legacy / "llm")
-                        cfg_path.write_text(json.dumps(cfg, ensure_ascii=False, indent=1), encoding="utf-8")
+                        atomic_write_json(cfg_path, cfg, indent=1)
                 try:
                     legacy.rmdir()
                 except OSError:
@@ -62,7 +64,7 @@ def locate(app_dir, local_appdata):
         if inst and cur != inst / "data":
             move_all(cur, inst / "data")
             cur = inst / "data"
-            pointer.write_text(str(cur), encoding="utf-8")
+            atomic_write_text(pointer, str(cur))
     except OSError:
         if cur is None or not cur.exists():
             cur = legacy / "data" if (legacy / "data").is_dir() else default

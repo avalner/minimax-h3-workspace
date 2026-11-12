@@ -23,6 +23,7 @@ import aiohttp
 
 import catalog
 import procjob
+from storage.atomic import atomic_write_json
 
 CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
@@ -50,9 +51,16 @@ class Config:
         return self.data.get(key, default)
 
     def update(self, **kw):
-        self.data.update(kw)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(self.data, ensure_ascii=False, indent=1), encoding="utf-8")
+        """Write the settings down first, then keep them in memory.
+
+        The file is replaced atomically, so a crash leaves either the old or the new settings and
+        never a truncated config.json. If the write fails the old values stay in memory as well and
+        the error reaches the caller: a settings screen must not claim «сохранено» for a file that
+        was never written.
+        """
+        data = dict(self.data, **kw)
+        atomic_write_json(self.path, data, indent=1)
+        self.data = data
 
     @property
     def configured(self):

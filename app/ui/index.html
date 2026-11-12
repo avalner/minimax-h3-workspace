@@ -2135,7 +2135,9 @@ async function askSavedQueue() {
       btn.removeEventListener('click', cancel);
       const j = await postJSON('/api/queue/resume');
       (j.jobs || []).forEach(x => qAdd(x.prompt_id, x.mode, x.prompt));
-      toast('Задания вернулись в очередь'); goTo('queue');
+      if (j.kept) toast(j.error || ('Не удалось восстановить часть заданий: ' + j.kept + ' остались в сохранённой очереди'));
+      else toast('Задания вернулись в очередь');
+      goTo('queue');
     });
   } catch {}
 }
