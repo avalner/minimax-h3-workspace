@@ -54,16 +54,53 @@ VIDEO_OUTPUT = {"9": {"images": [{"filename": "clip.mp4", "subfolder": "", "type
                                   "metadata": {"width": 1280, "height": 720}}]}}
 
 
-def fresh_app():
-    """A new App on an empty data folder: no library, no queue, no config left from another test."""
+_APPS = []
+
+
+def clean_data():
+    """Close the Apps of earlier checks and empty the data folder they used.
+
+    A database left open by a previous App keeps the file locked on Windows, so the Apps are closed
+    first; then every file an App writes is removed, the database and its WAL side files included.
+    """
     import server
 
-    for name in ("library.json", "queue.json", "config.json"):
+    while _APPS:
+        app = _APPS.pop()
+        try:
+            app.db.close()
+        except Exception:
+            pass
+    for name in ("library.json", "queue.json", "config.json", "h3studio.db",
+                 "h3studio.db-wal", "h3studio.db-shm"):
         (server.DATA_DIR / name).unlink(missing_ok=True)
+
+
+def new_app():
+    """An App on the data folder as it is right now (no cleanup: the caller may have prepared files)."""
+    import server
+
     app = server.App(comfy_override="http://127.0.0.1:9")
     app.config.data["keep_copies"] = False   # a test never copies into the user's own Videos folder
     app.output_dir = None
+    _APPS.append(app)
     return app
+
+
+def fresh_app():
+    """A new App on an empty data folder: no library, no queue, no config left from another test."""
+    clean_data()
+    return new_app()
+
+
+def job_record(pid="p1", state=None, graph=None):
+    """The typed record a job needs to be written to the database (a job without one is not persisted)."""
+    from domain.jobs import JobRecord, JobState
+
+    return JobRecord(job_id="j-" + pid, prompt_id=pid, backend="comfy", backend_id="comfy:test",
+                     backend_job_id=pid, state=state or JobState.QUEUED,
+                     created_at=time.time(), updated_at=time.time(),
+                     graph=graph if graph is not None else {"1": {"class_type": "Test", "inputs": {}}})
 
 
 def job(pid="p1", **extra):

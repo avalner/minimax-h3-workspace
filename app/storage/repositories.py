@@ -139,7 +139,7 @@ class JobRepository:
         return self._record(row, job_id) if row else None
 
     def by_prompt(self, prompt_id):
-        row = self.db.one("SELECT record_json FROM jobs WHERE prompt_id=?", (prompt_id,))
+        row = self.db.one("SELECT job_id, record_json FROM jobs WHERE prompt_id=?", (prompt_id,))
         return self._record(row, row["job_id"]) if row else None
 
     def _record(self, row, job_id):
@@ -149,9 +149,9 @@ class JobRepository:
 
     def active(self):
         """Jobs that are not finished, oldest first (the order the engine queues them in)."""
-        rows = self.db.query("SELECT record_json FROM jobs WHERE state NOT IN ('succeeded','failed','canceled') "
-                             "ORDER BY created_at ASC")
-        return [self._record(row, JobRecord.from_dict(json.loads(row["record_json"])).job_id) for row in rows]
+        rows = self.db.query("SELECT job_id, record_json FROM jobs "
+                             "WHERE state NOT IN ('succeeded','failed','canceled') ORDER BY created_at ASC")
+        return [self._record(row, row["job_id"]) for row in rows]
 
     def delete(self, job_id):
         self.db.execute("DELETE FROM jobs WHERE job_id=?", (job_id,))

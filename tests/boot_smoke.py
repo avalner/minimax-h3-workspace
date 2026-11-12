@@ -98,6 +98,15 @@ def main():
         check("the running copy says where it is (one folder, one copy)",
               note_data.get("port") == port and note_data.get("data") == str(data), str(note_data)[:200])
 
+        storage = payload.get("storage") or {}
+        migration = storage.get("migration") or {}
+        check("the database is created and the empty folder is imported once",
+              storage.get("schema_version") == 1 and migration.get("applied") == [
+                  "0001-schema", "1000-import-library", "1001-import-queue"] and not migration.get("problems"),
+              str(storage)[:300])
+        check("a fresh folder has nothing waiting in the queue", storage.get("waiting") == 0, str(storage)[:200])
+        check("the database file is where the data folder is", (data / "h3studio.db").exists())
+
         status, body = get(base + "/api/queue/saved")
         check("an empty queue is served as count 0", json.loads(body).get("count") == 0, body[:200])
 

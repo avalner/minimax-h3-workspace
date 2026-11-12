@@ -1,4 +1,4 @@
-"""Bringing back the unfinished jobs of the previous run: one broken item must not lose the others.
+"""Bringing back the unfinished jobs of an earlier run: one broken record must not lose the others.
 
     python tests/unit/test_queue_resume.py
 """
@@ -6,6 +6,8 @@
 from __future__ import annotations
 
 import json
+import sqlite3
+import time
 import unittest
 from unittest import mock
 
@@ -13,6 +15,7 @@ import support
 from support import VIDEO_OUTPUT
 
 import server
+from domain.jobs import JobRecord, JobState
 
 
 def empty_queue():
@@ -24,12 +27,19 @@ class QueueResumeTest(unittest.IsolatedAsyncioTestCase):
         self.app = support.fresh_app()
         self.events = support.capture_broadcast(self.app)
 
-    def seed(self, *records):
-        self.app.saved_queue = list(records)
-        self.app.save_queue()
+    def seed(self, *saved):
+        """Leave in the database the records an earlier run (or the import) would have left."""
+        for record in saved:
+            self.app.jobs_repo.save(JobRecord(
+                job_id="j-" + record["pid"], prompt_id=record["pid"], backend="comfy", backend_id="comfy:test",
+                backend_job_id=record["pid"], state=JobState.QUEUED, created_at=time.time(),
+                updated_at=time.time(), graph=record["graph"],
+                legacy={"stages": record.get("stages") or {}, "meta": record.get("meta") or {},
+                        "titles": {}, "last_output": False, "preview": record.get("preview", False)}))
+        self.app.pending_resume = self.app.load_resume_queue()
 
-    def on_disk(self):
-        return json.loads(server.QUEUE_FILE.read_text(encoding="utf-8"))
+    def waiting(self):
+        return [record.prompt_id for record in self.app.pending_resume]
 
     def only_get_queue(self):
         async def comfy(method, path, **kwargs):
@@ -56,10 +66,10 @@ class QueueResumeTest(unittest.IsolatedAsyncioTestCase):
         body = json.loads((await self.app.h_queue_resume(None)).text)
         self.assertTrue(body["unreachable"])
         self.assertEqual(body["jobs"], [])
-        self.assertEqual(len(self.app.saved_queue), 2)
-        self.assertEqual(len(self.on_disk()), 2, "очередь на диске потеряна из-за молчащего движка")
+        self.assertEqual(self.waiting(), ["old1", "old2"], "очередь потеряна из-за молчащего движка")
+        self.assertEqual(self.app.jobs_repo.count(), 2)
 
-    async def test_one_broken_item_does_not_lose_the_rest(self):
+    async def test_one_broken_record_does_not_lose_the_rest(self):
         self.seed(support.saved("old1", meta={"mode": "video", "prompt": "первое", "seed": 1}),
                   support.saved("old2", meta={"mode": "video", "prompt": "второе", "seed": 1}))
         self.only_get_queue()
@@ -77,8 +87,9 @@ class QueueResumeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(calls), 2, "после отказа одного задания остальные не были отправлены")
         self.assertEqual([j["prompt_id"] for j in body["jobs"]], ["new2"])
         self.assertEqual(body["kept"], 1)
-        self.assertEqual([s["pid"] for s in self.app.saved_queue], ["old1"])
-        self.assertEqual([s["pid"] for s in self.on_disk()], ["old1"], "неудачный элемент не сохранён на будущее")
+        self.assertEqual(self.waiting(), ["old1"], "неудачный элемент должен остаться на следующий раз")
+        self.assertIsNotNone(self.app.jobs_repo.by_prompt("old1"))
+        self.assertIsNone(self.app.jobs_repo.by_prompt("old2"), "отправленный элемент остался дублем в таблице")
 
     async def test_a_live_job_is_watched_not_sent_again(self):
         self.seed(support.saved("old1"))
@@ -96,7 +107,8 @@ class QueueResumeTest(unittest.IsolatedAsyncioTestCase):
         body = json.loads((await self.app.h_queue_resume(None)).text)
         self.assertEqual(body["jobs"][0]["state"], "running")
         self.assertEqual(self.app.jobs["old1"]["state"], "running", "живое задание не взято под наблюдение")
-        self.assertEqual(self.app.saved_queue, [])
+        self.assertEqual(self.waiting(), [])
+        self.assertEqual(self.app.jobs_repo.by_prompt("old1").state, JobState.RUNNING)
 
     async def test_a_finished_job_is_taken_from_the_history(self):
         self.seed(support.saved("old1"))
@@ -116,7 +128,8 @@ class QueueResumeTest(unittest.IsolatedAsyncioTestCase):
         body = json.loads((await self.app.h_queue_resume(None)).text)
         self.assertEqual(body["jobs"][0]["state"], "done")
         self.assertEqual(len(self.app.library.items), 1, "результат прошлого запуска не попал в Библиотеку")
-        self.assertEqual(self.app.saved_queue, [])
+        self.assertEqual(self.waiting(), [])
+        self.assertIsNone(self.app.jobs_repo.by_prompt("old1"), "завершённое задание осталось в очереди")
 
     async def test_a_finished_job_whose_result_cannot_be_written_stays_for_the_next_start(self):
         self.seed(support.saved("old1"))
@@ -131,15 +144,15 @@ class QueueResumeTest(unittest.IsolatedAsyncioTestCase):
         self.app.comfy_json = comfy
 
         def full(item):
-            raise OSError(28, "диск полон")
+            raise sqlite3.OperationalError("disk I/O error")
 
         with mock.patch.object(self.app.library, "add", full):
             body = json.loads((await self.app.h_queue_resume(None)).text)
         self.assertEqual(body["kept"], 1)
         self.assertEqual(body["jobs"][0]["state"], "queued")
-        self.assertEqual([s["pid"] for s in self.app.saved_queue], ["old1"], "результат не записан, а запись потеряна")
+        self.assertEqual(self.waiting(), ["old1"], "результат не записан, а запись потеряна")
         self.assertEqual(self.app.library.items, [])
-        self.assertNotIn("old1", self.app.jobs, "незаписанное задание осталось бы в памяти без записи на диск")
+        self.assertNotIn("old1", self.app.jobs)
 
     async def test_a_failed_job_is_reported_not_rendered_again(self):
         self.seed(support.saved("old1"))
@@ -159,9 +172,9 @@ class QueueResumeTest(unittest.IsolatedAsyncioTestCase):
         body = json.loads((await self.app.h_queue_resume(None)).text)
         self.assertEqual(body["jobs"][0]["state"], "error")
         self.assertIn("old1", self.app.recent)
-        self.assertEqual(self.app.saved_queue, [])
+        self.assertEqual(self.waiting(), [])
 
-    async def test_a_job_of_a_previous_run_is_submitted_again_when_the_engine_forgot_it(self):
+    async def test_a_job_of_an_earlier_run_is_submitted_again_when_the_engine_forgot_it(self):
         self.seed(support.saved("old1"))
         self.only_get_queue()
 
@@ -173,9 +186,9 @@ class QueueResumeTest(unittest.IsolatedAsyncioTestCase):
         body = json.loads((await self.app.h_queue_resume(None)).text)
         self.assertEqual(body["jobs"][0]["prompt_id"], "new1")
         self.assertEqual(body["jobs"][0]["state"], "queued")
-        self.assertEqual(self.app.saved_queue, [])
+        self.assertEqual(self.waiting(), [])
 
-    async def test_a_rejected_graph_stays_in_the_saved_queue(self):
+    async def test_a_rejected_graph_stays_in_the_queue(self):
         self.seed(support.saved("old1"))
         self.only_get_queue()
 
@@ -186,7 +199,13 @@ class QueueResumeTest(unittest.IsolatedAsyncioTestCase):
         self.app.queue = queue
         body = json.loads((await self.app.h_queue_resume(None)).text)
         self.assertEqual(body["kept"], 1)
-        self.assertEqual([s["pid"] for s in self.app.saved_queue], ["old1"])
+        self.assertEqual(self.waiting(), ["old1"])
+
+    async def test_discarding_forgets_the_records(self):
+        self.seed(support.saved("old1"), support.saved("old2"))
+        await self.app.h_queue_discard(None)
+        self.assertEqual(self.waiting(), [])
+        self.assertEqual(self.app.jobs_repo.count(), 0)
 
 
 if __name__ == "__main__":

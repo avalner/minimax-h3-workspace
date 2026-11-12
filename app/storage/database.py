@@ -85,6 +85,13 @@ class Database:
         finally:
             self._depth = 0
 
+    def __del__(self):
+        # a check that forgot to close its database must not leave the connection to the garbage collector
+        try:
+            self.conn.close()
+        except Exception:
+            pass
+
     # ---------- version ----------
 
     def applied(self):

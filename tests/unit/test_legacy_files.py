@@ -1,7 +1,6 @@
-"""Data written by an older version still loads, and a rewrite keeps what this version does not know.
-
-The fixtures in `tests/fixtures/legacy` are synthetic: no real prompts, no tokens, no user paths.
-They are the starting point for the migration of stage 3.
+"""Data written by an older version is imported into the database and a rewrite keeps what this
+version does not know. The fixtures in `tests/fixtures/legacy` are synthetic: no real prompts, no
+tokens, no user paths.
 
     python tests/unit/test_legacy_files.py
 """
@@ -16,60 +15,66 @@ from pathlib import Path
 
 import support
 
-import engine
 import server
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "legacy"
+LIBRARY_IDS = ["a1b2c3d4e5f6", "b2c3d4e5f6a1", "c3d4e5f6a1b2"]
+QUEUE_IDS = ["aaaa-bbbb-cccc-dddd", "eeee-ffff-0000-1111"]
 
 
 class LegacyFilesTest(unittest.TestCase):
+    """An older data folder, opened by this version: the files are imported once and never again."""
+
     def setUp(self):
-        self.folder = support.new_dir("legacy")
-        self.data = self.folder / "data"
-        shutil.copytree(FIXTURES, self.data)
+        support.clean_data()
 
-    def test_the_library_keeps_ids_paths_favourites_and_unknown_fields(self):
-        library = server.Library(self.data / "library.json")
-        self.assertEqual([x["id"] for x in library.items],
-                         ["a1b2c3d4e5f6", "b2c3d4e5f6a1", "c3d4e5f6a1b2"])
-        self.assertTrue(library.get("a1b2c3d4e5f6")["fav"])
-        self.assertEqual(library.get("c3d4e5f6a1b2")["file"]["path"], "E:\\Clips\\my_clip.mp4")
-        self.assertEqual(library.get("b2c3d4e5f6a1")["note"], "поле, которого текущая версия не знает")
-
-    def test_a_rewrite_does_not_lose_anything(self):
-        path = self.data / "library.json"
-        server.Library(path).save()
-        self.assertEqual(json.loads(path.read_text(encoding="utf-8")),
-                         json.loads((FIXTURES / "library.json").read_text(encoding="utf-8")))
-
-    def test_the_config_keeps_unknown_fields(self):
-        config = engine.Config(self.data / "config.json")
-        self.assertEqual(config.get("modes"), ["video", "refs"])
-        config.update(engine="external")
-        written = json.loads((self.data / "config.json").read_text(encoding="utf-8"))
-        self.assertEqual(written["unknown_future_field"], "must survive a rewrite")
-        self.assertEqual(written["field_from_a_later_version"], {"keep": True})
-
-    def test_a_project_of_the_long_video_is_plain_json(self):
-        project = json.loads((self.data / "long" / "testrun" / "project.json").read_text(encoding="utf-8"))
-        self.assertEqual(len(project["scenes"]), 2)
-        self.assertEqual(project["unknown_future_field"]["nested"], [1, 2, 3])
-
-    def test_a_week_old_queue_is_not_restored(self):
-        app = support.fresh_app()
-        shutil.copy(FIXTURES / "queue.json", server.QUEUE_FILE)
-        self.assertEqual(app.load_queue(), [], "запись старше недели не должна возвращаться в очередь")
-
-    def test_a_recent_queue_is_restored_as_it_was(self):
-        app = support.fresh_app()
+    def prepare(self, queue_age=60):
+        shutil.copy(FIXTURES / "library.json", server.LIBRARY_FILE)
         records = json.loads((FIXTURES / "queue.json").read_text(encoding="utf-8"))
         for record in records:
-            record["saved"] = time.time() - 60
+            record["saved"] = time.time() - queue_age
         server.QUEUE_FILE.write_text(json.dumps(records, ensure_ascii=False), encoding="utf-8")
-        loaded = app.load_queue()
-        self.assertEqual([r["pid"] for r in loaded], ["aaaa-bbbb-cccc-dddd", "eeee-ffff-0000-1111"])
-        self.assertTrue(loaded[1]["preview"])
-        self.assertTrue(loaded[1]["finalizing"], "старый файл без этого поля тоже должен читаться")
+        return support.new_app()
+
+    def test_the_library_keeps_ids_paths_favourites_and_unknown_fields(self):
+        app = self.prepare()
+        self.assertEqual([x["id"] for x in app.library.items], LIBRARY_IDS)
+        first = app.library.items[0]
+        self.assertTrue(first["fav"])
+        self.assertEqual(first["local"], "D:\\My Library\\20261001_a1b2c3d4e5f6_h3s_0001.mp4")
+        self.assertEqual(app.library.items[1]["note"], "поле, которого текущая версия не знает")
+
+    def test_the_queue_is_waiting_for_the_user_and_nothing_was_sent(self):
+        app = self.prepare()
+        self.assertEqual([r.prompt_id for r in app.pending_resume], QUEUE_IDS)
+        self.assertEqual(app.jobs, {}, "импорт очереди не должен ничего запускать")
+        self.assertTrue(app.pending_resume[0].graph, "граф сохранён, чтобы задание можно было отправить")
+        self.assertEqual(app.pending_resume[1].legacy["preview"], True)
+
+    def test_a_second_start_imports_nothing_again(self):
+        first = self.prepare()
+        self.assertEqual(first.migration.skipped, [])
+        second = support.new_app()
+        self.assertEqual([x["id"] for x in second.library.items], LIBRARY_IDS, "импорт повторился")
+        self.assertEqual(len(second.pending_resume), 2)
+        self.assertEqual(second.migration.applied, [])
+        self.assertEqual(second.migration.skipped, ["0001-schema", "1000-import-library", "1001-import-queue"])
+
+    def test_the_original_files_are_kept(self):
+        self.prepare()
+        self.assertTrue(server.LIBRARY_FILE.exists(), "старый файл удалён — откатиться будет некуда")
+        self.assertTrue(server.QUEUE_FILE.exists())
+
+    def test_the_import_made_a_backup(self):
+        app = self.prepare()
+        backup = Path(app.migration.backup)
+        self.assertTrue((backup / "library.json").exists())
+        self.assertTrue((backup / "queue.json").exists())
+
+    def test_a_week_old_queue_is_not_offered(self):
+        app = self.prepare(queue_age=8 * 86400)
+        self.assertEqual(app.pending_resume, [], "запись старше недели не должна возвращаться в очередь")
+        self.assertEqual(app.jobs_repo.count(), 0, "и не должна оставаться в таблице")
 
 
 if __name__ == "__main__":

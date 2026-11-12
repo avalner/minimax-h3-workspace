@@ -6,11 +6,11 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import unittest
 from unittest import mock
 
 import support
-from storage.atomic import AtomicWriteError
 
 import server
 from aiohttp import web
@@ -32,7 +32,8 @@ class PreviewKeepTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([x["id"] for x in self.app.library.items], ["d1"])
         self.assertEqual(self.app.pending, {})
         self.assertNotIn("preview", self.app.library.items[0])
-        self.assertEqual(json.loads(server.LIBRARY_FILE.read_text(encoding="utf-8"))[0]["id"], "d1")
+        self.assertEqual([x["id"] for x in server.Library(self.app.db).items], ["d1"],
+                         "запись должна быть в таблице, а не только в памяти")
 
     async def test_a_second_press_returns_the_same_item(self):
         first = json.loads((await self.keep()).text)
@@ -42,8 +43,7 @@ class PreviewKeepTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(second.get("kept"))
 
     async def test_a_failed_write_keeps_the_draft_and_the_button_works_again(self):
-        with mock.patch.object(server, "atomic_write_json",
-                               side_effect=AtomicWriteError(server.LIBRARY_FILE, "диск полон")):
+        with mock.patch.object(self.app.library, "add", side_effect=sqlite3.OperationalError("disk I/O error")):
             with self.assertRaises(web.HTTPInternalServerError):
                 await self.keep()
         self.assertIn("d1", self.app.pending, "черновик потерян из-за неудачной записи")

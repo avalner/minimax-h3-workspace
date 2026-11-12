@@ -17,6 +17,7 @@ import os
 import random
 import re
 import shutil
+import sqlite3
 import struct
 import subprocess
 import sys
@@ -54,6 +55,9 @@ from domain.jobs import (MAX_SECONDS, InputRef, JobRecord, JobSpec, JobState, Re
                          public_state)
 from domain.media import MediaKind, MediaRecord, MediaState
 from storage.atomic import atomic_write_json, atomic_write_text
+from storage.database import Database
+from storage.migrations import migrate
+from storage.repositories import JobRepository, LibraryRepository, MediaRepository, ResultRepository
 from version import APP_VERSION
 
 
@@ -356,12 +360,16 @@ UI_DIR = ROOT / "ui"
 DATA_DIR = Path(os.environ.get("H3STUDIO_DATA", HOME / "data"))
 TOOLS_DIR = Path(os.environ.get("H3STUDIO_TOOLS") or HOME / "tools")  # portable FFmpeg and other helpers
 LONG_DIR = DATA_DIR / "long"   # saved scene states of the long video made scene by scene
-LIBRARY_FILE = DATA_DIR / "library.json"
-QUEUE_FILE = DATA_DIR / "queue.json"
+LIBRARY_FILE = DATA_DIR / "library.json"    # read once, by the import; the database is the truth now
+QUEUE_FILE = DATA_DIR / "queue.json"        # the same: imported once, then kept as the last snapshot
+STATE_DB = DATA_DIR / "h3studio.db"
 WORKFLOWS_DIR = DATA_DIR / "workflows"
 PREVIEW_LIMIT = 40  # finished pictures waiting for «Добавить в библиотеку»: the newest are kept, the rest is forgotten
 
 CLIENT_ID = "h3studio-" + uuid.uuid4().hex[:8]
+
+# a failed write of the stored state: the JSON files of the older version, or the database now
+STORE_ERRORS = (OSError, sqlite3.Error)
 
 # ComfyUI binary websocket event types
 BIN_PREVIEW = 1
@@ -429,47 +437,35 @@ def open_in_explorer(path):
 
 
 class Library:
-    def __init__(self, path):
-        self.path = path
-        self.items = []
-        if not path.exists():
-            return
-        try:
-            loaded = json.loads(path.read_text(encoding="utf-8"))
-            if not isinstance(loaded, list):
-                raise ValueError("library.json: expected a JSON array")
-            self.items = [x for x in loaded if isinstance(x, dict) and x.get("id")]
-        except (OSError, ValueError):
-            # A broken list must not stop the app from starting: keep the file for the user and go on empty.
-            try:
-                path.replace(path.with_name(f"{path.name}.broken-{time.strftime('%Y%m%d-%H%M%S')}"))
-            except OSError:
-                pass
-            self.items = []
+    """The Library list. The database is the truth; `items` is the list the window is shown.
 
-    def save(self):
-        """Write the whole list in one atomic step: a crash must not leave half a library."""
-        atomic_write_json(self.path, self.items, indent=1)
+    The JSON file of the older versions is read once, by the import (see `storage.migrations`), and
+    is never written again: a second source of truth would drift from this one on the first failure.
+    """
+
+    def __init__(self, db):
+        self.db = db
+        self.repo = LibraryRepository(db)
+        self.items = self.repo.load()
+
+    def save(self, item=None):
+        """Write one changed item back (a favourite flag, the program's own copy), or the whole list."""
+        if item is not None:
+            self.repo.add(item)   # an existing id is updated in place: its place in the list is kept
+            return
+        for it in self.items:
+            self.repo.add(it)
 
     def get(self, item_id):
         return next((x for x in self.items if x["id"] == item_id), None)
 
     def add(self, item):
+        self.repo.add(item)   # raises if the row cannot be written: memory is not touched then
         self.items.insert(0, item)
-        try:
-            self.save()
-        except OSError:
-            self.items.pop(0)   # never keep an item in memory that is not on disk
-            raise
 
     def remove(self, item_id):
-        old = self.items
-        self.items = [x for x in old if x["id"] != item_id]
-        try:
-            self.save()
-        except OSError:
-            self.items = old
-            raise
+        self.repo.delete(item_id)
+        self.items = [x for x in self.items if x["id"] != item_id]
 
 
 class App:
@@ -485,10 +481,22 @@ class App:
         self.history = {}  # prompt_id -> what a failed or stopped job was made from (the details window asks later)
         self.session = None
         self.browsers = set()
-        self.queue_save_error = None   # the last failure to write queue.json, shown in the window instead of a silent loss
-        self.saved_queue = self.load_queue()  # unfinished jobs of the previous run (asked about at start)
+        # the state of this folder: the database is opened once, and the older JSON files are imported
+        # into it on the first start of this version (see storage.migrations for what and how)
+        self.db = Database(STATE_DB)
+        self.migration = None
+        self.migration_error = None
+        try:
+            self.migration = migrate(self.db, DATA_DIR)
+        except Exception as e:  # noqa: BLE001 - a broken database must not hide the window behind a traceback
+            self.migration_error = f"{type(e).__name__}: {e}"
+        self.jobs_repo = JobRepository(self.db)
+        self.media_repo = MediaRepository(self.db)
+        self.results_repo = ResultRepository(self.db)
+        self.queue_save_error = None   # the last failure to persist the queue, shown in the window instead of a silent loss
+        self.pending_resume = self.load_resume_queue()  # unfinished jobs of an earlier run (asked about at start)
         self.jobs = JobStore(self.save_queue)  # prompt_id -> job dict
-        self.library = Library(LIBRARY_FILE)
+        self.library = Library(self.db)
         # finished pictures of the picture sections that the user has not added to the Library yet:
         # they are served and saved to disk like Library items, but stay out of the Library list
         self.pending = {}  # item id -> item; memory only, so a restart forgets them
@@ -1247,7 +1255,10 @@ class App:
                 record.add_result(MediaRecord(
                     media_id=item["id"], kind=MediaKind.of_name(f["filename"]),
                     state=MediaState.DRAFT if preview else MediaState.LIBRARY,
-                    path=str(item["local"]) if item.get("local") else None, backend_file=dict(f),
+                    path=str(item["local"]) if item.get("local") else None,
+                    # the node is part of the engine's own identity of this output: the database makes
+                    # the result unique by it, so registering the same clip twice cannot add a row
+                    backend_file={**f, "node": str(node_of.get(id(f), ""))},
                     library_id=None if preview else item["id"],
                     created_at=datetime.now().timestamp()))
             items.append(self.public(item))
@@ -1352,7 +1363,7 @@ class App:
                         async for chunk in r.content.iter_chunked(1 << 20):
                             out.write(chunk)
             item["local"] = str(dest)
-            self.library.save()
+            self.library.save(item)   # one changed row, not the whole list
             return True
         except Exception as e:
             self.note_error(f"Не удалось сохранить копию результата: {e}")
@@ -1409,12 +1420,20 @@ class App:
 
     # ---------- HTTP handlers ----------
 
+    def storage_state(self):
+        """What the database is: where it lives, which schema it has, what the import did."""
+        migration = self.migration.to_dict() if self.migration is not None else None
+        return {"path": str(STATE_DB), "schema_version": self.db.schema_version(),
+                "migration": migration, "error": self.migration_error,
+                "waiting": len(self.pending_resume)}
+
     async def h_status(self, _req):
         base = {"configured": bool(self.config.configured or self.comfy_override),
                 "engine": self.config.get("engine"), "installing": bool(self.installer),
                 # a queue that could not be written is not a saved queue: the window says so instead of hiding it
                 "queue_save_error": self.queue_save_error,
-                "data_dir": {"path": str(DATA_DIR), "warning": self.data_dir_warning}}
+                "data_dir": {"path": str(DATA_DIR), "warning": self.data_dir_warning},
+                "storage": self.storage_state()}
         try:
             stats = await self.system_stats()
         except Exception:
@@ -1902,53 +1921,82 @@ class App:
         webbrowser.open("https://www.google.com/search?q=" + urllib.parse.quote_plus(q))
         return web.json_response({"ok": True})
 
-    def load_queue(self):
-        try:
-            data = json.loads(QUEUE_FILE.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return []
-        week = datetime.now().timestamp() - 7 * 86400
-        return [j for j in data if isinstance(j, dict) and j.get("graph") and j.get("saved", 0) > week]
+    # ---------- the queue: unfinished jobs, kept in the database ----------
+
+    def load_resume_queue(self):
+        """Jobs the database holds but this run has not started: what the window asks about at start.
+
+        The queue never lived longer than a week (the JSON version dropped older records), so an older
+        record is forgotten here as well instead of being offered forever.
+        """
+        week_ago = datetime.now().timestamp() - 7 * 86400
+        out = []
+        for record in self.jobs_repo.active():
+            if record.created_at and record.created_at < week_ago:
+                self.jobs_repo.delete(record.job_id)
+                continue
+            out.append(record)
+        return out
+
+    def persisted_job(self, job):
+        """The record of a live job, with the fields the window and the engine still keep in the dict.
+
+        `legacy` is the transitional part: the queue-record fields of the older version (stages, meta,
+        titles, preview). Stage 4 folds them into the job service; until then they travel with the
+        record, so a restart can resume a job exactly instead of guessing its parameters back.
+        """
+        record = job.get("record")
+        if record is None:
+            return None
+        if record.graph is None:
+            record.graph = job.get("graph")
+        record.legacy = {"stages": job.get("stages") or {}, "meta": job.get("meta") or {},
+                         "titles": job.get("titles") or {}, "last_output": bool(job.get("last_output")),
+                         "preview": bool(job.get("preview"))}
+        return record
 
     def save_queue(self):
-        """Write the jobs that are not finished yet, atomically, so a restart can pick them up.
+        """Persist the live jobs. Called on every change of the job list.
 
-        Called on every change of the job list, so it must not raise into the caller's state change:
-        a failed write is remembered (`queue_save_error`) and reported in the window, because the
-        queue on disk then does not match what the user sees.
+        The database is the queue now: a job is written when it is added and on every change, and its
+        row goes away when the job leaves memory (finished, cancelled, dropped). A failed write is
+        remembered and reported instead of raising into the caller's state change.
         """
-        items = list(self.saved_queue) + [
-            {"graph": j["graph"], "stages": j.get("stages") or {}, "meta": j.get("meta") or {}, "last_output": j.get("last_output", False),
-             "titles": j.get("titles") or {}, "pid": j.get("prompt_id"), "preview": j.get("preview", False),
-             "finalizing": bool(j.get("finalizing")), "saved": datetime.now().timestamp()}
-            for j in dict.values(self.jobs) if j.get("graph")]
         try:
-            if items:
-                atomic_write_json(QUEUE_FILE, items)
-            elif QUEUE_FILE.exists():
-                QUEUE_FILE.unlink()
+            live = set()
+            waiting = {record.job_id for record in self.pending_resume}
+            with self.db.transaction():
+                for job in list(self.jobs.values()):
+                    record = self.persisted_job(job)
+                    if record is None:
+                        continue
+                    self.jobs_repo.save(record)
+                    live.add(record.job_id)
+                for row in self.db.query("SELECT job_id FROM jobs"):
+                    if row["job_id"] not in live and row["job_id"] not in waiting:
+                        self.jobs_repo.delete(row["job_id"])
             self.queue_save_error = None
-        except OSError as e:
+        except STORE_ERRORS as e:
             self.queue_save_error = str(e)
             self.note_error(f"Не удалось сохранить очередь заданий: {e}")
 
     async def h_queue_saved(self, _req):
-        return web.json_response({"count": len(self.saved_queue),
-                                  "items": [{"mode": j["meta"].get("mode"), "prompt": (j["meta"].get("prompt") or "")[:80]} for j in self.saved_queue]})
+        items = [{"mode": (record.legacy.get("meta") or {}).get("mode"),
+                  "prompt": ((record.legacy.get("meta") or {}).get("prompt") or "")[:80]}
+                 for record in self.pending_resume]
+        return web.json_response({"count": len(items), "items": items})
 
-    def restore_job(self, saved, pid, state="queued"):
-        """A job of the previous run, put back into the live queue so the watch, the details window and
-        the agent API see it again. The `finalizing` mark is not restored: whoever resumes a job decides
-        whether it still has to be finalized."""
+    def job_from_record(self, record):
+        """The job dict the window, the watch and the engine paths have always used, rebuilt from the
+        record. `finalizing` is not restored: whoever resumes the job decides that."""
+        legacy = record.legacy or {}
+        pid = record.prompt_id or record.backend_job_id
         now = datetime.now().timestamp()
-        job = {"prompt_id": pid, "state": state, "stages": saved.get("stages") or {}, "stage": None,
-               "meta": saved.get("meta") or {}, "last_output": saved.get("last_output", False),
-               "titles": saved.get("titles") or {}, "graph": saved.get("graph"), "scenes": None,
-               "t0": now, "last_ev": now, "preview": saved.get("preview", False)}
-        job["record"] = JobRecord(job_id=new_job_id(), prompt_id=pid, backend="comfy",
-                                  backend_id=self.backend_identity(), backend_job_id=pid,
-                                  state=JobState(state), created_at=now, updated_at=now)
-        return job
+        return {"prompt_id": pid, "state": public_state(record.state), "stages": legacy.get("stages") or {},
+                "stage": None, "meta": legacy.get("meta") or {}, "last_output": legacy.get("last_output", False),
+                "titles": legacy.get("titles") or {}, "graph": record.graph, "scenes": None,
+                "t0": record.created_at or now, "last_ev": now, "preview": legacy.get("preview", False),
+                "record": record}
 
     async def _history_done(self, pid):
         """What ComfyUI's history says about a job of the previous run: finished, failed or unknown."""
@@ -1963,15 +2011,16 @@ class App:
             return "failed"
         return "finished" if entry.get("outputs") else "unknown"
 
-    async def _resume_one(self, saved, running, pending, backend_ok, out):
-        """Resume one saved job; True when it may leave the saved list, False when it has to be kept."""
-        meta = saved.get("meta") or {}
+    async def _resume_one(self, job, running, pending, backend_ok, out):
+        """Resume one job of an earlier run; True when it may leave the waiting list, False to keep it."""
+        meta = job.get("meta") or {}
         mode, prompt = meta.get("mode"), (meta.get("prompt") or "")[:80]
-        pid = saved.get("pid")
+        pid = job.get("prompt_id")
         live = ("running" if pid in running else "queued" if pid in pending else None) if pid else None
         if live:  # ComfyUI still has it (or is running it): watch it instead of sending it twice
             if pid not in self.jobs:
-                self.jobs[pid] = self.restore_job(saved, pid, state=live)
+                self.jobs[pid] = job
+                self.set_job_state(job, JobState.RUNNING if live == "running" else JobState.QUEUED)
             out.append({"prompt_id": pid, "mode": mode, "prompt": prompt, "state": live})
             return True
         if not backend_ok:
@@ -1979,12 +2028,11 @@ class App:
         if pid:
             done = await self._history_done(pid)
             if done == "finished":  # it finished while the window was closed: collect the result, do not render again
-                job = self.restore_job(saved, pid, state="running")
                 self.jobs[pid] = job
                 await self.finish_job(job)
                 if not job.get("finalized"):
                     # the result could not be registered (e.g. the disk refused the Library write):
-                    # the record stays in the saved queue, which is what the next start retries from
+                    # the record stays in the waiting list, which is what the next start retries from
                     self.jobs.pop(pid, None)
                     out.append({"prompt_id": pid, "mode": mode, "prompt": prompt, "state": "queued"})
                     return False
@@ -1995,8 +2043,8 @@ class App:
                                     "message": "ComfyUI закончил это задание с ошибкой, пока окно было закрыто"}
                 out.append({"prompt_id": pid, "mode": mode, "prompt": prompt, "state": "error"})
                 return True
-        resp = await self.queue(saved["graph"], saved.get("stages") or {}, meta, saved.get("last_output", False),
-                                saved.get("titles"), saved.get("preview", False))
+        resp = await self.queue(job["graph"], job.get("stages") or {}, meta, job.get("last_output", False),
+                                job.get("titles"), job.get("preview", False))
         body = json.loads(resp.text)
         if resp.status != 200 or not body.get("prompt_id"):
             raise RuntimeError(body.get("error") or f"ComfyUI отклонил задание ({resp.status})")
@@ -2004,14 +2052,14 @@ class App:
         return True
 
     async def h_queue_resume(self, _req):
-        """Bring back the unfinished jobs of the previous run, each one on its own.
+        """Bring back the unfinished jobs of an earlier run, each one on its own.
 
-        The saved list is not cleared up front: an item leaves it only after it was really resumed
-        (re-attached to a live job, taken from the history, or submitted again), so one broken item or
-        an engine that is not up yet cannot lose the rest. A ComfyUI that does not answer is not an
-        empty queue and its jobs are never sent to it blindly.
+        A job leaves the waiting list only after it was really resumed (re-attached to a live job,
+        taken from the history, or submitted again), so one broken record or an engine that is not up
+        yet cannot lose the rest. A ComfyUI that does not answer is not an empty queue and its jobs
+        are never sent to it blindly.
         """
-        items = list(self.saved_queue)
+        items = list(self.pending_resume)
         if not items:
             return web.json_response({"jobs": [], "restored": 0, "kept": 0, "unreachable": False})
         running, pending, backend_ok = set(), set(), True
@@ -2023,24 +2071,26 @@ class App:
             backend_ok = False
             self.note_error(f"Очередь прошлого запуска ждёт ComfyUI: он не отвечает ({type(e).__name__})")
         out, kept = [], 0
-        for saved in items:
+        for record in items:
+            job = self.job_from_record(record)
             try:
-                resumed = await self._resume_one(saved, running, pending, backend_ok, out)
+                resumed = await self._resume_one(job, running, pending, backend_ok, out)
             except Exception as e:
                 self.note_error(f"Не удалось восстановить задание из прошлой очереди: {e}")
                 resumed = False
             if not resumed:
                 kept += 1
                 continue
-            self.saved_queue = [s for s in self.saved_queue if s is not saved]
-            self.save_queue()   # after every item: a crash in the middle must not submit anything twice
+            self.pending_resume = [r for r in self.pending_resume if r.job_id != record.job_id]
+            self.save_queue()   # after every job: a crash in the middle must not submit anything twice
         return web.json_response({
             "jobs": out, "restored": len(out), "kept": kept, "unreachable": not backend_ok,
             "error": None if backend_ok else "ComfyUI не отвечает: очередь сохранена и будет восстановлена позже"})
 
     async def h_queue_discard(self, _req):
-        self.saved_queue = []
-        self.save_queue()
+        for record in list(self.pending_resume):
+            self.jobs_repo.delete(record.job_id)
+        self.pending_resume = []
         return web.json_response({"ok": True})
 
     async def h_job(self, req):
@@ -2068,10 +2118,12 @@ class App:
             r = self.recent[pid]
             out.update(state=r.get("state") or "unknown", message=r.get("message") or "")
         elif not kept:
-            saved = next((j for j in self.saved_queue if j.get("pid") == pid), None)
-            if not saved:
+            waiting = next((record for record in self.pending_resume
+                            if (record.prompt_id or record.backend_job_id) == pid), None)
+            if not waiting:
                 raise web.HTTPNotFound()
-            out.update(state="queued", meta=saved.get("meta") or {}, created=saved.get("saved"))
+            out.update(state="queued", meta=(waiting.legacy or {}).get("meta") or {},
+                       created=waiting.created_at, phase=waiting.state.value)
         return web.json_response(out)
 
     async def h_input(self, req):
@@ -2284,7 +2336,7 @@ class App:
                     else:
                         try:
                             self.library.add(item)
-                        except OSError as e:
+                        except STORE_ERRORS as e:
                             # the file is already on disk: report where it is instead of losing it
                             self.note_error(f"Облачный результат не записался в Библиотеку: {e}")
                             await self.broadcast({"type": "error", "prompt_id": pid, "message": (
@@ -3840,7 +3892,7 @@ class App:
             else:
                 try:
                     self.library.add(item)
-                except OSError as e:
+                except STORE_ERRORS as e:
                     # the built clip is on disk: a failed list write must not delete it as if the
                     # build itself had failed
                     self.note_error(f"Сборка готова, но не записалась в Библиотеку: {e}")
@@ -4265,8 +4317,8 @@ class App:
             return web.json_response({"item": self.public(self.library.get(iid)), "kept": True})
         item.pop("preview", None)
         try:
-            self.library.add(item)          # writes the whole list; raises if the file cannot be replaced
-        except OSError as e:
+            self.library.add(item)          # writes one row; raises if the database cannot take it
+        except STORE_ERRORS as e:
             item["preview"] = True          # still a draft: «Добавить в библиотеку» can be pressed again
             self.note_error(f"Не удалось добавить картинку в Библиотеку: {e}")
             raise web.HTTPInternalServerError(text=f"Не удалось записать Библиотеку: {e}. Попробуйте ещё раз.")
@@ -4281,7 +4333,7 @@ class App:
         body = await req.json()
         if "fav" in body:
             item["fav"] = bool(body["fav"])
-            self.library.save()
+            self.library.save(item)
         return web.json_response(self.public(item))
 
     async def h_library_delete(self, req):

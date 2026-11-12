@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import asyncio
-import json
+import sqlite3
 import unittest
 from unittest import mock
 
@@ -14,6 +14,7 @@ import support
 from support import VIDEO_OUTPUT
 
 import server
+from domain.jobs import JobState
 
 
 class FinishJobTest(unittest.IsolatedAsyncioTestCase):
@@ -49,31 +50,32 @@ class FinishJobTest(unittest.IsolatedAsyncioTestCase):
             return VIDEO_OUTPUT
 
         self.app.job_outputs = slow
-        job = support.job("p1")
+        job = support.job("p1", record=support.job_record("p1"))
         self.app.jobs["p1"] = job
         task = asyncio.create_task(self.app.finish_job(job))
         await support.until(lambda: self.app.jobs.get("p1", {}).get("finalizing"))
         self.assertIn("p1", self.app.jobs, "задание исчезло из очереди до регистрации результата")
-        saved = json.loads(server.QUEUE_FILE.read_text(encoding="utf-8"))
-        self.assertEqual([r["pid"] for r in saved], ["p1"])
-        self.assertTrue(saved[0]["finalizing"], "рестарт в этот момент повторил бы генерацию")
+        saved = self.app.jobs_repo.by_prompt("p1")
+        self.assertIsNotNone(saved, "рестарт в этот момент не нашёл бы задание")
+        self.assertIs(saved.state, JobState.FINALIZING, "рестарт в этот момент повторил бы генерацию")
         release.set()
         await task
         self.assertNotIn("p1", self.app.jobs)
+        self.assertIsNone(self.app.jobs_repo.by_prompt("p1"), "завершённое задание должно уйти из таблицы")
         self.assertEqual(len(self.app.library.items), 1)
 
     async def test_a_failed_registration_keeps_the_job_for_a_retry(self):
         def full(item):
-            raise OSError(28, "диск полон")
+            raise sqlite3.OperationalError("disk I/O error")
 
-        job = support.job("p1")
+        job = support.job("p1", record=support.job_record("p1"))
         self.app.jobs["p1"] = job
         with mock.patch.object(self.app.library, "add", full):
             await self.app.finish_job(job)   # does not raise: the clip is not lost because a write failed
         self.assertIn("p1", self.app.jobs, "задание пропало вместе с несозданной записью")
         self.assertFalse(self.app.jobs["p1"]["finalizing"], "повторная попытка была бы заблокирована")
         self.assertTrue(any("не сохранился" in text for text in self.app.recent_errors))
-        self.assertEqual([r["pid"] for r in json.loads(server.QUEUE_FILE.read_text(encoding="utf-8"))], ["p1"])
+        self.assertIsNotNone(self.app.jobs_repo.by_prompt("p1"), "повторять будет не с чего")
         await self.app.finish_job(job)   # the engine still has the result: no new generation
         self.assertEqual(len(self.app.library.items), 1)
         self.assertNotIn("p1", self.app.jobs)
