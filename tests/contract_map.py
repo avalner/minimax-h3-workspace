@@ -28,7 +28,8 @@ sys.path.insert(0, str(APP))
 import server  # noqa: E402
 
 SOURCES = [APP / "server.py", APP / "agentapi.py", APP / "engine.py", APP / "ffmpeg_mgr.py",
-           APP / "agent.py", APP / "updater.py", APP / "catalog.py", APP / "loras_registry.py"]
+           APP / "agent.py", APP / "updater.py", APP / "catalog.py", APP / "loras_registry.py",
+           APP / "http_errors.py"]
 # the layers the refactoring moved the work into: a map that only sees server.py stops being a map
 for package in ("services", "storage", "backends", "domain", "runtime"):
     SOURCES += sorted(p for p in (APP / package).glob("*.py") if p.is_file())

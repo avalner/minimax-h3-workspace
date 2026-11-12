@@ -41,8 +41,9 @@ from aiohttp import web
 
 import workflows as wf
 from backends.base import BackendUnavailable, SubmitRejected
-from domain.errors import InvalidSpec, JobConflict
+from domain.errors import DomainError, InvalidSpec, JobConflict
 from domain.jobs import InputRef, JobSpec, JobState, ResultPolicy, public_state
+from http_errors import agent_error
 from storage.atomic import atomic_write_json
 from version import APP_VERSION
 
@@ -548,16 +549,16 @@ class AgentAPI:
                     "origin": {"kind": "agent", "client": str(body.get("client") or "")[:40] or None,
                                "idempotency_key": key or None}}
             record, deduplicated = await app.start_video_job(spec, meta=meta, key=key or None)
-        except InvalidSpec as e:
-            raise AgentError(400, "INVALID_PARAM", e.message, e.hint)
+        except DomainError as e:
+            # one table for both faces of the program: the window's statuses and the agent's codes
+            status, code, message, hint = agent_error(e)
+            raise AgentError(status, code, message, hint)
         except SubmitRejected as e:
             raise AgentError(400, "GENERATION_REFUSED", str(e))
         except BackendUnavailable as e:
             raise AgentError(503, "COMFY_OFFLINE", str(e),
                              "Задание записано как неопределённое: проверьте очередь ComfyUI, прежде чем повторять — "
                              "оно могло уйти. Повтор с тем же idempotency_key не отправит его дважды.")
-        except JobConflict as e:
-            raise AgentError(409, e.code, e.message, e.hint)
         except web.HTTPException as e:
             raise AgentError(e.status if 400 <= e.status < 500 else 502, "GENERATION_REFUSED", e.text or e.reason)
         except (aiohttp.ClientError, asyncio.TimeoutError, ConnectionError) as e:
@@ -636,25 +637,34 @@ class AgentAPI:
             return self._err(e.status, e.code, e.message, e.hint)
 
     async def _cancel(self, job_id):
-        app = self.app
-        job = app.jobs.get(job_id)
-        if not job:
+        # one operation, its outcome as data: the service decides what happened to the job, this
+        # layer only words it for the agent (no HTTP response is parsed anywhere in between)
+        result = await self.app.cancel_job(job_id)
+        state = result.get("state")
+        if state == "unknown":
             view = self.job_view(job_id)
             if view:
                 raise AgentError(409, "ALREADY_FINISHED", f"Задание уже завершено: {view['state']}",
                                  "Готовое лежит в GET /library; отменить можно только ждущее или идущее задание.")
             raise AgentError(404, "JOB_NOT_FOUND", "Такого задания приложение не помнит")
-        try:
-            await app.cancel_job(job_id)
-        except (aiohttp.ClientError, asyncio.TimeoutError, ConnectionError) as e:
-            raise AgentError(503, "COMFY_OFFLINE", f"ComfyUI не отвечает: {type(e).__name__}")
-        running = job.get("state") == "running"
-        return web.json_response({"job": job_id, "state": "canceling" if running else "canceled"})
+        if state == "finished":
+            raise AgentError(409, "ALREADY_FINISHED", result.get("message") or "Задание уже завершено",
+                             "Отменить можно только ждущее или идущее задание: результат сохраняется.")
+        if state == "unconfirmed":
+            raise AgentError(503, "COMFY_OFFLINE", result.get("message") or "ComfyUI не отвечает",
+                             "Отмена записана, но движок её не подтвердил: не повторяйте, пока он не ответит.")
+        if state == "refused":
+            raise AgentError(409, "CANCEL_REFUSED", result.get("message") or "Движок отказался останавливать задание")
+        return web.json_response({"job": job_id, "state": state})
 
     # ---------- jobs ----------
 
     def job_view(self, job_id):
-        """State of a job by its id (the ComfyUI prompt id the window shows in the queue). None when unknown."""
+        """State of a job by its id (the ComfyUI prompt id the window shows in the queue). None when unknown.
+
+        The public states stay the ones the agent has always seen; `phase` adds the internal one
+        (finalizing, submitting, uncertain) without turning a live job into a 404 or a premature done.
+        """
         app = self.app
         job = app.jobs.get(job_id)
         if job:
@@ -668,7 +678,10 @@ class AgentAPI:
                 waiting = [k for k, j in app.jobs.items() if j.get("state") != "running"]
                 position = waiting.index(job_id) if job_id in waiting else None
             t0 = job.get("t0")
+            record = job.get("record")
             return {"job": job_id, "state": "running" if running else "queued",
+                    "phase": record.state.value if record is not None else None,
+                    "finalizing": bool(job.get("finalizing")),
                     "mode": meta.get("mode"), "prompt": meta.get("prompt"), "seed": meta.get("seed"),
                     "origin": meta.get("origin"),
                     "progress": {"stage": stage, "step": job.get("step"), "total": job.get("step_max"),
@@ -677,6 +690,17 @@ class AgentAPI:
                     "queue_position": position,
                     "elapsed": round(time.time() - t0, 1) if t0 else None,
                     "results": []}
+        # a job of an earlier run is not lost: it waits for «восстановить» and is shown as queued
+        for pending in getattr(app, "pending_resume", ()):
+            if (pending.prompt_id or pending.backend_job_id) != job_id:
+                continue
+            meta = (pending.legacy or {}).get("meta") or {}
+            return {"job": job_id, "state": "queued", "phase": pending.state.value, "recovering": True,
+                    "mode": meta.get("mode"), "prompt": meta.get("prompt"), "seed": meta.get("seed"),
+                    "origin": meta.get("origin"),
+                    "progress": {"stage": "recovering", "step": None, "total": None, "scene": None,
+                                 "scenes": None, "percent": 0.0},
+                    "queue_position": None, "elapsed": None, "results": []}
         items = [it for it in app.library.items if it.get("prompt_id") == job_id]
         recent = (getattr(app, "recent", None) or {}).get(job_id)
         if not items and not recent:

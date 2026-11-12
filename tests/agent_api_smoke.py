@@ -134,6 +134,7 @@ JOB_VIEW_PROBE = r'''
 import sys, time, types
 sys.path.insert(0, ".")
 import agentapi
+from domain.jobs import JobRecord, JobState
 
 
 class Cfg:
@@ -148,6 +149,7 @@ app = types.SimpleNamespace()
 app.config = Cfg({"allow_agents": True})
 app.port = 1234
 app.library = types.SimpleNamespace(items=[])
+app.pending_resume = []
 app.recent = {}
 app.file_path = lambda item: None
 app.jobs = {"p-run": {"meta": {"mode": "video", "prompt": "тест", "seed": 1}, "state": "running",
@@ -170,6 +172,19 @@ assert queued["queue_position"] == 0, queued
 app.recent["p-bad"] = {"state": "error", "at": "2026-11-11T10:00:00", "message": "нет модели"}
 bad = api.job_view("p-bad")
 assert bad["state"] == "failed" and bad["error"]["message"] == "нет модели", bad
+
+# a job whose result is being written is running (not done, not 404), and says so additively
+app.jobs["p-fin"] = {"meta": {"mode": "video"}, "state": "running", "finalizing": True, "t0": time.time(),
+                     "record": JobRecord(job_id="jf", prompt_id="p-fin", state=JobState.FINALIZING)}
+fin = api.job_view("p-fin")
+assert fin["state"] == "running" and fin["phase"] == "finalizing" and fin["finalizing"] is True, fin
+
+# a job of an earlier run waits for «восстановить»: queued and recovering, not forgotten
+app.pending_resume = [JobRecord(job_id="jp", prompt_id="p-old", state=JobState.QUEUED,
+                                legacy={"meta": {"mode": "video", "prompt": "из прошлого запуска"}})]
+old = api.job_view("p-old")
+assert old and old["state"] == "queued" and old["recovering"] is True, old
+assert old["progress"]["stage"] == "recovering" and old["prompt"] == "из прошлого запуска", old
 
 assert api.job_view("unknown") is None
 print("ok")

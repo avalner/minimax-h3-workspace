@@ -53,9 +53,11 @@ import updater
 import watchdog
 from backends.base import BackendError, BackendUnavailable, SubmitRejected
 from backends.comfy import ComfyBackend
-from domain.errors import InvalidSpec, InvalidTransition, JobConflict
+from domain.errors import DomainError, InvalidSpec, InvalidTransition, JobConflict
 from domain.jobs import (MAX_SECONDS, InputRef, JobRecord, JobSpec, JobState, ResultPolicy, new_job_id,
                          public_state)
+from http_errors import window_error
+from runtime.events import EventHub
 from runtime.tasks import TaskSupervisor
 from services.engines import EngineManager
 from services.jobs import JobService
@@ -66,6 +68,15 @@ from storage.migrations import migrate
 from storage.repositories import (IdempotencyRepository, JobRepository, LibraryRepository, MediaRepository,
                                   ResultRepository)
 from version import APP_VERSION
+
+
+def http_refusal(error):
+    """A domain refusal as the window's own HTTP answer (statuses live in `http_errors`)."""
+    message, status = window_error(error)
+    raise {
+        400: web.HTTPBadRequest, 404: web.HTTPNotFound, 409: web.HTTPConflict,
+        422: web.HTTPUnprocessableEntity, 500: web.HTTPInternalServerError,
+    }.get(status, web.HTTPBadRequest)(text=message)
 
 
 def build_stamp():
@@ -506,7 +517,6 @@ class App:
         self.recent = {}  # prompt_id -> how a job ended, for the short while after it left the queue
         self.history = {}  # prompt_id -> what a failed or stopped job was made from (the details window asks later)
         self.session = None
-        self.browsers = set()
         # the state of this folder: the database is opened once, and the older JSON files are imported
         # into it on the first start of this version (see storage.migrations for what and how)
         self.db = Database(STATE_DB)
@@ -544,6 +554,9 @@ class App:
         # every background coroutine of the app: one place that keeps the reference, sees the error
         # and can stop it (a `create_task` in a handler is fire and forget)
         self.tasks = TaskSupervisor(note_error=self.note_error)
+        # the open windows: events are queued per window, so one slow window cannot hold the work,
+        # and the fact of an outcome is written down whether or not any window is open
+        self.events = EventHub(tasks=self.tasks, remember=self.remember, note_error=self.note_error)
         self._stopping = False   # set first in the shutdown: no new work, no new tasks
         self.last_shutdown = None  # what the shutdown could not finish in its budget, for the report
         self.guard = watchdog.GpuWatchdog()  # the video card watch: slow render or hung engine
@@ -757,6 +770,7 @@ class App:
 
         self.agents.unpublish()
         self.tasks.close()   # from this moment a handler gets None instead of a task on a closed session
+        await self.events.close()   # the windows are told nothing more: their connections are closed
         for installer in (self.installer, getattr(self, "dl_installer", None), self.agent_installer):
             if installer is not None:
                 installer.cancelled = True
@@ -1120,11 +1134,7 @@ class App:
         if not any(j["state"] == "running" for j in self.jobs.values()):
             return
         self.guard.note_progress()  # a live preview is the strongest sign of a working render
-        for b in list(self.browsers):
-            try:
-                await b.send_bytes(image)
-            except Exception:
-                self.browsers.discard(b)
+        self.events.preview(image)  # queued, dropped if a window cannot keep up: a frame is not state
 
     async def on_comfy_event(self, msg):
         t, d = msg.get("type"), msg.get("data") or {}
@@ -1359,16 +1369,19 @@ class App:
             self.note_error(f"Не удалось сохранить состояние сцены: {e}")
 
     async def broadcast(self, payload):
-        self.remember(payload)
-        text = json.dumps(payload, ensure_ascii=False)
-        for b in list(self.browsers):
-            try:
-                await b.send_str(text)
-            except Exception:
-                self.browsers.discard(b)
+        """One event for the open windows. The fact (if it is one) is recorded first, delivery never waits.
+
+        The hub queues the event per window: a slow or frozen window cannot delay the finalization,
+        the next job or another window. It reconnects and syncs from the snapshot instead.
+        """
+        await self.events.publish(payload)
 
     def remember(self, payload):
-        """Keep the outcome of a job for a while: an agent asks about it after it has already left the queue."""
+        """Keep the outcome of a job for a while: an agent asks about it after it has already left the queue.
+
+        Called by the event hub before anything is delivered, so the outcome exists even when no window
+        is open at that moment.
+        """
         kind = {"done": "done", "error": "error", "interrupted": "interrupted"}.get(payload.get("type", ""))
         pid = payload.get("prompt_id")
         if not kind or not pid:
@@ -1377,6 +1390,31 @@ class App:
                             "message": payload.get("message", "")}
         while len(self.recent) > 200:
             self.recent.pop(next(iter(self.recent)))
+
+    def ui_snapshot(self):
+        """What a window may have missed: the live queue, the latest outcomes and their results.
+
+        Sent as the first message of a connection (`hello`). The events are not a journal and are not
+        meant to be one: after a reconnect the window syncs from this snapshot and treats the events
+        that follow as updates, so a repeated or a missed event cannot leave it with a wrong state.
+        """
+        jobs = []
+        for pid, job in list(self.jobs.items()):
+            meta = job.get("meta") or {}
+            jobs.append({"prompt_id": pid, "state": job.get("state") or "queued",
+                         "stage": job.get("stage"), "step": job.get("step"), "max": job.get("step_max"),
+                         "mode": meta.get("mode"), "finalizing": bool(job.get("finalizing")),
+                         "prompt": str(meta.get("sub") or meta.get("prompt") or "")[:140],
+                         "agent": (meta.get("origin") or {}).get("kind") == "agent"})
+        recent = [{"prompt_id": pid, **rec} for pid, rec in list(self.recent.items())[-100:]]
+        wanted = {rec["prompt_id"] for rec in recent}
+        results = []
+        for item in (*self.library.items, *self.pending.values()):
+            if item.get("prompt_id") in wanted:
+                results.append(self.public(item))
+                if len(results) >= 60:
+                    break
+        return {"type": "hello", "engine": self.comfy_online, "jobs": jobs, "recent": recent, "results": results}
 
     def keep_meta(self, job):
         """Remember what a job was made from after it leaves the queue: the details window may be opened later."""
@@ -3032,8 +3070,8 @@ class App:
                                  model="fused" if fused else "fast", acceleration="sla" if fast else "normal",
                                  result_policy=ResultPolicy.DRAFT if preview else ResultPolicy.LIBRARY,
                                  source="ui", sub=sub)
-        except InvalidSpec as e:
-            raise web.HTTPBadRequest(text=e.message)
+        except DomainError as e:
+            http_refusal(e)
         inputs = []
         if first:
             inputs.append(media_input("Первый кадр" + (" · зациклено" if loop else ""), "image", comfy=first))
@@ -3049,8 +3087,8 @@ class App:
             raise web.HTTPServiceUnavailable(text=(
                 f"{e}. Задание записано как неопределённое: проверьте очередь ComfyUI, прежде чем повторять — "
                 "оно могло уйти."))
-        except JobConflict as e:
-            raise web.HTTPConflict(text=e.message)
+        except DomainError as e:
+            http_refusal(e)
         return web.json_response({"prompt_id": record.prompt_id, "seed": spec.seed,
                                   "queue_number": (record.legacy or {}).get("number")})
 
@@ -4310,39 +4348,45 @@ class App:
 
         An id this program does not know is not a reason to interrupt whatever the engine happens to be
         running: the window's «stop the current thing» is its own operation (`stop_current`).
+
+        The outcome is data, not an HTTP response: the window shows a notice and the agent API words the
+        same fact in its own dialect (`finished`/`unknown`/`canceled`/`canceling`/`unconfirmed`/`refused`).
         """
         job = self.jobs.get(pid) if pid else None
         if job and job.get("finalizing"):
             # the generation is already over and its result is being written: interrupting the engine
             # now would throw away a clip that exists on disk
-            await self.broadcast({"type": "notice", "text": "Генерация уже закончилась: результат сохраняется."})
-            return
+            text = "Генерация уже закончилась: результат сохраняется."
+            await self.broadcast({"type": "notice", "text": text})
+            return {"state": "finished", "message": text}
         if not job:
             await self.broadcast({"type": "notice", "text": "Этого задания уже нет в очереди: останавливать нечего."})
-            return
+            return {"state": "unknown", "message": "Этого задания уже нет в очереди"}
         record = job.get("record")
         if record is not None:
             try:
                 accepted = await self.service.request_cancel(record)
             except JobConflict as e:
                 await self.broadcast({"type": "notice", "text": e.message})
-                return
+                return {"state": "refused", "message": e.message}
             except BackendUnavailable:
+                text = "ComfyUI не отвечает: отмена записана, но не подтверждена. Задание останется в очереди."
                 self.note_error(f"Отмена задания {pid} записана, но не подтверждена: ComfyUI не отвечает")
-                await self.broadcast({"type": "notice", "text": (
-                    "ComfyUI не отвечает: отмена записана, но не подтверждена. Задание останется в очереди.")})
-                return
+                await self.broadcast({"type": "notice", "text": text})
+                return {"state": "unconfirmed", "message": text}
             except BackendError as e:
-                await self.broadcast({"type": "notice", "text": f"Остановить не получилось: {e}"})
-                return
+                text = f"Остановить не получилось: {e}"
+                await self.broadcast({"type": "notice", "text": text})
+                return {"state": "refused", "message": text}
             if record.state is JobState.CANCELED:   # a queued job is removed at once
                 self.keep_meta(job)
                 self.jobs.pop(pid, None)
                 await self.broadcast({"type": "interrupted", "prompt_id": pid})
-            elif accepted:
+                return {"state": "canceled", "message": None}
+            if accepted:
                 # running: the engine accepted the request, the outcome comes from its event or the watch
                 self.tasks.spawn(f"cancel:{pid}", self.interrupt_watch(pid), replace=True)
-            return
+            return {"state": "canceling", "message": None}
         # cloud tasks and jobs of an older run have no record: their own paths stay as they were
         if job.get("task"):
             self.try_set_job_state(job, JobState.CANCELED)
@@ -4355,15 +4399,17 @@ class App:
                 except cloud.CloudError:
                     pass
             await self.broadcast({"type": "interrupted", "prompt_id": pid})
-        elif job["state"] == "queued":
+            return {"state": "canceled", "message": None}
+        if job["state"] == "queued":
             await self.comfy_json("POST", "/queue", json={"delete": [pid]})
             self.try_set_job_state(job, JobState.CANCELED)
             self.keep_meta(job)
             self.jobs.pop(pid, None)
             await self.broadcast({"type": "interrupted", "prompt_id": pid})
-        else:
-            await self.comfy_json("POST", "/interrupt", json={"prompt_id": pid})
-            self.tasks.spawn(f"cancel:{pid}", self.interrupt_watch(pid), replace=True)
+            return {"state": "canceled", "message": None}
+        await self.comfy_json("POST", "/interrupt", json={"prompt_id": pid})
+        self.tasks.spawn(f"cancel:{pid}", self.interrupt_watch(pid), replace=True)
+        return {"state": "canceling", "message": None}
 
     async def stop_current(self):
         """The window's «Остановить»: stop whatever the engine is running right now, by explicit request."""
@@ -4669,13 +4715,13 @@ class App:
     async def h_events(self, req):
         ws = web.WebSocketResponse(heartbeat=20)
         await ws.prepare(req)
-        self.browsers.add(ws)
-        await ws.send_str(json.dumps({"type": "engine", "online": self.comfy_online}))
+        # the first message is the snapshot: the window syncs from the facts, then follows the events
+        sub = self.events.attach(ws, hello=self.ui_snapshot())
         try:
             async for _ in ws:
                 pass
         finally:
-            self.browsers.discard(ws)
+            await self.events.detach(sub)
         return ws
 
     async def h_agent_allow(self, req):

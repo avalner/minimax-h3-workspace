@@ -2065,6 +2065,7 @@ function connectEvents() {
   ws.onmessage = e => {
     if (typeof e.data !== 'string') { const rj = QUEUE.find(x => x.state === 'running'); if (rj) rj.lastEv = performance.now(); previewHandlers.forEach(f => f(e.data)); return; }
     const m = JSON.parse(e.data);
+    if (m.type === 'hello') { onSnapshot(m); return; }
     if (m.type === 'engine') { setEngine(m.online); if (m.online) loadStatus(); return; }
     if (m.type === 'notice') { toast(m.text); return; }
     if (m.type === 'setup') { onSetupEvent(m); return; }
@@ -2084,6 +2085,45 @@ function connectEvents() {
     else if (m.prompt_id) earlyEvents.set(m.prompt_id, [...(earlyEvents.get(m.prompt_id) || []), m].slice(-50));
   };
   ws.onclose = () => { setEngine(false); setTimeout(connectEvents, 2000); };
+}
+/* The first message of every connection: what the window missed while it was not connected.
+   It is a snapshot, not a journal: events after it are updates, and a repeated or a missed event
+   cannot leave a queue row in a wrong state. The server sends it before any event of this socket. */
+function onSnapshot(m) {
+  if (typeof m.engine !== 'undefined') setEngine(!!m.engine);
+  const active = new Set();
+  (m.jobs || []).forEach(j => {
+    active.add(j.prompt_id);
+    let q = QUEUE.find(x => x.id === j.prompt_id);
+    if (!q) {
+      qAdd(j.prompt_id, j.mode, j.prompt || '');
+      q = QUEUE[QUEUE.length - 1];
+      if (q) { q.detached = !!j.agent; q.agent = !!j.agent; }
+    }
+    if (!q) return;
+    if (j.state === 'running') {
+      q.state = 'running'; q.stage = j.stage || q.stage; q.step = j.step; q.max = j.max;
+      q.t0 = q.t0 || performance.now();
+    } else {
+      q.state = 'queued';
+    }
+  });
+  (m.results || []).forEach(it => {
+    if (it.preview) { if (!DRAFTS.some(x => x.id === it.id)) addDraft(normItem(it)); }
+    else if (!LIB.some(x => x.id === it.id)) addToLib(normItem(it), new Date(it.date));
+  });
+  const recent = new Map((m.recent || []).map(r => [r.prompt_id, r]));
+  QUEUE.forEach(q => {
+    if (!['queued', 'running'].includes(q.state) || active.has(q.id)) return;
+    const res = (m.results || []).find(it => it.prompt_id === q.id);
+    const rec = recent.get(q.id);
+    if (res) { q.state = 'done'; q.itemId = res.id; }
+    else if (rec) {
+      q.state = rec.state === 'error' ? 'error' : rec.state === 'interrupted' ? 'stopped' : 'done';
+      if (rec.message) q.msg = rec.message;
+    }
+  });
+  qRender(); qJobTick();
 }
 let ENGINE_ON = true;
 function setEngine(on) {

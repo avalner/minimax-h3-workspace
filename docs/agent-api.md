@@ -138,6 +138,11 @@ X-Agent-Token: <token>
 ```
 
 - `state`: `queued`, `running`, `done`, `failed`, `canceled`;
+- `phase` — внутреннее состояние записи (`queued`, `running`, `submitting`, `finalizing`, `uncertain`,
+  `succeeded`, …) и `finalizing: true`, пока результат сохраняется: такое задание показывается как
+  `running` и не может быть отменено (это не ошибка и не `done`);
+- задание прошлого запуска, которое ждёт «восстановить», отвечает `queued` с `recovering: true` и
+  `progress.stage: "recovering"` — оно не пропадает из ответа;
 - `progress.percent` — та же грубая оценка, что показывает окно (точное число знает только ComfyUI);
 - `queue_position` — сколько заданий впереди, пока задание ждёт;
 - готовое: `results[]` с `library_id`, `path` (файл на диске), `url` (окно умеет отдавать его по ссылке),
@@ -209,6 +214,10 @@ X-Agent-Token: <token>
 Ждущее задание удаляется из очереди, идущее — прерывается (`state: "canceling"`, дальше
 `GET /jobs/{id}` покажет `canceled`). Завершённое отменить нельзя — `409 ALREADY_FINISHED`.
 
+Если движок не отвечает, отмена записывается, но не подтверждается: ответ — `503 COMFY_OFFLINE` с
+тем же заданием в очереди (не повторяйте, пока движок не ответит). Отказ движка — `409
+CANCEL_REFUSED`.
+
 ### `GET /library?limit=20&mode=video` — готовое
 
 ```json
@@ -235,6 +244,7 @@ X-Agent-Token: <token>
 | `ASSET_TOO_BIG` | 413 | больше 2 ГБ |
 | `GENERATION_REFUSED` | 400/502 | ComfyUI не принял граф (нет нод, ошибка модели) |
 | `COMFY_OFFLINE` | 503 | ComfyUI не отвечает; повторите с тем же `idempotency_key` |
+| `CANCEL_REFUSED` | 409 | движок отказался останавливать задание |
 | `ALREADY_FINISHED` | 409 | задание уже закончилось, отменять нечего |
 | `JOB_NOT_FOUND` | 404 | приложение такого задания не помнит |
 | `INTERNAL` | 500 | непредвиденная ошибка приложения (попадает в отчёт для разработчика) |
