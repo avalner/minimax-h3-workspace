@@ -388,6 +388,8 @@ class App:
         self.setup_log = []  # last setup events, replayed to a reopened window
         self.model_names = {}  # role -> name as ComfyUI lists it
         self.missing = []  # catalog entries ComfyUI does not see
+        self.found = set()  # roles whose file this ComfyUI does see
+        self.needed = []  # roles the chosen modes need (plus the optional extras of «Модели»)
         self.skills = ag.Skills(ROOT / "skills", DATA_DIR / "skills", self.config)
         self.llm = ag.LlamaServer(self.llm_root(), DATA_DIR / "llama.log")
         self.agent_installer = None
@@ -604,8 +606,9 @@ class App:
         self.auto_modes = {m for m in ("krea", "kreareal", "qwen", "flux", "upscale", "long") if self.config.get("engine") == "external"
                            and all(r in found for r in catalog.MODE_ROLES[m])}
         needed = catalog.roles_for(self.modes())
+        needed += [r for r in catalog.EXTRA_ROLES if r not in needed]  # optional models: listed, downloaded on demand
         missing = [entries[r] for r in needed if r in entries and r not in found]
-        self.model_names, self.missing = names, missing
+        self.model_names, self.missing, self.found, self.needed = names, missing, found, needed
         return names, missing
 
     async def comfy_json(self, method, path, **kw):
@@ -1180,7 +1183,7 @@ class App:
         dev = (stats.get("devices") or [{}])[0]
         await self.resolve_models()
         missing = {m["role"] for m in self.missing}
-        needed = catalog.roles_for(self.modes())
+        needed = self.needed or catalog.roles_for(self.modes())
         models = [{"role": role, "title": catalog.ROLE_TITLES[role], "name": self.model_names[role],
                    "category": catalog.VARIANTS[role][variant]["category"],
                    "folder": catalog.VARIANTS[role][variant]["category"], "marks": catalog.marks_text(role),
@@ -1588,7 +1591,7 @@ class App:
                           "устройства": "; ".join(f'{d.get("name")} (всего {round(d.get("vram_total", 0) / 1024 ** 3, 1)} ГБ, '
                                                   f'свободно {round(d.get("vram_free", 0) / 1024 ** 3, 1)} ГБ)' for d in st.get("devices", []))})
             await self.resolve_models()
-            needed = catalog.roles_for(self.modes())
+            needed = self.needed or catalog.roles_for(self.modes())
             missing = {m["role"] for m in self.missing}
             models = [{"title": catalog.ROLE_TITLES[r], "name": self.model_names.get(r), "have": r not in missing}
                       for r in self.choice() if r in needed]
@@ -2317,6 +2320,11 @@ class App:
             "mode": "qwen", "sub": sub, "prompt": prompt, "aspect": form.get("aspect", "") if form.get("kind") != "sheet" else "",
             "q": "", "len": 0.0, "res": res, "seed": seed, "inputs": inputs})
 
+    async def fused_model(self):
+        """The Fused Turbo checkpoint for the Video section, or None when its file is not in this ComfyUI."""
+        await self.resolve_models()  # the file may have just been downloaded: ask ComfyUI again, not the old list
+        return self.model_names.get("fused_unet") if "fused_unet" in self.found else None
+
     async def h_generate_video(self, req):
         await self.need_models("video")
         form, images, prompt, aspect, quality, seed = await self.read_form(req, ("first", "last"))
@@ -2327,16 +2335,27 @@ class App:
         if loop:  # seamless loop (live wallpaper): the video ends on the same picture it starts with
             last = first
 
+        fused = None
         fast = None
-        if form.get("accel") == "sla":
+        if form.get("unet") == "fused":  # one 21 GB file with its turbo LoRA baked in: 4 steps, no extra file
+            if self.rh():
+                raise web.HTTPBadRequest(text="Fused Turbo работает только на этом компьютере: в облаке RunningHub "
+                                              "доступна обычная модель. Выберите «FastH3» или выключите облако.")
+            fused = await self.fused_model()
+            if not fused:
+                raise web.HTTPBadRequest(text="Для модели Fused Turbo нужен её файл (около 21 ГБ). Откройте «Модели» "
+                                              "и нажмите «Скачать» в строке «Fused Turbo» или выберите «FastH3».")
+        elif form.get("accel") == "sla":
             miss = {mm["role"] for mm in self.missing}
             if "sla_lora" in miss or "sla_lora" not in self.model_names:
                 raise web.HTTPBadRequest(text="Для быстрого режима нужен файл Turbo-SLA (около 2 ГБ). Нажмите «Скачать» под переключателем «Ускорение» "
                                               "или выберите «Обычное».")
             fast = self.model_names["sla_lora"]
-        graph, stages = wf.video_graph(self.model_names, prompt, width, height, seconds, seed, first, last, self.custom_loras(), fast)
+        graph, stages = wf.video_graph(self.model_names, prompt, width, height, seconds, seed, first, last, self.custom_loras(), fast, fused)
         sub = "Зацикленное видео" if loop else "Кадр → кадр" if last else "Изображение → видео" if first else "Текст → видео"
-        if fast:
+        if fused:
+            sub += " · Fused Turbo"
+        elif fast:
             sub += " · быстрый черновик"
         inputs = []
         if first:
@@ -2431,16 +2450,26 @@ class App:
         ref_size = form.get("ref_size") if form.get("ref_size") in ("match", "max") else "max"
         extra = self.optional_loras(form, (("realism", "realism_lora"), ("motion", "motion_repair_lora"))) + self.custom_loras()
         width, height = wf.resolution(aspect, quality, form)
+        fused = None
         pika = None
-        if form.get("accel") == "pika":
+        if form.get("unet") == "fused":  # the fused checkpoint does references too: no LoRA, its own 4-step recipe
+            if self.rh():
+                raise web.HTTPBadRequest(text="Fused Turbo работает только на этом компьютере: в облаке RunningHub "
+                                              "доступна обычная модель. Выберите «Singularity» или выключите облако.")
+            fused = await self.fused_model()
+            if not fused:
+                raise web.HTTPBadRequest(text="Для модели Fused Turbo нужен её файл (около 21 ГБ). Откройте «Модели» "
+                                              "и нажмите «Скачать» в строке «Fused Turbo» или выберите «Singularity».")
+            steps = 4
+        elif form.get("accel") == "pika":
             if "pika_lora" in {m["role"] for m in self.missing}:
                 raise web.HTTPBadRequest(text="Файл Pika (pika_h3_flex_turbo_8step_hd_ref2va) не найден в ComfyUI. "
                                               "Скачайте его в разделе «Настройки» или выберите прежнее ускорение.")
             pika, steps = self.model_names["pika_lora"], max(6, steps)
         graph, stages = wf.ref_graph(self.model_names, wf.lipsync_prompt(prompt, len(images), len(videos)), width, height, seconds, seed, images, videos, audios,
-                                     steps, ref_size, extra, pika)
+                                     steps, ref_size, extra, pika, fused)
         sub = f"{len(images)} карт." + (f", {len(videos)} видео" if videos else "") + (f", {len(audios)} аудио" if audios else "") \
-            + f" · {steps} шагов" + (" · Pika" if pika else "")
+            + f" · {steps} шагов" + (" · Fused Turbo" if fused else " · Pika" if pika else "")
         inputs = [media_input(f"Референс-изображение {i + 1}", "image", comfy=name) for i, name in enumerate(images)]
         inputs += [media_input(f"Референс-видео {i + 1}", "video", comfy=name) for i, name in enumerate(videos)]
         inputs += [media_input(f"Аудио {i + 1}", "audio", comfy=name) for i, name in enumerate(audios)]

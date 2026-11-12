@@ -72,6 +72,14 @@ VARIANTS = {
         "nvfp4": _m("FastVideo/FastVideo-FastH3-8-Step-V2-NVFP4-Comfy",
                     "diffusion_models/fastvideo_fasth3_8step_v2_pruned_nvfp4.safetensors", 13.61, "diffusion_models"),
     },
+    # Optional second main model for Image-to-Video: the MATLOWAI fused turbo bake. The FL2VA transformer with the
+    # reference delta merged in, lightx2v's turbo LoRA and Mystic v2 already folded into the weights, quantised once
+    # afterwards: 4 steps, no LoRA files, and it also does references in the same file. Licence: MiniMax H3 Community.
+    "fused_unet": {
+        "int8": _m("MATLOWAI/minimax-h3-fused-turbo-int8-convrot",
+                   "diffusion_models/minimax_h3_fused_refdelta_r1024_turbo8_mystic07_int8_convrot.safetensors",
+                   20.98, "diffusion_models"),
+    },
     "lipsync_unet": {
         "full": _m("WarmBloodAban/Minimax-h3_Singularity",
                    "Minimax-h3_Singularity_ref2va_v1.3_int8.safetensors", 34.0, "diffusion_models"),
@@ -215,7 +223,7 @@ VARIANTS = {
 # What a file name of each role must contain (any of these words, any case). Used only to warn when a file is picked
 # by hand that does not look like the right one, and to say what to check when ComfyUI fails with a shape error.
 ROLE_MARKS = {
-    "fast_unet": ["fasth3", "h3"], "lipsync_unet": ["singularity", "h3"], "text_encoder": ["32b"],
+    "fast_unet": ["fasth3", "h3"], "lipsync_unet": ["singularity", "h3"], "fused_unet": ["fused"], "text_encoder": ["32b"],
     "video_vae": ["video_vae"], "audio_vae": ["audio_vae"], "ref2v_turbo_lora": ["turbo"],
     "upscaler": ["upscaler"], "preview": ["taeh3"], "action_unet": ["hybrid", "fl2va"],
     "speed_slider_lora": ["speed"], "action_upscaler": ["upscaler"], "vocal_model": ["melband"],
@@ -253,6 +261,7 @@ ACTION_DMAD_LORA = "minimax_h3_dmad_full_dareties_v4_step600_comfy_fro"
 
 ROLE_TITLES = {
     "fast_unet": "Основная модель — Image-to-Video (FastH3)",
+    "fused_unet": "Основная модель — Fused Turbo (4 шага, всё в одном файле, по желанию)",
     "lipsync_unet": "Основная модель — Lipsync (Singularity)",
     "text_encoder": "Текстовый энкодер (Qwen3-VL 32B)",
     "video_vae": "Видео VAE",
@@ -322,8 +331,12 @@ MODE_OPTIONAL = {
 }
 ALL_ROLES = list(VARIANTS)
 
+# Roles that are never part of an install plan (nobody has to download 21 GB for a mode they do not use):
+# they are listed in «Модели» with their own Download button and switched on by a choice in their section.
+EXTRA_ROLES = ("fused_unet",)
+
 # The user's original files, for connecting to an existing ComfyUI that already has them.
-DEFAULT_CHOICE = {"fast_unet": "int8", "lipsync_unet": "full", "text_encoder": "nvfp4", "video_vae": "int8",
+DEFAULT_CHOICE = {"fast_unet": "int8", "fused_unet": "int8", "lipsync_unet": "full", "text_encoder": "nvfp4", "video_vae": "int8",
                   "audio_vae": "fp32", "ref2v_turbo_lora": "bf16", "upscaler": "bf16", "preview": "taeh3",
                   "action_unet": "int8", "speed_slider_lora": "v1.1", "action_upscaler": "lms", "vocal_model": "fp16",
                   "realism_lora": "v1", "motion_repair_lora": "v1", "pika_lora": "hd8", "swap_lora": "v15", "sla_lora": "bf16",

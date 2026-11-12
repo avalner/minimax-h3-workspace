@@ -775,7 +775,7 @@ img.pr-media{object-position:center 38%}
 .pb.big{height:9px;border-radius:9px;background:var(--surface-2);overflow:hidden}
 .pb.big i{display:block;height:100%;width:0;background:var(--grad);transition:width .4s}
 .pnow-s{display:flex;justify-content:space-between;font-family:var(--mono);font-size:12px;color:var(--muted);margin-top:6px}
-.m .st.opt{color:var(--dim)}
+.m .st.opt{color:var(--dim);padding:0;border:0;background:none;border-radius:0;font-size:12px;font-weight:700;text-align:right}
 @media (max-width:900px){.choose.three{grid-template-columns:1fr}.hw{grid-template-columns:1fr 1fr}}
 /* agent */
 :root{--aw:clamp(300px,24vw,480px)}
@@ -2768,12 +2768,13 @@ function wireDrop(zone, onFile) {
 }
 
 /* ---------- VIDEO view ---------- */
-const V = { aspect: '16:9', q: '720p', dur: 5, first: false, last: false, len: () => V.dur };
+const V = { aspect: '16:9', q: '720p', dur: 5, first: false, last: false, unet: 'fast', len: () => V.dur };
 const vPrev = previewPanel($('#vPreview'), V, {
   extraLabel: 'Режим',
   extra: () => V.first && V.last ? 'Кадр → кадр' : V.first ? 'Изображение → видео' : 'Текст → видео',
-  validate: () => !$('#vPrompt').value.trim() ? 'Напишите промпт' : '',
-  passes: () => [V.accel === 'sla' ? 4 : 8],
+  validate: () => !$('#vPrompt').value.trim() ? 'Напишите промпт'
+    : V.unet === 'fused' && V.fusedHave === false ? 'Скачайте файл модели Fused Turbo: кнопка «Скачать» под переключателем «Модель»' : '',
+  passes: () => [V.unet === 'fused' || V.accel === 'sla' ? 4 : 8],
   target: () => $('#dFirst img'),
   real: {
     url: '/api/generate/video',
@@ -2783,22 +2784,33 @@ const vPrev = previewPanel($('#vPreview'), V, {
       sizeForm(V, fd); fd.append('aspect', V.aspect); fd.append('quality', V.q); fd.append('duration', V.dur);
       seedForm(V, fd);
       if ($('#dFirst')._file) fd.append('first', $('#dFirst')._file);
-      fd.append('accel', V.accel === 'sla' ? 'sla' : '');
+      fd.append('unet', V.unet === 'fused' ? 'fused' : '');
+      fd.append('accel', V.unet !== 'fused' && V.accel === 'sla' ? 'sla' : '');
       const loop = $('#vLoop').checked && $('#dFirst')._file;
       if (loop) fd.append('loop', '1');
       else if ($('#dFirst')._file && $('#dLast')._file) fd.append('last', $('#dLast')._file);
       return fd;
     },
   },
-  meta: () => ({ mode: 'video', prompt: $('#vPrompt').value.trim(), sub: $('#vLoop').checked && V.first ? 'Зацикленное видео' : V.first && V.last ? 'Кадр → кадр' : V.first ? 'Изображение → видео' : 'Текст → видео' }),
+  meta: () => ({ mode: 'video', prompt: $('#vPrompt').value.trim(), sub: ($('#vLoop').checked && V.first ? 'Зацикленное видео' : V.first && V.last ? 'Кадр → кадр' : V.first ? 'Изображение → видео' : 'Текст → видео') + (V.unet === 'fused' ? ' · Fused Turbo' : '') }),
   onDone: item => addToLib(item),
 });
 $('#vLoop').onchange = () => { $('#dLast').style.opacity = $('#vLoop').checked ? .4 : ''; vPrev(); };
 const vUpd = paramsCard($('#vParams'), V, { n: 3, duration: true, onChange: () => { vPrev(); vMode(); },
-  extraRow: `<div class="row"><div class="row-l">Ускорение <span class="hint">для слабых видеокарт</span></div>
+  extraRow: `<div class="row">
+    <div class="row-l">Модель <span class="hint">чем генерировать</span></div>
+    <div class="seg v-unet" style="grid-template-columns:1fr 1fr"><button type="button" data-un="fast">FastH3<small>обычная · 8 шагов</small></button><button type="button" data-un="fused">Fused Turbo<small>4 шага · звук ярче</small></button></div>
+    <div class="hint v-unhint" hidden></div>
+    <div class="hint">Fused Turbo — одна модель на 21 ГБ: LoRA ускорения и сглаживания движения уже внутри, поэтому хватает 4 шагов. Скачивается отдельно, в установку не входит.</div></div>
+  <div class="row v-accel-row"><div class="row-l">Ускорение <span class="hint">для слабых видеокарт</span></div>
     <div class="seg v-accel" style="grid-template-columns:1fr 1fr"><button type="button" data-ac="normal">Обычное<small>как раньше</small></button><button type="button" data-ac="sla">Быстрый черновик<small>в 1,3 раза быстрее, качество ниже</small></button></div>
     <div class="hint v-achint" hidden></div><div class="hint" style="margin-top:6px">«Быстрый черновик» нужен для проб: это скорость, а не увеличение размера. Для готового ролика выбирайте «Обычное».</div></div>` });
 function vAccUpd() { $$('.v-accel button').forEach(b => b.classList.toggle('on', (b.dataset.ac === 'sla') === (V.accel === 'sla'))); }
+function vUnetUpd() {
+  $$('.v-unet button').forEach(b => b.classList.toggle('on', b.dataset.un === V.unet));
+  $('.v-accel-row').hidden = V.unet === 'fused';   // the fused file has its turbo inside: no LoRA acceleration to add
+  if (V.unet === 'fused' && V.accel === 'sla') { V.accel = 'normal'; vAccUpd(); }
+}
 async function vAccCheck() {
   const hint = $('.v-achint'); hint.hidden = true; hint.innerHTML = '';
   if (V.accel !== 'sla') return;
@@ -2812,11 +2824,28 @@ async function vAccCheck() {
     }
   } catch {}
 }
+async function vFusedCheck() {   // the model is chosen in this section, so it is downloaded from here too («Модели» works as well)
+  const hint = $('.v-unhint'); if (!hint) return;
+  hint.hidden = true; hint.innerHTML = '';
+  if (V.unet !== 'fused') { V.fusedHave = null; return; }
+  try {
+    const st = await (await fetch('/api/status')).json();
+    const m = (st.models || []).find(x => x.role === 'fused_unet');
+    V.fusedHave = m ? !!m.have : null;
+    if (m && !m.have) {
+      hint.hidden = false;
+      hint.innerHTML = `Файла модели нет в ComfyUI (${GB(m.size)}). <button class="btn mini pri" type="button" id="vFusedDl">Скачать</button> <span class="hint" id="vFusedProg"></span>`;
+      $('#vFusedDl').onclick = () => { mdStart(['fused_unet']); };
+    }
+  } catch {}
+}
 $('#vParams').addEventListener('click', e => {
-  const b = e.target.closest('.v-accel button'); if (!b) return;
-  V.accel = b.dataset.ac; vAccUpd(); vAccCheck(); vPrev();
+  const b = e.target.closest('.v-accel button');
+  if (b) { V.accel = b.dataset.ac; vAccUpd(); vAccCheck(); vPrev(); return; }
+  const u = e.target.closest('.v-unet button');
+  if (u) { V.unet = u.dataset.un; vUnetUpd(); vFusedCheck(); vPrev(); }
 });
-vAccUpd(); vAccCheck();
+vAccUpd(); vAccCheck(); vUnetUpd(); vFusedCheck();
 function vMode() {
   $('#vMode').textContent = 'Режим: ' + (V.first && V.last ? 'видео между двумя кадрами' : V.first ? 'изображение → видео' : 'видео по тексту');
   $('#dLast').classList.toggle('disabled', !V.first);
@@ -3445,7 +3474,7 @@ function renderModels(s) {
     const optional = !m.modes.length;
     const st = m.have ? '<span class="st ok">✓ есть</span>' : optional ? '<span class="st opt">необязательно</span>' : '<span class="st miss">нет</span>';
     const modes = m.modes.map(x => ({ video: 'Image-to-Video', lipsync: 'Lipsync', refs: 'Референсы', actor: 'Актёрская игра', swap: 'Замена персонажа', action: 'Экшн', long: 'Видеостудия', krea: 'Изображение по тексту', kreareal: 'Изображение: реализм', qwen: 'Правка изображения', flux: 'Правка: FLUX.2', upscale: 'Увеличение', relayvsr: 'Быстрое увеличение' })[x]).join(', ') || 'дополнительно';
-    return `<div class="m"><b>${esc(m.name.split('\\').pop())}<small>${esc(m.title)} · ${modes}<br>Нужен файл: <span class="mf" title="Нажмите, чтобы скопировать имя">${esc(m.file || '')}</span> · положить в папку ${esc(m.folder || '')} вашего ComfyUI (подойдёт и любая подпапка в ней)${m.marks ? ` · в названии: ${esc(m.marks)}` : ''}</small></b><span class="hint">${GB(m.size)}</span>${st}<div class="m-btns" style="grid-column:1/-1;display:flex;gap:8px;flex-wrap:wrap">${s.engine === 'external' && !m.have ? `<button class="btn mini pri" type="button" data-dlnow="${m.role}" title="Скачать этот файл прямо в папку моделей вашего ComfyUI">Скачать сюда (${GB(m.size)})</button>` : ''}<button class="btn mini" type="button" data-dlmodel="${m.role}" title="Открыть страницу скачивания этого файла в браузере">Страница в интернете…</button><button class="btn mini" type="button" data-copyurl="${esc(m.url || '')}" title="Скопировать прямую ссылку, чтобы скачать менеджером загрузок или через другой компьютер">Копировать ссылку</button><button class="btn mini" type="button" data-copyname="${esc(m.file || '')}" title="Скопировать имя файла, чтобы найти его на компьютере или на сайте">Копировать имя</button><button class="btn mini" type="button" data-pickmodel="${m.role}" title="${m.have ? 'Заменить на другой файл (например, другую точность модели)' : 'Если файл у вас называется иначе — выберите его вручную'}">${m.have ? (m.picked ? 'Другой файл ✓' : 'Заменить…') : 'Указать файл…'}</button>${m.variants && m.variants.length > 1 ? `<button class="btn mini" type="button" data-variant="${m.role}" title="Поставить другую версию этой же модели, например полегче или новее">Другая версия…</button>` : ''}</div></div>`;
+    return `<div class="m"><b>${esc(m.name.split('\\').pop())}<small>${esc(m.title)} · ${modes}<br>Нужен файл: <span class="mf" title="Нажмите, чтобы скопировать имя">${esc(m.file || '')}</span> · положить в папку ${esc(m.folder || '')} вашего ComfyUI (подойдёт и любая подпапка в ней)${m.marks ? ` · в названии: ${esc(m.marks)}` : ''}</small></b><span class="hint">${GB(m.size)}</span>${st}<div class="m-btns" style="grid-column:1/-1;display:flex;gap:8px;flex-wrap:wrap">${!m.have && (s.engine === 'external' || optional) ? `<button class="btn mini pri" type="button" data-dlnow="${m.role}" title="Скачать этот файл в папку моделей ComfyUI">Скачать сюда (${GB(m.size)})</button>` : ''}<button class="btn mini" type="button" data-dlmodel="${m.role}" title="Открыть страницу скачивания этого файла в браузере">Страница в интернете…</button><button class="btn mini" type="button" data-copyurl="${esc(m.url || '')}" title="Скопировать прямую ссылку, чтобы скачать менеджером загрузок или через другой компьютер">Копировать ссылку</button><button class="btn mini" type="button" data-copyname="${esc(m.file || '')}" title="Скопировать имя файла, чтобы найти его на компьютере или на сайте">Копировать имя</button><button class="btn mini" type="button" data-pickmodel="${m.role}" title="${m.have ? 'Заменить на другой файл (например, другую точность модели)' : 'Если файл у вас называется иначе — выберите его вручную'}">${m.have ? (m.picked ? 'Другой файл ✓' : 'Заменить…') : 'Указать файл…'}</button>${m.variants && m.variants.length > 1 ? `<button class="btn mini" type="button" data-variant="${m.role}" title="Поставить другую версию этой же модели, например полегче или новее">Другая версия…</button>` : ''}</div></div>`;
   }).join('');
   $('#mdFix').hidden = s.engine !== 'managed' || s.models.every(m => m.have || !m.modes.length);
   MD_EXT = s.engine === 'external';
@@ -3604,7 +3633,8 @@ async function mdAskFolder() {
 }
 async function mdStart(roles) {
   let folder = MD_EXTDIR;
-  if (!folder) { folder = await mdAskFolder(); if (!folder) return; }
+  // the app's own ComfyUI knows its folder; a folder is asked only for the user's own one
+  if (MD_ENGINE !== 'managed' && !folder) { folder = await mdAskFolder(); if (!folder) return; }
   try {
     const r = await postJSON('/api/models/download', { roles, folder });
     MD_EXTDIR = r.folder || folder;
@@ -3619,8 +3649,9 @@ $('#mdFixExt').onclick = () => mdStart(MD_NEED);
 $('#mdDlStop').onclick = () => postJSON('/api/models/download/cancel');
 function onMdl(m) {
   const card = $('#mdDl'); card.hidden = false;
-  const vp = $('#vAccProg'); if (vp) vp.textContent = m.state === 'done' ? 'Готово' : m.state === 'error' ? (m.label || '') : (m.total && m.done != null ? `${Math.round(m.done / m.total * 100)}%` : '');
-  if (m.state === 'done') setTimeout(() => vAccCheck(), 500);
+  const prog = m.state === 'done' ? 'Готово' : m.state === 'error' ? (m.label || '') : (m.total && m.done != null ? `${Math.round(m.done / m.total * 100)}%` : '');
+  ['#vAccProg', '#vFusedProg', '#rmFusedProg'].forEach(sel => { const el = $(sel); if (el) el.textContent = prog; });
+  if (m.state === 'done') setTimeout(() => { vAccCheck(); vFusedCheck(); REF_FUSED_CHECK && REF_FUSED_CHECK(); }, 500);
   if (m.state === 'done' || m.state === 'error') {
     $('#mdDlL').textContent = m.label || ''; $('#mdDlN').textContent = '';
     if (m.state === 'done') { $('#mdDlB').style.width = '100%'; loadStatus(); setTimeout(() => { card.hidden = true; }, 6000); }
@@ -4066,6 +4097,9 @@ async function jobEditVideo(meta, files) {
   if (QUALITY_ALL.some(q => q.id === meta.q)) V.q = meta.q;
   if (meta.len > 0) V.dur = Math.min(25, Math.max(3, Math.round(meta.len)));
   if (meta.seed != null && meta.seed !== '') useSeed(V, meta.seed);
+  V.unet = /fused turbo/i.test(meta.sub || '') ? 'fused' : 'fast';   // the same model the job was made with
+  V.accel = V.unet === 'fast' && /быстрый черновик/i.test(meta.sub || '') ? 'sla' : 'normal';
+  vUnetUpd(); vAccUpd(); vAccCheck(); vFusedCheck();
   vUpd(); vPrev(); vMode();
 }
 async function jobEditLipsync(meta, files) {
@@ -4103,10 +4137,12 @@ async function jobEditRef(meta, mode, files) {
   if (QUALITY_ALL.some(q => q.id === meta.q)) S.q = meta.q;
   if (meta.len > 0) S.dur = Math.min(15, Math.max(3, Math.round(meta.len)));
   if (meta.steps != null && meta.steps !== '') S.steps = +meta.steps;
+  if (mode === 'refs') S.unet = /fused turbo/i.test(meta.sub || '') ? 'fused' : 'fast';   // the same model the job was made with
   if (meta.ref_size) S.refSize = meta.ref_size;
   if (meta.seed != null && meta.seed !== '') useSeed(S, meta.seed);
   const ta = r.prompt(); if (ta) ta.value = String(meta.prompt || '');
   r.upd();
+  REF_FUSED_CHECK && REF_FUSED_CHECK();
 }
 async function jobEditImage(meta, mode, files) {
   if (IMG[mode] && IMG[mode].fillJob) IMG[mode].fillJob(meta);
@@ -4429,10 +4465,11 @@ $('#lib').addEventListener('mouseout', e => { const v = e.target.closest('.li-th
 const ICON_IMG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>';
 const ICON_VID = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="13" height="14" rx="2"/><path d="m16 10 5-3v10l-5-3"/></svg>';
 const ICON_AUD = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>';
+let REF_FUSED_CHECK = null;   // the references section re-checks its optional model after a download
 
 function makeRefMode(cfg) {
   const root = $('#view-' + cfg.mode);
-  const S = { aspect: '16:9', q: 'HD+', dur: cfg.dur, steps: 6, refSize: 'max', accel: 'old', len: () => S.dur };
+  const S = { aspect: '16:9', q: 'HD+', dur: cfg.dur, steps: 6, refSize: 'max', accel: 'old', unet: 'fast', len: () => S.dur };
   root.innerHTML = `
     <div class="head"><div><h1>${cfg.title}</h1><p>${cfg.sub}</p></div><div class="mode-pill"><i></i><span class="rm-pill">${cfg.pill}</span></div></div>
     <div class="grid"><div class="col">
@@ -5135,8 +5172,8 @@ function makeRefMode(cfg) {
       ? `${root._q === 'draft' ? 'Черновик' : 'Хорошее качество'}: сделать сцену ${root._next() + 1}`
       : `${root._q === 'draft' ? 'Черновик' : 'Хорошее качество'}: весь ролик сразу`,
     extraLabel: cfg.mode === 'refs' || cfg.mode === 'actor' || cfg.swap || cfg.scenes ? 'Шаги' : 'Схема',
-    extra: () => cfg.scenes ? (root._paintQ?.(), root._mode === 'parts' ? (root._q === 'draft' ? '4 шага · черновик' : '8 шагов · Pika') : (root._q === 'draft' ? '4 шага · черновик' : '8 шагов · Pika')) : cfg.mode === 'actor' || cfg.swap ? '10 · 1 проход' : cfg.mode === 'refs' ? `${S.steps} · 1 проход` : (S.faithful ? 'точная копия' : '8 + 4 шага'),
-    passes: () => cfg.scenes ? $$('.sc', root).map(() => root._q === 'draft' ? 4 : 8) : cfg.mode === 'actor' || cfg.swap ? [10] : cfg.mode === 'refs' ? [S.steps] : S.faithful ? [13] : [8, 4],
+    extra: () => cfg.scenes ? (root._paintQ?.(), root._mode === 'parts' ? (root._q === 'draft' ? '4 шага · черновик' : '8 шагов · Pika') : (root._q === 'draft' ? '4 шага · черновик' : '8 шагов · Pika')) : cfg.mode === 'actor' || cfg.swap ? '10 · 1 проход' : cfg.mode === 'refs' ? (S.unet === 'fused' ? '4 шага · Fused Turbo' : `${S.steps} · 1 проход`) : (S.faithful ? 'точная копия' : '8 + 4 шага'),
+    passes: () => cfg.scenes ? $$('.sc', root).map(() => root._q === 'draft' ? 4 : 8) : cfg.mode === 'actor' || cfg.swap ? [10] : cfg.mode === 'refs' ? (S.unet === 'fused' ? [4] : [S.steps]) : S.faithful ? [13] : [8, 4],
     get twoPass() { return cfg.mode === 'action' && !S.faithful; },
     target: () => $('.ref img', imgsEl),
     meta: () => ({ mode: cfg.mode, prompt: promptEl().value.trim(), sub: '' }),
@@ -5144,7 +5181,8 @@ function makeRefMode(cfg) {
     validate: () => cfg.swap ? (!files('.rm-vids .slot').length ? 'Добавьте видео, в котором нужно заменить человека' : !$$('.ref.filled', imgsEl).length ? 'Добавьте изображение нового персонажа' : '')
       : !cfg.scenes && !$$('.ref.filled', imgsEl).length && !(vidsEl && files('.rm-vids .slot').length) ? 'Добавьте хотя бы одно референс-изображение'
       : $$('.ref.filled', imgsEl).length + (vidsEl ? files('.rm-vids .slot').length : 0) + files('.rm-auds .slot').length > 12 ? 'Всего не больше 12 референсов'
-      : cfg.scenes ? (root._snd === 'own' && !files('.rm-auds .slot').length ? 'Загрузите аудио или выберите «Без аудио»' : sceneList().some(x => !x.prompt) ? 'Заполните описание каждой сцены или уберите лишнюю' : '') : !promptEl().value.trim() ? 'Напишите промпт' : '',
+      : cfg.scenes ? (root._snd === 'own' && !files('.rm-auds .slot').length ? 'Загрузите аудио или выберите «Без аудио»' : sceneList().some(x => !x.prompt) ? 'Заполните описание каждой сцены или уберите лишнюю' : '') : !promptEl().value.trim() ? 'Напишите промпт'
+      : cfg.mode === 'refs' && S.unet === 'fused' && S.fusedHave === false ? 'Скачайте файл модели Fused Turbo: кнопка «Скачать» под переключателем «Модель»' : '',
     real: {
       url: '/api/generate/' + cfg.mode,
       form: () => {
@@ -5170,6 +5208,7 @@ function makeRefMode(cfg) {
         }
         sizeForm(S, fd); fd.append('aspect', S.aspect); fd.append('quality', S.q); fd.append('duration', S.dur);
         fd.append('steps', S.steps); fd.append('ref_size', S.refSize); if (cfg.mode === 'refs' || cfg.swap) fd.append('accel', S.accel);
+        if (cfg.mode === 'refs') fd.append('unet', S.unet === 'fused' ? 'fused' : '');
         if (cfg.swap) { fd.append('sound', S.sound); fd.append('small_ref', S.smallRef ? '1' : '0'); }
         if (cfg.scenes && root._mode === 'parts') {
           const all = $$('.sc', root);
@@ -5219,10 +5258,14 @@ function makeRefMode(cfg) {
       <div class="hint">Выключите, чтобы задать длину ползунком ниже.</div></div>
     <div class="note warn rm-swapneed" hidden><span>Для этого пресета нужен маленький файл (0,16 ГБ). <button class="btn mini pri" type="button" id="swapGet">Скачать</button></span></div>`
     : cfg.mode === 'refs' ? `
-    <div class="row"><div class="row-l">Ускорение</div>
+    <div class="row"><div class="row-l">Модель <span class="hint">чем генерировать</span></div>
+      <div class="seg rm-unet" style="grid-template-columns:1fr 1fr"><button data-u="fast">Singularity<small>обычная · LoRA 4 шага</small></button><button data-u="fused">Fused Turbo<small>4 шага · звук ярче</small></button></div>
+      <div class="hint rm-unhint" hidden></div>
+      <div class="hint">Fused Turbo — та же модель на 21 ГБ, что и в разделе «Видео»: она умеет и референсы, ускорение уже внутри файла, шаги не настраиваются.</div></div>
+    <div class="row rm-acc-row"><div class="row-l">Ускорение</div>
       <div class="seg rm-acc" style="grid-template-columns:1fr 1fr"><button data-x="pika">Pika Flex<small>8 шагов, лучше звук</small></button><button data-x="old">Прежнее<small>4–8 шагов</small></button></div>
       <div class="hint rm-acc-hint"></div></div>
-    <div class="row"><div class="row-l">Шаги</div>
+    <div class="row rm-steps-row"><div class="row-l">Шаги</div>
       <div class="seg rm-steps" style="grid-template-columns:repeat(3,1fr)">
         <button data-s="4">4<small>быстро</small></button><button data-s="6">6 ★<small>баланс</small></button><button data-s="8">8<small>динамика</small></button>
       </div><div class="hint rm-steps-hint"></div></div>
@@ -5251,6 +5294,14 @@ function makeRefMode(cfg) {
       const ah = $('.rm-acc-hint', root); if (ah) ah.textContent = S.accel === 'pika'
         ? 'Pika H3 Flex Turbo: звук получается заметно лучше. Работает на 6–8 шагах (4 шага для неё поднимутся до 6).' + (S.pikaHave === false ? ' Файла Pika нет — скачайте его в разделе «Модели».' : '')
         : 'Прежнее ускорение (LoRA на 4 шага): быстрее, но звук проще.';
+      const fused = cfg.mode === 'refs' && S.unet === 'fused';
+      $$('.rm-unet button', root).forEach(b => b.classList.toggle('on', b.dataset.u === S.unet));
+      const ar = $('.rm-acc-row', root), sr = $('.rm-steps-row', root);   // the fused file has its own 4 steps: no LoRA or step choice
+      if (ar) ar.hidden = fused;
+      if (sr) sr.hidden = fused;
+      // the active section's header lives in the top bar, not in its own DOM (see «one header for the whole window»)
+      const pill = $('.rm-pill', root) || (root.classList.contains('active') ? $('#tbHead .rm-pill') : null);
+      if (pill && cfg.mode === 'refs') pill.textContent = fused ? 'Fused Turbo Ref2V · 1 проход' : cfg.pill;
     },
   });
   root._upd = upd;
@@ -5272,7 +5323,25 @@ function makeRefMode(cfg) {
     const s = e.target.closest('.rm-steps button'); if (s) { S.steps = +s.dataset.s; upd(); }
     const r = e.target.closest('.rm-rs button'); if (r) { S.refSize = r.dataset.r; upd(); }
     const x = e.target.closest('.rm-acc button'); if (x) { S.accel = x.dataset.x; if (S.accel === 'pika' && S.steps < 6) S.steps = 8; upd(); }
+    const u = e.target.closest('.rm-unet button'); if (u) { S.unet = u.dataset.u; rmFusedCheck(); upd(); }
   });
+  async function rmFusedCheck() {   // the fused file is optional: offer its download right here, as in the Video section
+    if (cfg.mode !== 'refs') return;
+    const hint = $('.rm-unhint', root); if (!hint) return;
+    hint.hidden = true; hint.innerHTML = '';
+    if (S.unet !== 'fused') { S.fusedHave = null; return; }
+    try {
+      const st = await (await fetch('/api/status')).json();
+      const m = (st.models || []).find(x => x.role === 'fused_unet');
+      S.fusedHave = m ? !!m.have : null;
+      if (m && !m.have) {
+        hint.hidden = false;
+        hint.innerHTML = `Файла модели нет в ComfyUI (${GB(m.size)}). <button class="btn mini pri rm-fdl" type="button">Скачать</button> <span class="hint" id="rmFusedProg"></span>`;
+        $('.rm-fdl', hint).onclick = () => mdStart(['fused_unet']);
+      }
+    } catch {}
+  }
+  if (cfg.mode === 'refs') { REF_FUSED_CHECK = rmFusedCheck; rmFusedCheck(); }
   upd();
   if (cfg.mode === 'refs') mountLoras($('.rm-loras', root), S, ['realism', 'motion']);
   if ((cfg.mode === 'refs' || cfg.swap) && API) fetch('/api/status').then(r => r.json()).then(st => {  // Pika is the default when its file is there

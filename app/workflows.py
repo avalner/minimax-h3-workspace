@@ -39,17 +39,23 @@ def frames(seconds):
     return f + (5 - f % 17) % 17
 
 
-def video_graph(m, prompt, width, height, seconds, seed, first=None, last=None, extra_loras=(), fast=None):
-    """MINIMAXH3_FASTvideo_I2V: text / first frame / first + last frame."""
+def video_graph(m, prompt, width, height, seconds, seed, first=None, last=None, extra_loras=(), fast=None, fused=None):
+    """MINIMAXH3_FASTvideo_I2V: text / first frame / first + last frame.
+
+    `fast` is the Turbo-SLA LoRA (a 4-step draft on the FastH3 checkpoint). `fused` is the MATLOWAI fused turbo
+    checkpoint (one 21 GB file): its turbo and style LoRAs are already inside, so it takes no LoRA file, runs its
+    own 4-step recipe (shift 12 / 3) and uses the SLA sparse attention its authors distilled it for.
+    """
+    shift_video, sparse = (12, "sla") if fused else (10, "vsa")
     g = {
         "1": {"class_type": "UNETLoader", "inputs": {
-            "unet_name": m["fast_unet"], "weight_dtype": "default"}},
+            "unet_name": fused or m["fast_unet"], "weight_dtype": "default"}},
         "2": {"class_type": "MiniMaxH3SigmaShift", "inputs": {
-            "model": ["1", 0], "shift_video": 10, "shift_audio": 3}},
+            "model": ["1", 0], "shift_video": shift_video, "shift_audio": 3}},
         "3": {"class_type": "ModelAttentionBackend", "inputs": {
             "model": ["2", 0], "attention": "comfy kitchen attention"}},
         "4": {"class_type": "BlockSparseAttention", "inputs": {
-            "model": ["3", 0], "selection": "vsa", "selection.keep_percent": 10.0,
+            "model": ["3", 0], "selection": sparse, "selection.keep_percent": 10.0,
             "start_percent": 0.2, "end_percent": 1.0, "dense_blocks": "",
             "min_tokens": 12288, "extra_tokens": 256,
             "sink_conditioning": "exact_kv_and_rows", "verbose": False}},
@@ -86,10 +92,12 @@ def video_graph(m, prompt, width, height, seconds, seed, first=None, last=None, 
             "image": [load_id, 0], "upscale_method": "lanczos",
             "width": width, "height": height, "crop": "center"}}
         g["8"]["inputs"][slot] = [scale_id, 0]
-    loras = ([(fast, 1.0)] if fast else []) + list(extra_loras)  # Turbo-SLA first, then the user's own LoRAs
+    loras = ([(fast, 1.0)] if fast and not fused else []) + list(extra_loras)  # Turbo-SLA first, then the user's own LoRAs
     if loras:
         g["2"]["inputs"]["model"] = _lora_chain(g, ["1", 0], loras)
-    if fast:  # "fast draft": Turbo-SLA 4 steps, flow shifts 6 / 3; block-sparse attention is switched OFF (it left square
+    if fused:  # the recipe of the file itself: 4 steps, shift 12 / 3 (set above), no LoRA, SLA sparse attention
+        g["11"]["inputs"]["steps"] = 4
+    elif fast:  # "fast draft": Turbo-SLA 4 steps, flow shifts 6 / 3; block-sparse attention is switched OFF (it left square
         # mosaic artifacts on busy scenes: debris, explosions), dense attention is cleaner and still about 1.3x faster
         g["2"]["inputs"].update(shift_video=6, shift_audio=3)
         g["11"]["inputs"]["model"] = ["3", 0]
@@ -135,14 +143,16 @@ def _lora_chain(g, start, loras, base=60):
 
 
 def ref_graph(m, prompt, width, height, seconds, seed, images, videos, audios, steps=6,
-              ref_size="max", extra_loras=(), pika=None):
+              ref_size="max", extra_loras=(), pika=None, fused=None):
     """MinimaxH3_Ref to Video (ULTRA SPEED Singularity 4-step), single pass.
 
     The original samples with T8's Dual Clock node (shift video 12 / audio 4, beta);
     here the same shifts go through ComfyUI's built-in MiniMaxH3SigmaShift + beta scheduler.
+    `fused` is the MATLOWAI fused checkpoint: its turbo LoRA is inside the file, so it runs the
+    checkpoint's own 4-step recipe instead (shift 12 / 3, res_multistep, SLA sparse attention).
     """
     g = {
-        "1": {"class_type": "UNETLoader", "inputs": {"unet_name": m["lipsync_unet"], "weight_dtype": "default"}},
+        "1": {"class_type": "UNETLoader", "inputs": {"unet_name": fused or m["lipsync_unet"], "weight_dtype": "default"}},
         "2": {"class_type": "ModelAttentionBackend", "inputs": {"model": ["1", 0], "attention": "comfy kitchen attention"}},
         "4": {"class_type": "CLIPLoader", "inputs": {"clip_name": m["text_encoder"], "type": "minimax", "device": "default"}},
         "5": {"class_type": "VAELoader", "inputs": {"vae_name": m["video_vae"]}},
@@ -151,17 +161,26 @@ def ref_graph(m, prompt, width, height, seconds, seed, images, videos, audios, s
             "clip": ["4", 0], "vae": ["5", 0], "audio_vae": ["6", 0], "prompt": prompt,
             "width": width, "height": height, "length": frames(seconds), "ref_image_size": ref_size}},
     }
-    if pika:  # Pika H3 Flex Turbo (8 steps, HD): its own LoRA instead of the 4-step one; no sigma shift, scheduler "simple"
+    if fused:  # the user's own LoRAs first, then the SLA sparse attention the fused file was distilled for
+        m0 = _lora_chain(g, ["2", 0], list(extra_loras)) if extra_loras else ["2", 0]
+        g["3"] = {"class_type": "BlockSparseAttention", "inputs": {
+            "model": m0, "selection": "sla", "selection.keep_percent": 10.0,
+            "start_percent": 0.2, "end_percent": 1.0, "dense_blocks": "",
+            "min_tokens": 12288, "extra_tokens": 256,
+            "sink_conditioning": "exact_kv_and_rows", "verbose": False}}
+        g["9"] = {"class_type": "MiniMaxH3SigmaShift", "inputs": {"model": ["3", 0], "shift_video": 12.0, "shift_audio": 3.0}}
+        mref, scheduler, sampler, steps = ["9", 0], "simple", "res_multistep", 4
+    elif pika:  # Pika H3 Flex Turbo (8 steps, HD): its own LoRA instead of the 4-step one; no sigma shift, scheduler "simple"
         mref = _lora_chain(g, ["2", 0], list(extra_loras) + [(pika, 1.0)])
-        steps, scheduler = max(6, steps), "simple"
+        steps, scheduler, sampler = max(6, steps), "simple", "euler"
     else:
         model = _lora_chain(g, ["2", 0], list(extra_loras) + [(m["ref2v_turbo_lora"], 0.7)])
         g["9"] = {"class_type": "MiniMaxH3SigmaShift", "inputs": {"model": model, "shift_video": 12.0, "shift_audio": 4.0}}
-        mref, scheduler = ["9", 0], "beta"
+        mref, scheduler, sampler = ["9", 0], "beta", "euler"
     g.update({
         "10": {"class_type": "BasicScheduler", "inputs": {"model": mref, "scheduler": scheduler, "steps": steps, "denoise": 1.0}},
         "11": {"class_type": "RandomNoise", "inputs": {"noise_seed": seed}},
-        "12": {"class_type": "KSamplerSelect", "inputs": {"sampler_name": "euler"}},
+        "12": {"class_type": "KSamplerSelect", "inputs": {"sampler_name": sampler}},
         "13": {"class_type": "BasicGuider", "inputs": {"model": mref, "conditioning": ["8", 0]}},
         "14": {"class_type": "SamplerCustomAdvanced", "inputs": {
             "noise": ["11", 0], "guider": ["13", 0], "sampler": ["12", 0], "sigmas": ["10", 0], "latent_image": ["8", 1]}},
@@ -173,7 +192,7 @@ def ref_graph(m, prompt, width, height, seconds, seed, images, videos, audios, s
             "video": ["17", 0], "filename_prefix": "H3Workspace/refs", "format": "auto", "format.codec": "auto"}},
     })
     loaders = _refs(g, "8", images, videos, audios)
-    stages = {n: "load" for n in ["1", "2", "4", "5", "6"] + [k for k in g if k.isdigit() and 60 <= int(k) < 70]}
+    stages = {n: "load" for n in ["1", "2", "3", "4", "5", "6", "9"] + [k for k in g if k.isdigit() and 60 <= int(k) < 70]}
     stages.update({n: "encode" for n in ["8"] + loaders})
     stages.update({"14": "sample", "15": "decode", "16": "decode", "17": "save", "18": "save"})
     return g, stages
