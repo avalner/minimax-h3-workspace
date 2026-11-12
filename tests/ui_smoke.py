@@ -238,8 +238,60 @@ async def run_page(base: str, browser: str, shots: Path):
                 check("every section opens on the first click", not missing, ",".join(missing))
                 check("every section opens again on a second visit", not wrong, ",".join(wrong))
 
+                # The video mode is a module: the panel is built on the first visit, its controls
+                # write into the module's state, and the page's two API calls (repeat, remember)
+                # go through `window.h3Video` instead of reaching into the page's objects.
+                video = await cdp.evaluate(
+                    "(() => { const n = document.querySelector('.nav[data-view=\"video\"]'); n.click();"
+                    " const params = document.querySelector('#vParams');"
+                    " const prompt = document.querySelector('#vPrompt');"
+                    " prompt.value = 'проверка кадра'; prompt.dispatchEvent(new Event('input'));"
+                    " params.querySelector('.chip[data-a=\"9:16\"]').click();"
+                    " params.querySelector('.seed-seg button[data-sf=\"1\"]').click();"
+                    " const st = window.h3Video.state;"
+                    " return {frame: !!document.querySelector('#vPreview .frame'),"
+                    " chips: params.querySelectorAll('.chip[data-a]').length,"
+                    " aspect: st.aspect, seedFixed: !!st.seedFixed,"
+                    " count: document.querySelector('#vCount').textContent, plen: prompt.value.length,"
+                    " seedRow: !!params.querySelector('.seed-row') && !params.querySelector('.seed-row').hidden}; })()")
+                check("the video section builds its preview and parameters on the first visit",
+                      video and video["frame"] and video["chips"] >= 5, str(video))
+                check("a format click in the panel reaches the module's state", video["aspect"] == "9:16", str(video))
+                check("a fixed seed opens the seed row", video["seedFixed"] and video["seedRow"], str(video))
+                check("the prompt counter follows the input",
+                      f"{video.get('plen')} символов" in (video.get("count") or ""), str(video))
+
+                repeated = await cdp.evaluate(
+                    "(() => { window.h3Video.repeat({mode: 'video', prompt: 'повтор клипа',"
+                    " aspect: '16:9', q: '720p', len: 7});"
+                    " return {prompt: document.querySelector('#vPrompt').value,"
+                    " dur: window.h3Video.state.dur, aspect: window.h3Video.state.aspect}; })()")
+                check("h3Video.repeat fills the prompt, format and length",
+                      repeated and repeated["prompt"] == "повтор клипа" and repeated["dur"] == 7
+                      and repeated["aspect"] == "16:9", str(repeated))
+                await cdp.evaluate(
+                    "(() => { const params = document.querySelector('#vParams');"
+                    " params.querySelector('.chip[data-a=\"16:9\"]').click();"
+                    " params.querySelector('.seed-seg button[data-sf=\"0\"]').click();"
+                    " const p = document.querySelector('#vPrompt'); p.value = '';"
+                    " p.dispatchEvent(new Event('input')); })()")
+
+                # The picture sections are modules too: `imagePanel` builds one on demand and the
+                # panel it publishes is the same object the details window and the agent fill.
+                pictures = await cdp.evaluate(
+                    "(() => { const k = window.imagePanel('krea'); const q = window.imagePanel('qwen');"
+                    " q.fill({prompt: 'правка картинки'});"
+                    " return {k: !!(k && k.fill && k.fillList), q: !!(q && q.fill),"
+                    " kprompt: !!document.querySelector('#view-krea .kr-prompt'),"
+                    " qprompt: (document.querySelector('#view-qwen .qw-prompt') || {}).value || '',"
+                    " mounted: window.h3Modes.stats().mounted.filter(m => ['krea', 'qwen', 'inpaint'].includes(m))}; })()")
+                check("the picture sections build on demand and publish fill/fillJob",
+                      pictures and pictures["k"] and pictures["q"] and pictures["kprompt"], str(pictures))
+                check("a picture panel filled before opening keeps the prompt",
+                      pictures and pictures["qprompt"] == "правка картинки", str(pictures))
+
                 # The same two sections twice more, with the screenshots a human can look at.
-                for view, name in (("video", "video"), ("montage", "montage"),
+                for view, name in (("video", "video"), ("krea", "krea"), ("montage", "montage"),
                                    ("library", "library"), ("settings", "settings")):
                     opened = await cdp.evaluate(
                         f"(() => {{ const b = document.querySelector('.nav[data-view=\"{view}\"]');"

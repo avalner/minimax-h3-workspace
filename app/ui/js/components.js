@@ -695,6 +695,8 @@ function wireDrop(zone, onFile) {
     onFile(true, img);
   };
   input.onchange = () => set(input.files[0]);
+  // a file restored from the last session is already in the input before this mode is built
+  if (input.files && input.files[0]) set(input.files[0]);
   zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('over'); });
   zone.addEventListener('dragleave', () => zone.classList.remove('over'));
   zone.addEventListener('drop', e => { e.preventDefault(); zone.classList.remove('over'); set(e.dataTransfer.files[0]); });
