@@ -386,6 +386,103 @@ async def run_page(base: str, browser: str, shots: Path):
                 check("finished rows can be cleared and the empty message comes back",
                       cleared and cleared["rows"] == 0 and "Очередь пуста" in cleared["text"], str(cleared))
 
+                # Own workflows: a section that used to be wired while the page was parsed, now a
+                # module with a lazy mount. The form is built from the server's report; a stub stands
+                # in for ComfyUI (the check runs with a closed port), so the field kinds and the
+                # write-back of an edited value are seen here.
+                custom = await cdp.evaluate(
+                    "(() => { document.querySelector('.nav[data-view=\"custom\"]').click();"
+                    " return !!document.querySelector('#cwSel'); })()")
+                # the list is read from the server: the select fills in on the next tick
+                await cdp.wait_for("document.querySelectorAll('#cwSel option').length > 0", timeout=10)
+                custom = await cdp.evaluate(
+                    "(() => { const st = window.h3Modes.stats();"
+                    " return {mounted: st.mounted.includes('custom'),"
+                    "  select: !!document.querySelector('#cwSel'),"
+                    "  options: document.querySelectorAll('#cwSel option').length,"
+                    "  howto: !document.querySelector('#cwHowto').hidden,"
+                    "  handle: !!(window.h3Custom && window.h3Custom.state)}; })()")
+                check("the own-workflow section mounts and reads its list",
+                      custom and custom["mounted"] and custom["select"] and custom["handle"]
+                      and custom["howto"] and custom["options"] >= 1, str(custom))
+
+                form = await cdp.evaluate(
+                    """(async () => {
+                      const report = {id: 'demo', name: 'Демо', notes: [], missing_nodes: [], widgets: [
+                        {key: '6.text', node: '6', title: 'CLIP Text Encode', cls: 'CLIPTextEncode', name: 'text',
+                         value: 'старый промпт', role: 'prompt', kind: 'string', multiline: true},
+                        {key: '7.text', node: '7', title: 'CLIP Text Encode', cls: 'CLIPTextEncode', name: 'text',
+                         value: 'брак', role: 'negative', kind: 'string', multiline: true},
+                        {key: '3.width', node: '3', title: 'Empty Latent', cls: 'EmptyLatentImage', name: 'width',
+                         value: 768, role: 'size', kind: 'int', min: 64, max: 2048, step: 8},
+                        {key: '3.height', node: '3', title: 'Empty Latent', cls: 'EmptyLatentImage', name: 'height',
+                         value: 1376, role: 'size', kind: 'int', min: 64, max: 2048, step: 8},
+                        {key: '3.seed', node: '3', title: 'KSampler', cls: 'KSampler', name: 'seed',
+                         value: 42, role: 'seed', kind: 'int'},
+                        {key: '3.steps', node: '3', title: 'KSampler', cls: 'KSampler', name: 'steps',
+                         value: 20, role: 'steps', kind: 'int'},
+                        {key: '3.cfg', node: '3', title: 'KSampler', cls: 'KSampler', name: 'cfg',
+                         value: 7.5, role: 'cfg', kind: 'float'},
+                        {key: '4.aspect', node: '4', title: 'Ratio', cls: 'PrimitiveString',
+                         name: 'value', value: '16:9', role: 'aspect', kind: 'combo', options: ['16:9', '9:16']},
+                        {key: '10.image', node: '10', title: 'Load Image', cls: 'LoadImage', name: 'image',
+                         value: 'in.png', role: 'media', kind: 'combo', options: ['in.png'], mkind: 'image', has_default: true}
+                      ]};
+                      const orig = window.h3Api.getJSON;
+                      window.h3Api.getJSON = (u, o) => String(u).startsWith('/api/wf/') ? Promise.resolve(report) : orig(u, o);
+                      try {
+                        await window.h3Custom.open('demo');
+                        const body = document.querySelector('#cwBody');
+                        const ta = body.querySelector('textarea[data-k="6.text"]');
+                        const before = window.h3Custom.state.vals['6.text'];
+                        ta.value = 'новый промпт'; ta.dispatchEvent(new Event('input', {bubbles: true}));
+                        const size = body.querySelectorAll('.cw-pair input');
+                        size[0].value = '801';
+                        size[0].dispatchEvent(new Event('change', {bubbles: true}));
+                        return {left: !!body.querySelector('.cw-left'), right: !!body.querySelector('.cw-right'),
+                          prompt: !!ta, negative: !!body.querySelector('.cw-pp.neg textarea'),
+                          pair: size.length, seed: !!body.querySelector('[data-rnd="3.seed"]'),
+                          media: body.querySelectorAll('.cw-file').length,
+                          go: !!body.querySelector('#cwGo'), before,
+                          after: window.h3Custom.state.vals['6.text'],
+                          width: window.h3Custom.state.vals['3.width'],
+                          saved: (JSON.parse(localStorage.getItem('h3-cw-demo') || '{}'))['6.text']};
+                      } finally { window.h3Api.getJSON = orig; }
+                    })()""", await_promise=True)
+                check("the own-workflow form is built from the server's report",
+                      form and form["left"] and form["right"] and form["prompt"] and form["negative"]
+                      and form["pair"] == 2 and form["seed"] and form["media"] == 1 and form["go"], str(form))
+                check("an edited field reaches the module's state and localStorage",
+                      form and form["after"] == "новый промпт" and form["saved"] == "новый промпт"
+                      and form["before"] == "старый промпт", str(form))
+                check("a size typed into the paired fields is rounded to a multiple of 32",
+                      form and form["width"] == "800", str(form))
+                await asyncio.sleep(0.3)
+                await cdp.screenshot(shots / "custom.png")
+
+                # LoRA: an empty section in the page, built by its module on the first visit, with
+                # the download hook the page's event router calls by name.
+                await cdp.evaluate("(() => { document.querySelector('.nav[data-view=\"loras\"]').click(); })()")
+                # the list of LoRAs is read from the server on enter
+                await cdp.wait_for("(document.querySelector('#view-loras .lr-mine') || {}).textContent", timeout=10)
+                loras = await cdp.evaluate(
+                    "(() => { const root = document.querySelector('#view-loras');"
+                    " return {mounted: window.h3Modes.stats().mounted.includes('loras'),"
+                    "  built: !!root.querySelector('.card') && !!root.querySelector('.lr-mine'),"
+                    "  hint: (root.querySelector('.lr-mine') || {}).textContent || '',"
+                    "  hook: typeof window.onLoraDownload === 'function',"
+                    "  tokens: !!root.querySelector('.lr-tok-save'),"
+                    "  search: !!root.querySelector('.lr-find')}; })()")
+                check("the LoRA section is built by its module and installs the download hook",
+                      loras and loras["mounted"] and loras["built"] and loras["hook"]
+                      and loras["tokens"] and loras["search"], str(loras))
+                check("with no ComfyUI the LoRA list says what to do",
+                      loras and "ComfyUI не видит" in loras["hint"], str(loras))
+                await asyncio.sleep(0.3)
+                await cdp.screenshot(shots / "loras.png")
+
+                hooks_before = await cdp.evaluate("DRAFT_HOOKS.length")
+
                 # Mode ownership: a section mounts once, leaving it does not add another handler or
                 # timer, and closing the window gives every scope back.
                 first_pass = await cdp.evaluate("window.h3Modes.stats()")
@@ -415,6 +512,12 @@ async def run_page(base: str, browser: str, shots: Path):
                       disposed and disposed["scopes"] == 0 and disposed["listeners"] == 0
                       and disposed["intervals"] == 0 and disposed["mounted"] == [],
                       str(disposed))
+                hooks_after = await cdp.evaluate(
+                    "({hooks: DRAFT_HOOKS.length, download: typeof window.onLoraDownload})")
+                check("the sections' page-wide hooks are taken back on close",
+                      hooks_after and hooks_after["download"] == "undefined"
+                      and hooks_after["hooks"] < hooks_before,
+                      f"{hooks_before} -> {hooks_after}")
 
                 errors = cdp.exceptions()
                 check("no uncaught exception or console error in the window", not errors,
