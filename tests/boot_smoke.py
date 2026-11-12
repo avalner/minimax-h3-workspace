@@ -139,7 +139,7 @@ def main():
 
         # the window's own files: the content type is part of the contract — a module script served as
         # text/plain is refused by the browser and the window opens blank (Windows registry, .js)
-        for sheet, marker in ((b"/ui/css/base.css", b":root"), (b"/ui/css/widgets.css", b"dropzones"),
+        for sheet, marker in ((b"/ui/css/base.css", b":root"), (b"/ui/css/widgets.css", b".drop{"),
                               (b"/ui/css/sections.css", b"Library")):
             status, ctype, css = head(base + sheet.decode())
             check(f"the stylesheet {sheet.decode()} is served as text/css",
