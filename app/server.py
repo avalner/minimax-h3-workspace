@@ -3352,6 +3352,7 @@ class App:
         dl = self.ffmpeg_dl
         st["downloading"] = bool(dl and not dl.get("done"))
         st["progress"] = {"pct": dl.get("pct", 0), "text": dl.get("text", "")} if st["downloading"] else None
+        st["error"] = str(dl.get("error") or "") if dl else ""   # why the last install failed
         return st
 
     async def h_ffmpeg_status(self, _req):
@@ -3391,7 +3392,8 @@ class App:
                 self.config.update(ffmpeg_dir=str(folder))
                 await self.broadcast({"type": "ffmpegdl", "done": True, "pct": 100, "text": "FFmpeg установлен"})
             else:
-                await self.broadcast({"type": "ffmpegdl", "done": True, "error": res.get("error") or "не удалось установить FFmpeg",
+                state["error"] = str(res.get("error") or "не удалось установить FFmpeg")
+                await self.broadcast({"type": "ffmpegdl", "done": True, "error": state["error"],
                                       "cancelled": bool(res.get("cancelled"))})
 
         self.ffmpeg_dl_task = asyncio.create_task(work())

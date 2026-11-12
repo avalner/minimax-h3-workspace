@@ -45,6 +45,10 @@ BTBN_FALLBACK_URL = "https://github.com/BtbN/FFmpeg-Builds/releases/download/lat
 WORKSPACE_FOLDER_NAME = "MinimaxH3Workspace"
 USER_AGENT = "MinimaxH3Workspace"
 
+# Peak disk the install needs: the archive (~110 MB) plus the binaries unpacked next to it.
+# Checked before the download so a nearly full disk is reported, not discovered at 99 %.
+INSTALL_SPACE_BYTES = 300 * 1024 * 1024
+
 # Transitions ffmpeg's xfade filter knows; anything else would make the whole graph fail.
 XFADE_TRANSITIONS = frozenset({
     "fade", "fadeblack", "fadewhite", "fadegrays", "dissolve", "pixelize",
@@ -192,6 +196,59 @@ def _remove_file(path):
 
 def _stamp():
     return f"{int(time.time() * 1000)}_{os.getpid()}_{threading.get_ident()}"
+
+
+def _mb(value):
+    """Bytes as a short Russian figure: 1048576 -> '1,0 МБ'."""
+    try:
+        number = float(value) / (1024 * 1024)
+    except (TypeError, ValueError):
+        return "?"
+    if number >= 1024:
+        return f"{number / 1024:.1f} ГБ".replace(".", ",")
+    return f"{number:.0f} МБ"
+
+
+def _free_bytes(path):
+    """Free bytes on the volume that holds path (0 when it cannot be asked)."""
+    try:
+        probe = Path(path)
+        while not probe.exists():
+            if probe.parent == probe:
+                return 0
+            probe = probe.parent
+        return int(shutil.disk_usage(str(probe)).free)
+    except (OSError, TypeError, ValueError):
+        return 0
+
+
+def _space_problem(path, need_bytes, what):
+    """Russian message when the disk cannot hold the next step, otherwise None.
+
+    Checked before a download and before unpacking, so a full disk is named instead of surfacing
+    as 'WinError 112' halfway through the install.
+    """
+    free = _free_bytes(path)
+    if free <= 0 or free >= need_bytes:
+        return None
+    try:
+        drive = Path(path).resolve().drive
+    except OSError:
+        drive = ""
+    where = f"на диске {drive}" if drive else "на диске"
+    return (f"Недостаточно места {where} для {what}: нужно около {_mb(need_bytes)}, "
+            f"свободно {_mb(free)}. Освободите место на этом диске и нажмите «Установить» ещё раз.")
+
+
+def _os_error_text(error):
+    """Readable text for an OS error; 'the disk is full' gets its own explanation."""
+    text = str(error) or error.__class__.__name__
+    winerror = getattr(error, "winerror", None)
+    if winerror == 112 or "112" in text or "not enough space" in text.lower() \
+            or "недостаточно места" in text.lower():
+        return ("На диске не хватило места для FFmpeg: установке нужно около 300 МБ свободного места. "
+                "Освободите место на диске с программой и нажмите «Установить» ещё раз.")
+    return f"Не удалось установить FFmpeg: {text}"
 
 
 # ---------- location ----------
@@ -567,6 +624,17 @@ def _download_file(url, destination, progress_cb, cancel_event):
         raise RuntimeError(f"загружено {downloaded} из {total} байт")
 
 
+def _safe_target(root, name):
+    """Where a zip entry may be written: inside root only, never through '..' or a drive letter."""
+    name = str(name).replace("\\", "/")
+    if name.startswith("/") or ".." in name.split("/"):
+        raise RuntimeError(f"недопустимый путь в архиве: {name}")
+    target = (root / name).resolve()
+    if target != root and root not in target.parents:
+        raise RuntimeError(f"недопустимый путь в архиве: {name}")
+    return target
+
+
 def _safe_extract(archive, destination, cancel_event):
     """Extract a zip entry by entry, stopping on cancel and refusing paths outside destination."""
     root = destination.resolve()
@@ -574,18 +642,41 @@ def _safe_extract(archive, destination, cancel_event):
         for item in bundle.infolist():
             if _is_cancelled(cancel_event):
                 raise _Cancelled()
-            name = item.filename.replace("\\", "/")
-            if name.startswith("/") or ".." in name.split("/"):
-                raise RuntimeError(f"недопустимый путь в архиве: {item.filename}")
-            target = (root / name).resolve()
-            if target != root and root not in target.parents:
-                raise RuntimeError(f"недопустимый путь в архиве: {item.filename}")
+            target = _safe_target(root, item.filename)
             if item.is_dir():
                 target.mkdir(parents=True, exist_ok=True)
                 continue
             target.parent.mkdir(parents=True, exist_ok=True)
             with bundle.open(item) as source, open(target, "wb") as output:
                 shutil.copyfileobj(source, output)
+
+
+def _wanted_binary(name):
+    """True for ffmpeg.exe, ffprobe.exe and the DLLs a shared build keeps next to them."""
+    base = str(name).replace("\\", "/").rsplit("/", 1)[-1].lower()
+    return base in ("ffmpeg.exe", "ffprobe.exe") or base.endswith(".dll")
+
+
+def _extract_binaries(archive, destination, cancel_event):
+    """Extract only the binaries, not the whole build: ffplay, docs and presets are ~3x the size.
+
+    Returns how many files were written; the caller falls back to a full extraction when the
+    archive keeps its binaries somewhere unexpected.
+    """
+    root = destination.resolve()
+    written = 0
+    with zipfile.ZipFile(archive) as bundle:
+        for item in bundle.infolist():
+            if _is_cancelled(cancel_event):
+                raise _Cancelled()
+            if item.is_dir() or not _wanted_binary(item.filename):
+                continue
+            target = _safe_target(root, item.filename)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with bundle.open(item) as source, open(target, "wb") as output:
+                shutil.copyfileobj(source, output)
+            written += 1
+    return written
 
 
 def _install_staged(target_dir, staged_dir):
@@ -618,14 +709,18 @@ def _install_staged(target_dir, staged_dir):
     if moved_old:
         shutil.rmtree(backup, ignore_errors=True)
 
-    # Convenience copies next to the folder, so a user can find ffmpeg.exe without opening bin.
+    # Hard links next to the folder, so ffmpeg.exe is easy to find without a second copy on disk.
     for name in ("ffmpeg.exe", "ffprobe.exe"):
         source = bin_dir / name
-        if source.is_file():
-            try:
-                shutil.copy2(source, target_dir / name)
-            except OSError:
-                pass
+        if not source.is_file():
+            continue
+        destination = target_dir / name
+        try:
+            if destination.exists():
+                destination.unlink()
+            os.link(source, destination)
+        except OSError:
+            pass    # another volume or no hard links: bin\ffmpeg.exe is enough
 
 
 def download_and_extract_ffmpeg_sync(target_dir, progress_cb=None, cancel_event=None):
@@ -647,8 +742,14 @@ def download_and_extract_ffmpeg_sync(target_dir, progress_cb=None, cancel_event=
     work_dir = target_dir / f"_install_{_stamp()}"
     archive = work_dir / "ffmpeg.zip"
     extract_dir = work_dir / "files"
-    staged_dir = work_dir / "bin"
     last_error = None
+    staged_dir = None
+
+    # Space is checked before the download and again before unpacking, so a full disk is named
+    # here instead of surfacing as 'WinError 112' while a 150 MB file is being copied.
+    problem = _space_problem(target_dir, INSTALL_SPACE_BYTES, "установки FFmpeg")
+    if problem:
+        return {"ok": False, "error": problem}
 
     try:
         work_dir.mkdir(parents=True, exist_ok=True)
@@ -666,6 +767,8 @@ def download_and_extract_ffmpeg_sync(target_dir, progress_cb=None, cancel_event=
             except Exception as e:
                 last_error = e
                 _remove_file(archive)
+                if getattr(e, "winerror", None) == 112:
+                    return {"ok": False, "error": _os_error_text(e)}
                 continue
             if not zipfile.is_zipfile(archive):
                 last_error = RuntimeError("скачанный файл не является zip-архивом")
@@ -681,32 +784,41 @@ def download_and_extract_ffmpeg_sync(target_dir, progress_cb=None, cancel_event=
 
         _progress_download(progress_cb, {
             "status": "extracting", "pct": 96, "text": "Распаковка FFmpeg…"})
+        try:
+            archive_size = archive.stat().st_size
+        except OSError:
+            archive_size = 0
+        problem = _space_problem(target_dir, int(archive_size * 1.8) + 20 * 1024 * 1024,
+                                 "распаковки FFmpeg")
+        if problem:
+            return {"ok": False, "error": problem}
+
         extract_dir.mkdir(parents=True, exist_ok=True)
         try:
-            _safe_extract(archive, extract_dir, cancel_event)
+            # Only the binaries: ffplay, docs and presets make the unpacked build three times
+            # bigger, and none of them is used.
+            _extract_binaries(archive, extract_dir, cancel_event)
+            found_ffmpeg = next((p for p in extract_dir.rglob("ffmpeg.exe") if p.is_file()), None)
+            found_ffprobe = next((p for p in extract_dir.rglob("ffprobe.exe") if p.is_file()), None)
+            if not (found_ffmpeg and found_ffprobe):
+                # An unexpected layout: take the whole archive rather than fail.
+                _safe_extract(archive, extract_dir, cancel_event)
+                found_ffmpeg = next((p for p in extract_dir.rglob("ffmpeg.exe") if p.is_file()), None)
+                found_ffprobe = next((p for p in extract_dir.rglob("ffprobe.exe") if p.is_file()), None)
         except _Cancelled:
             return {"ok": False, "error": "Отменено пользователем", "cancelled": True}
         except (zipfile.BadZipFile, OSError, RuntimeError) as e:
-            return {"ok": False, "error": f"Ошибка распаковки: {e}"}
+            return {"ok": False, "error": _os_error_text(e) if isinstance(e, OSError)
+                    else f"Ошибка распаковки: {e}"}
 
-        found_ffmpeg = next((p for p in extract_dir.rglob("ffmpeg.exe") if p.is_file()), None)
-        found_ffprobe = next((p for p in extract_dir.rglob("ffprobe.exe") if p.is_file()), None)
         if not found_ffmpeg or not found_ffprobe:
             return {"ok": False, "error": "В скачанном архиве нет ffmpeg.exe и ffprobe.exe"}
 
-        # Stage both binaries together, so a shared build brings its DLLs along.
-        staged_dir.mkdir(parents=True, exist_ok=True)
-        source_dir = found_ffmpeg.parent
-        for item in source_dir.iterdir():
-            if item.is_file():
-                shutil.copy2(item, staged_dir / item.name)
-            elif item.is_dir():
-                shutil.copytree(item, staged_dir / item.name, dirs_exist_ok=True)
-        if not (staged_dir / "ffprobe.exe").is_file():
-            shutil.copy2(found_ffprobe, staged_dir / "ffprobe.exe")
-
-        if not (staged_dir / "ffmpeg.exe").is_file() or not (staged_dir / "ffprobe.exe").is_file():
-            return {"ok": False, "error": "В скачанном архиве нет ffmpeg.exe и ffprobe.exe"}
+        # The unpacked folder is moved into place as it is: no third copy of the build on disk.
+        staged_dir = found_ffmpeg.parent
+        if found_ffprobe.parent != staged_dir:
+            shutil.copy2(found_ffprobe, staged_dir / "ffprobe.exe")   # shared builds keep both together
+        _remove_file(archive)      # ~110 MB back before the swap: the disk is often nearly full
 
         # The new build has to start before it replaces anything that already works.
         staged_version = get_ffmpeg_version(staged_dir / "ffmpeg.exe")
@@ -718,7 +830,7 @@ def download_and_extract_ffmpeg_sync(target_dir, progress_cb=None, cancel_event=
         try:
             _install_staged(target_dir, staged_dir)
         except OSError as e:
-            return {"ok": False, "error": f"Не удалось установить FFmpeg (он сейчас используется?): {e}"}
+            return {"ok": False, "error": _os_error_text(e)}
 
         ffmpeg_exe, ffprobe_exe = find_ffmpeg(target_dir)
         version = get_ffmpeg_version(ffmpeg_exe) or staged_version

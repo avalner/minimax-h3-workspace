@@ -39,3 +39,6 @@ __pycache__/
 # помощник (агент), скачанный пользователем в папку проекта, и заметки
 MinimaxH3_assistant/
 Память*.txt
+
+# portable FFmpeg and other downloaded tools (installed by the program, ~170 MB)
+app/tools/

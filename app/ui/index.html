@@ -1049,6 +1049,7 @@ img.pr-media{object-position:center 38%}
 .mt-ff input[type=range]{padding:0;border:0;background:transparent;accent-color:var(--pink)}
 .mt-ff .hint{margin-top:8px}
 .ff-state.on{color:var(--text)}
+.ff-state .ff-err{margin-top:6px;color:#ff8f8f;font-weight:600}
 .mt-pipe{margin-top:10px;padding:10px 12px;border:1px solid var(--line-2);border-radius:10px;font-size:12.5px;line-height:1.7;color:var(--dim)}.mt-pipe[hidden]{display:none}.mt-pipe .ok{color:var(--ok,#3ecf8e);font-weight:700}
 .mt-item .mt-ok{position:absolute;left:5px;bottom:34px;background:#1f9d6b;color:#fff;border-radius:6px;padding:0 6px;font-size:12px;font-weight:700}
 .mt-vh{height:16px;margin-top:2px;cursor:ns-resize;display:grid;place-items:center;touch-action:none}.mt-vh i{width:64px;height:4px;border-radius:3px;background:var(--line-2);transition:.15s}.mt-vh:hover i{background:var(--accent,#c0405a);width:90px}
@@ -8956,7 +8957,7 @@ $('#setReset').onclick = () => {
   };
 
   /* ---------- the same reel assembled by the portable FFmpeg: seconds, no video card ---------- */
-  const FF = { eng: 'comfy', status: null, busy: false };
+  const FF = { eng: 'comfy', status: null, busy: false, error: '' };
   try { FF.eng = localStorage.getItem('h3-mt-eng') || 'comfy'; } catch {}
   const ffBox = $('.mt-ff', root);
   function ffPaint() {
@@ -8971,6 +8972,7 @@ $('#setReset').onclick = () => {
     let s = null;
     try { s = await (await fetch('/api/ffmpeg/status')).json(); } catch {}
     FF.status = s;
+    if (s && s.error) FF.error = s.error;   // the reason stays visible after a refresh, not only in a toast
     const box = $('.ff-state', root);
     if (!box) return;
     if (s && s.downloading && s.progress) {
@@ -8979,7 +8981,8 @@ $('#setReset').onclick = () => {
       box.innerHTML = `FFmpeg ${esc(s.version || '')} готов. <button type="button" class="btn mini ff-open">Показать папку</button> <button type="button" class="btn mini ff-inst" data-again="1">Обновить</button>`;
       box.classList.add('on');
     } else {
-      box.innerHTML = 'FFmpeg не установлен: он нужен только для этой быстрой сборки. <button type="button" class="btn mini pri ff-inst">Установить (~100 МБ)</button>';
+      box.innerHTML = 'FFmpeg не установлен: он нужен только для этой быстрой сборки. <button type="button" class="btn mini pri ff-inst">Установить (~100 МБ)</button>'
+        + (FF.error ? `<div class="ff-err">Не удалось установить: ${esc(FF.error)}</div>` : '');
       box.classList.remove('on');
     }
     ffPaint();
@@ -8987,14 +8990,38 @@ $('#setReset').onclick = () => {
   window.onFFDownload = m => {
     const box = $('.ff-state', root);
     if (!box) return;
-    if (m.done) { ffStatus(); if (m.error) toast('FFmpeg: ' + m.error); return; }
+    if (m.done) {
+      FF.error = m.error || '';   // a failed install keeps its reason on screen, not only in a toast
+      ffStatus();
+      if (m.error) toast('FFmpeg: ' + m.error);
+      return;
+    }
     if (FF.eng === 'ff') box.textContent = `Скачиваем FFmpeg: ${m.pct}% — ${m.text || ''}`;
   };
+  let ffPoll = 0;
+  function ffPollStart() {   // if the websocket message is late or lost, the panel still updates itself
+    clearInterval(ffPoll);
+    ffPoll = setInterval(async () => {
+      let s = null;
+      try { s = await (await fetch('/api/ffmpeg/status')).json(); } catch { return; }
+      if (s && s.downloading) {
+        const b = $('.ff-state', root);
+        if (b && FF.eng === 'ff' && s.progress) b.textContent = `Скачиваем FFmpeg: ${s.progress.pct}% — ${s.progress.text || ''}`;
+        return;
+      }
+      clearInterval(ffPoll);
+      ffStatus();
+    }, 2500);
+  }
   root.addEventListener('click', e => {
     if (e.target.closest('.ff-inst')) {
       e.target.disabled = true;
+      FF.error = '';
       $('.ff-state', root).textContent = 'Начинаем скачивание…';
-      fetch('/api/ffmpeg/download', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      fetch('/api/ffmpeg/download', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+        .then(r => { if (!r.ok) r.text().then(t => window.onFFDownload({ done: true, error: t || ('ошибка ' + r.status) })); })
+        .catch(err => window.onFFDownload({ done: true, error: String(err) }));
+      setTimeout(ffPollStart, 1500);
       return;
     }
     if (e.target.closest('.ff-open')) fetch('/api/ffmpeg/open-folder', { method: 'POST' });
