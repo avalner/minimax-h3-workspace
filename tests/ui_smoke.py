@@ -481,6 +481,54 @@ async def run_page(base: str, browser: str, shots: Path):
                 await asyncio.sleep(0.3)
                 await cdp.screenshot(shots / "loras.png")
 
+                # The agent: the section's markup is static, the module owns the conversation, the
+                # attachments and the model card. `h3Agent` is the page's door into the chat (a
+                # Library picture "into the chat"); the target buttons write into the module's state.
+                await cdp.evaluate("(() => { document.querySelector('.nav[data-view=\"agent\"]').click(); })()")
+                await cdp.wait_for("(document.querySelector('#agBig') || {}).textContent", timeout=15)
+                agent = await cdp.evaluate(
+                    "(() => { const st = window.h3Modes.stats();"
+                    " return {mounted: st.mounted.includes('agent'),"
+                    "  handle: !!(window.h3Agent && window.h3Agent.state),"
+                    "  card: (document.querySelector('#agBig') || {}).textContent || '',"
+                    "  verdict: (document.querySelector('#agState') || {}).textContent || '',"
+                    "  targets: document.querySelectorAll('#agTarget button[data-t]').length,"
+                    "  chats: (document.querySelector('#agHist') || {}).textContent || '',"
+                    "  send: !!document.querySelector('#agSend')}; })()")
+                check("the agent section mounts with its model card and target buttons",
+                      agent and agent["mounted"] and agent["handle"] and agent["send"]
+                      and agent["targets"] >= 7 and agent["card"].strip() and agent["verdict"].strip(),
+                      str(agent))
+                check("the chat list is read on entering the section",
+                      agent and "переписки" in agent["chats"], str(agent))
+
+                attached = await cdp.evaluate(
+                    """(async () => {
+                      const b = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='), c => c.charCodeAt(0));
+                      await window.h3Agent.attachFile(new File([b], 'picture.png', {type: 'image/png'}));
+                      return {files: document.querySelectorAll('#agAtt button[data-i]').length,
+                        imgs: document.querySelectorAll('#agAtt img').length,
+                        cross: !document.querySelector('#agClrField').hidden};
+                    })()""", await_promise=True)
+                check("a picture attached through h3Agent reaches the chat",
+                      attached and attached["files"] == 1 and attached["imgs"] == 1 and attached["cross"],
+                      str(attached))
+
+                target = await cdp.evaluate(
+                    "(() => { document.querySelector('#agTarget2 button[data-t=\"krea\"]').click();"
+                    " const st = window.h3Agent.state;"
+                    " const box = document.querySelector('#agTarget2 button[data-t=\"krea\"]');"
+                    " const out = {target: st.target, on: box.classList.contains('on'),"
+                    "  ctx: (document.querySelector('#agCtx') || {}).textContent || ''};"
+                    " document.querySelector('#agAtt button[data-i]').click();"
+                    " out.left = document.querySelectorAll('#agAtt button[data-i]').length;"
+                    " return out; })()")
+                check("a target click writes into the module's state and its context line",
+                      target and target["target"] == "krea" and target["on"]
+                      and "Krea" in target["ctx"] and target["left"] == 0, str(target))
+                await asyncio.sleep(0.3)
+                await cdp.screenshot(shots / "agent.png")
+
                 hooks_before = await cdp.evaluate("DRAFT_HOOKS.length")
 
                 # Mode ownership: a section mounts once, leaving it does not add another handler or
