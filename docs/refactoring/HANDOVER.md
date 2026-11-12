@@ -22,7 +22,7 @@
 | `9fb410f` | этап 5: медиасервис, одна финализация, `.part`, отдельный статус архивной копии |
 | `e66a6fa` | этап 6: супервизор задач, EngineManager, согласованный shutdown, облачное задание переживает окно |
 | `f3ba678` | этап 7: доставка событий очередью, снимок при переподключении, ошибки и состояния агента |
-| _(этап 8)_ | параметры задания явными полями, внешние `api.js`/`events.js`/`app.css`, упаковка ui |
+| `3730134` | этап 8: параметры задания явными полями, внешние `api.js`/`events.js`/`app.css`, упаковка ui |
 
 Отчёты: [stage-0-baseline.md](stage-0-baseline.md), [stage-1-report.md](stage-1-report.md),
 [stage-2-report.md](stage-2-report.md), [stage-3-precondition.md](stage-3-precondition.md),
