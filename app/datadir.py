@@ -6,11 +6,51 @@ Nothing is left in the Windows profile:
     keeps only a one-line pointer (data_location.txt), so deleting that folder removes everything.
 Older versions kept them in %LOCALAPPDATA%\\MinimaxH3Workspace; they are moved on the first start.
 """
+import ctypes
 import json
+import os
 import shutil
+import sys
 from pathlib import Path
 
 from storage.atomic import atomic_write_json, atomic_write_text
+
+# A folder that a cloud client mirrors, or a network share, is a bad home for a database: the client
+# can copy or lock the file in the middle of a transaction, and WAL over SMB is not a database that
+# can be trusted. The queue, the library and the settings live there, so the program warns the user.
+SYNCED_FOLDERS = (("\\onedrive", "OneDrive"), ("\\dropbox", "Dropbox"), ("\\google drive", "Google Drive"),
+                  ("\\googledrive", "Google Drive"), ("\\yandexdisk", "Яндекс.Диск"),
+                  ("\\яндекс.диск", "Яндекс.Диск"), ("\\iclouddrive", "iCloud Drive"),
+                  ("\\icloud drive", "iCloud Drive"), ("\\mega", "MEGA"))
+
+
+def check_location(path):
+    """Why this data folder is a risk for the stored state, or None when it is fine.
+
+    The message is for the user: it says what is wrong and what to do, and never stops the program —
+    a working copy in such a folder is better than no copy at all.
+    """
+    path = Path(path)
+    text = str(path).replace("/", "\\").lower()
+    if text.startswith("\\\\"):
+        return ("Каталог данных лежит на сетевом диске. База данных, очередь и библиотека могут "
+                "повреждаться при обрыве связи или одновременном доступе: перенесите программу на "
+                "локальный диск (Настройки → папка программы).")
+    if sys.platform == "win32":
+        try:
+            root = os.path.splitdrive(str(path.resolve()))[0] + "\\"
+            kind = ctypes.windll.kernel32.GetDriveTypeW(root)
+        except Exception:
+            kind = None
+        if kind == 4:   # DRIVE_REMOTE
+            return ("Каталог данных на сетевом диске — база данных может повреждаться при обрыве связи: "
+                    "перенесите программу на локальный диск.")
+    for marker, name in SYNCED_FOLDERS:
+        if marker in text:
+            return (f"Каталог данных лежит в папке, которую синхронизирует {name}: синхронизация может "
+                    "копировать базу данных и очередь во время записи. Лучше перенести программу в обычную "
+                    "папку на диске.")
+    return None
 
 
 def move_all(src, dst):

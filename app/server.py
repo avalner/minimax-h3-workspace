@@ -37,9 +37,11 @@ import catalog
 import civitai_client
 import cloud
 import customwf
+import datadir
 import engine
 import ffmpeg_mgr
 import hf_client
+import instance
 import loras_registry
 import monitor
 import mp4info
@@ -473,6 +475,9 @@ class Library:
 class App:
     def __init__(self, comfy_override=None, port=None):
         self.config = engine.Config(DATA_DIR / "config.json")
+        # a share or a synchronised folder is a poor home for the queue, the library and (stage 3) the
+        # database: the window says so once instead of letting the user find out the hard way
+        self.data_dir_warning = datadir.check_location(DATA_DIR)
         self.comfy_override = comfy_override.rstrip("/") if comfy_override else None
         self.port = port  # the port this window actually listens on: agents find it through agent.json
         self.agents = agentapi.AgentAPI(self, DATA_DIR, MAX_SECONDS)
@@ -1408,7 +1413,8 @@ class App:
         base = {"configured": bool(self.config.configured or self.comfy_override),
                 "engine": self.config.get("engine"), "installing": bool(self.installer),
                 # a queue that could not be written is not a saved queue: the window says so instead of hiding it
-                "queue_save_error": self.queue_save_error}
+                "queue_save_error": self.queue_save_error,
+                "data_dir": {"path": str(DATA_DIR), "warning": self.data_dir_warning}}
         try:
             stats = await self.system_stats()
         except Exception:
@@ -4963,13 +4969,24 @@ def main():
     ap.add_argument("--open", action="store_true", help="open the UI in the default browser")
     args = ap.parse_args()
 
-    app = build_app(args.comfy, args.port)
-    if args.open:
-        async def open_browser(_app):
-            asyncio.get_running_loop().call_later(1, webbrowser.open, f"http://127.0.0.1:{args.port}")
-        app.on_startup.append(open_browser)
-    web.run_app(app, host="127.0.0.1", port=args.port, print=lambda *_: print(f"Minimax H3 Workspace: http://127.0.0.1:{args.port}"))
+    if not instance.acquire(DATA_DIR):
+        other = instance.published(DATA_DIR) or {}
+        where = other.get("url") or (f"http://127.0.0.1:{other['port']}" if other.get("port") else "")
+        print("Minimax H3 Workspace уже запущена с этой папкой данных: " + str(DATA_DIR)
+              + (f"\nОткрытая программа: {where}" if where else ""))
+        return 3   # one folder, one copy: a second one would resume the same queue
+    try:
+        instance.publish(DATA_DIR, args.port)
+        app = build_app(args.comfy, args.port)
+        if args.open:
+            async def open_browser(_app):
+                asyncio.get_running_loop().call_later(1, webbrowser.open, f"http://127.0.0.1:{args.port}")
+            app.on_startup.append(open_browser)
+        web.run_app(app, host="127.0.0.1", port=args.port, print=lambda *_: print(f"Minimax H3 Workspace: http://127.0.0.1:{args.port}"))
+    finally:
+        instance.release()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -2169,9 +2169,19 @@ function offerNewModes(s) {
   };
   setTimeout(show, 2000);
 }
+/* The folder with the queue, the library and (soon) the database: on a share or in a synchronised
+   folder the files can be copied or locked mid-write. Said once per folder, not on every start. */
+function warnDataFolder(s) {
+  const d = s && s.data_dir;
+  if (!d || !d.warning) return;
+  const key = 'h3s-data-warning:' + d.path;
+  try { if (localStorage.getItem(key)) return; localStorage.setItem(key, '1'); } catch {}
+  toast(d.warning, 12000);
+}
 async function loadStatus() {
   try {
     const s = await (await fetch('/api/status')).json();
+    warnDataFolder(s);
     $('#setCustomBox').hidden = s.engine !== 'external';
     setEngine(s.online);
     if (!s.online) return;
@@ -3934,10 +3944,10 @@ $('#repBtn').onclick = async () => {
   } catch (e) { toast('Не удалось собрать отчёт: ' + e.message); }
   b.disabled = false;
 };
-function toast(msg) {
+function toast(msg, ms = 2600) {
   noteMsg(msg);
   const t = $('#toast'); t.textContent = msg; t.classList.add('on');
-  clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('on'), 2600);
+  clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('on'), ms);
 }
 function fmtDate(d) {
   const now = new Date(), hm = d.toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' });

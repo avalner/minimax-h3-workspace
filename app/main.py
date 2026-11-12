@@ -18,6 +18,7 @@ if getattr(sys, "frozen", False):
 
 from aiohttp import web  # noqa: E402
 
+import instance  # noqa: E402
 import server  # noqa: E402
 
 
@@ -139,12 +140,39 @@ class JsApi:
         return {"ok": bool(saved), "folder": folder, "count": len(saved), "failed": failed}
 
 
+def already_running():
+    """The program is open already: say so, and let this copy close itself."""
+    other = instance.published(server.DATA_DIR) or {}
+    url = other.get("url") or (f"http://127.0.0.1:{other['port']}" if other.get("port") else "")
+    text = ("Minimax H3 Workspace уже запущена.\n\n"
+            "Одна папка данных не может обслуживаться двумя копиями: вторая запустила бы те же "
+            "незавершённые задания заново, а библиотека и настройки перезаписывались бы друг другом."
+            + (f"\n\nОткрытая программа: {url}" if url else ""))
+    try:
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(0, text, "Minimax H3 Workspace", 0x40)
+    except Exception:
+        print(text)
+
+
 def main():
     import ctypes
     if sys.platform == "win32":
         # no Windows error dialogs (e.g. nvidia-smi.exe 0xc0000142 under memory pressure); child processes inherit this
         ctypes.windll.kernel32.SetErrorMode(0x0001 | 0x0002)  # SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX
+    if not instance.acquire(server.DATA_DIR):
+        already_running()   # one folder, one copy: the system releases this when the process ends
+        return 3
+    try:
+        return _run_window()
+    finally:
+        instance.release()
+
+
+def _run_window():
+    import ctypes
     port = free_port()
+    instance.publish(server.DATA_DIR, port)   # so a second launch can name the running window
     srv = ServerThread(port)
     srv.start()
     srv.ready.wait(30)
@@ -221,4 +249,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

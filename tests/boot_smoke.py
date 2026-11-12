@@ -87,6 +87,17 @@ def main():
         check("a queue that could not be written is reported, not hidden", "queue_save_error" in payload,
               str(sorted(payload))[:300])
 
+        folder = payload.get("data_dir") or {}
+        check("/api/status names the data folder and does not warn about a local one",
+              folder.get("path") == str(data) and not folder.get("warning"), str(folder)[:300])
+
+        note = data / "instance.json"
+        note_data = json.loads(note.read_text(encoding="utf-8")) if note.exists() else {}
+        # the pid here is the interpreter's, which on this machine is not the launcher's pid (the
+        # Windows Store python starts a child): the port and the folder are what the note is for
+        check("the running copy says where it is (one folder, one copy)",
+              note_data.get("port") == port and note_data.get("data") == str(data), str(note_data)[:200])
+
         status, body = get(base + "/api/queue/saved")
         check("an empty queue is served as count 0", json.loads(body).get("count") == 0, body[:200])
 
