@@ -30,32 +30,84 @@ def free_port(start=8765):
     raise RuntimeError("no free port")
 
 
+CLEANUP_TIMEOUT = 45.0   # the whole stop of the server, in seconds (see server.SHUTDOWN_BUDGET)
+
+
 class ServerThread(threading.Thread):
+    """The server in its own thread: its loop, its runner, and one honest shutdown.
+
+    A failure during startup is stored instead of killing the process silently: the window is not
+    opened for a server that did not start, and the message says what happened.
+    """
+
     def __init__(self, port):
         super().__init__(daemon=True)
         self.port = port
         self.ready = threading.Event()
         self.loop = None
         self.runner = None
+        self.error = None
 
     def run(self):
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
-        self.runner = web.AppRunner(server.build_app(port=self.port))
-        self.loop.run_until_complete(self.runner.setup())
-        self.loop.run_until_complete(web.TCPSite(self.runner, "127.0.0.1", self.port).start())
+        try:
+            self.runner = web.AppRunner(server.build_app(port=self.port),
+                                        shutdown_timeout=server.HANDLER_DRAIN)
+            self.loop.run_until_complete(self.runner.setup())
+            self.loop.run_until_complete(web.TCPSite(self.runner, "127.0.0.1", self.port).start())
+        except Exception as e:  # noqa: BLE001 - the window must hear about it, not see a dead process
+            self.error = f"{type(e).__name__}: {e}"
+            self.ready.set()
+            self._close_loop()
+            return
         self.ready.set()
-        self.loop.run_forever()
+        try:
+            self.loop.run_forever()
+        finally:
+            self._close_loop()
+
+    def _close_loop(self):
+        loop, self.loop = self.loop, None
+        if loop is None:
+            return
+        try:
+            loop.run_until_complete(loop.shutdown_asyncgens())
+        except Exception:
+            pass
+        loop.close()
 
     def shutdown(self):
-        # cleanup also stops the managed ComfyUI process
+        """Stop the server and wait for its thread.
+
+        cleanup also stops the managed ComfyUI process. The wait is bounded: a slow engine stop must
+        not keep the program alive (that process is adopted by a job object and dies with the app),
+        and the loop and the thread are closed in every case.
+        """
+        if self.loop is None or self.runner is None:
+            return
         fut = asyncio.run_coroutine_threadsafe(self.runner.cleanup(), self.loop)
         try:
-            fut.result(timeout=30)
-        except Exception:
-            pass   # e.g. ComfyUI is slow to stop: the process is ending anyway, no error dialog at exit
+            fut.result(timeout=CLEANUP_TIMEOUT)
+        except TimeoutError:
+            print(f"Закрытие заняло больше {CLEANUP_TIMEOUT:g} с: движок не остановился вовремя. "
+                  "Состояние очереди сохранено, он завершится вместе с программой.", file=sys.stderr)
+        except Exception as e:  # noqa: BLE001 - e.g. the engine is slow to stop: the process is ending
+            print(f"Закрытие завершилось с ошибкой: {type(e).__name__}: {e}", file=sys.stderr)
         finally:
             self.loop.call_soon_threadsafe(self.loop.stop)
+            self.join(CLEANUP_TIMEOUT)
+
+
+def start_failed(text):
+    """Say why the program is not starting, and do not pretend that it started."""
+    message = ("Не удалось запустить программу.\n\n" + str(text) +
+               "\n\nЕсли это повторяется, пришлите этот текст автору (раздел «Помощь»).")
+    try:
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(0, message, "Minimax H3 Workspace", 0x10)
+    except Exception:
+        print(message, file=sys.stderr)
 
 
 class JsApi:
@@ -175,7 +227,12 @@ def _run_window():
     instance.publish(server.DATA_DIR, port)   # so a second launch can name the running window
     srv = ServerThread(port)
     srv.start()
-    srv.ready.wait(30)
+    started = srv.ready.wait(30)
+    if not started or srv.error:
+        # no window for a server that is not there: the old code opened a URL that would never answer
+        start_failed(srv.error or "Сервер не ответил за 30 секунд.")
+        srv.shutdown()
+        return 4
     url = f"http://127.0.0.1:{port}"
 
     def explain_no_webview():

@@ -173,6 +173,13 @@ def build(info):
     for line in (info.get("guard") or "срабатываний не было").splitlines():
         L.append("- " + line)
 
+    shutdown = info.get("shutdown")
+    if shutdown:
+        sec("ЗАКРЫТИЕ ПРОГРАММЫ (бюджет остановки)")
+        L.append(f"Заняло, с: {shutdown.get('seconds')}")
+        L.append("Не успели остановиться: " + (", ".join(shutdown.get("unfinished") or []) or "всё успело"))
+        L.append("Писатели файлов остановлены штатно: " + ("да" if shutdown.get("writers") else "НЕТ"))
+
     sec("ЖУРНАЛ ДВИЖКА (последние строки)")
     L.append(info.get("comfy_log") or "журнала нет (свой ComfyUI пишет его сам в своём окне)")
 

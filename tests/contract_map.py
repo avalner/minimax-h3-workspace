@@ -30,7 +30,7 @@ import server  # noqa: E402
 SOURCES = [APP / "server.py", APP / "agentapi.py", APP / "engine.py", APP / "ffmpeg_mgr.py",
            APP / "agent.py", APP / "updater.py", APP / "catalog.py", APP / "loras_registry.py"]
 # the layers the refactoring moved the work into: a map that only sees server.py stops being a map
-for package in ("services", "storage", "backends", "domain"):
+for package in ("services", "storage", "backends", "domain", "runtime"):
     SOURCES += sorted(p for p in (APP / package).glob("*.py") if p.is_file())
 
 
@@ -114,7 +114,7 @@ def main():
          ["файл", "строка", "код"]),
         ("Короткая память об исходах", r"self\.recent\[|self\.history\[|self\.remember\(",
          ["файл", "строка", "код"]),
-        ("Фоновые задачи", r"create_task\(|asyncio\.to_thread\(", ["файл", "строка", "код"]),
+        ("Фоновые задачи", r"create_task\(|tasks\.spawn\(|asyncio\.to_thread\(", ["файл", "строка", "код"]),
         ("Запись на диск", r"atomic_write_json\(|atomic_write_text\(|atomic_write_bytes\(|\.write_text\(|\.write_bytes\(",
          ["файл", "строка", "код"]),
     ]:

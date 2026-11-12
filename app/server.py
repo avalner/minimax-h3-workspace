@@ -56,6 +56,8 @@ from backends.comfy import ComfyBackend
 from domain.errors import InvalidSpec, InvalidTransition, JobConflict
 from domain.jobs import (MAX_SECONDS, InputRef, JobRecord, JobSpec, JobState, ResultPolicy, new_job_id,
                          public_state)
+from runtime.tasks import TaskSupervisor
+from services.engines import EngineManager
 from services.jobs import JobService
 from services.media import EmptyResult, MediaService
 from storage.atomic import atomic_write_json, atomic_write_text
@@ -371,6 +373,16 @@ STATE_DB = DATA_DIR / "h3studio.db"
 WORKFLOWS_DIR = DATA_DIR / "workflows"
 PREVIEW_LIMIT = 40  # finished pictures waiting for «Добавить в библиотеку»: the newest are kept, the rest is forgotten
 
+# The shutdown has one budget, and it is split with main.py on purpose: main.py waits CLEANUP_TIMEOUT
+# (45 s) for this whole cleanup, aiohttp drains the running handlers for HANDLER_DRAIN of it, and
+# App.stop gets the rest — the state-safe part (loops, writers, queue) must always fit, so the outer
+# timeout can never cut a write. Stopping the engine comes after the queue is saved and has its own
+# allowance: 15 + 8 + 20 < 45, and a process that is cut there is adopted by a job object anyway.
+HANDLER_DRAIN = 15.0
+SHUTDOWN_BUDGET = 8.0
+ENGINE_STOP_TIMEOUT = 20.0
+CLOUD_RETRY = 30.0   # a network blink does not make a remote job failed: five misses before giving up
+
 CLIENT_ID = "h3studio-" + uuid.uuid4().hex[:8]
 
 # a failed write of the stored state: the JSON files of the older version, or the database now
@@ -516,8 +528,6 @@ class App:
         self.pending = {}  # item id -> item; memory only, so a restart forgets them
         self.output_dir = None
         self.comfy_online = False
-        self.process = None  # engine.ComfyProcess in managed mode
-        self._bg = set()  # background tasks (kept so they are not garbage collected)
         self.installer = None
         self.setup_log = []  # last setup events, replayed to a reopened window
         self.model_names = {}  # role -> name as ComfyUI lists it
@@ -531,15 +541,24 @@ class App:
         self.rh_models = None  # model paths found in the user's RunningHub workflow
         self.monitor = monitor.Monitor()
         self.recent_errors = []  # last problems, for the report to the author
+        # every background coroutine of the app: one place that keeps the reference, sees the error
+        # and can stop it (a `create_task` in a handler is fire and forget)
+        self.tasks = TaskSupervisor(note_error=self.note_error)
+        self._stopping = False   # set first in the shutdown: no new work, no new tasks
+        self.last_shutdown = None  # what the shutdown could not finish in its budget, for the report
         self.guard = watchdog.GpuWatchdog()  # the video card watch: slow render or hung engine
         self.guard_task = None
         self.watchdog_task = None  # the lost-job watch: a job ComfyUI no longer knows about
         self.guard_gpu = None    # the last reading the watch took
-        self.guard_last = None   # the last restart it made because of a hang
         self.stats = None        # last /system_stats: it carries the command line of the user's own ComfyUI
-        self.ext_proc = None     # the user's own ComfyUI, when we had to start it again
         self.ext_log = DATA_DIR / "comfyui-external.log"
-        self._restarting = False
+        # who owns ComfyUI: the process, the one restart that may run, and the VRAM handshake with
+        # the agent's model. Two restarts at once never start two engines.
+        self.engines = EngineManager(
+            url=lambda: self.comfy, wait_ready=self.wait_comfy, log_path=self.ext_log,
+            external_restart=engine.restart_external, stats=lambda: self.stats,
+            stop_llm=self.stop_llm, release_vram=self.release_vram, busy=lambda: bool(self.jobs),
+            note_error=self.note_error, clock=time.time)
         self.ffmpeg_dl = None    # the running portable-FFmpeg download: {"cancel": Event, "pct": 0, "text": "", "done": False}
         self.ffmpeg_jobs = {}    # prompt_id -> {"cancel": Event, "task": Task, "dest": Path}
         self.lora_dl = None      # the running LoRA download from Civitai / Hugging Face
@@ -598,8 +617,8 @@ class App:
     def comfy(self):
         if self.comfy_override:
             return self.comfy_override
-        if self.process:
-            return self.process.url
+        if self.engines.process:
+            return self.engines.process.url
         return self.config.get("comfy_url", "http://127.0.0.1:8188").rstrip("/")
 
     def comfy_root(self):
@@ -667,12 +686,13 @@ class App:
             self.note_error(f"Уборка недописанных файлов не удалась: {e}")
         if self.config.get("engine") == "managed" and self.config.get("setup_done") and not self.comfy_override:
             if self.missing_node_packs():
-                self.packs_task = asyncio.create_task(self.install_missing_packs())
+                self.packs_task = self.tasks.spawn("install-nodes", self.install_missing_packs())
             else:
                 self.start_managed()
-        self.ws_task = asyncio.create_task(self.comfy_ws_loop())
-        self.guard_task = asyncio.create_task(self.guard_loop())
-        self.watchdog_task = asyncio.create_task(self.jobs_watchdog())  # jobs ComfyUI has lost, not a hung card
+        self.ws_task = self.tasks.spawn("comfy-ws", self.comfy_ws_loop())
+        self.guard_task = self.tasks.spawn("gpu-watch", self.guard_loop())
+        self.watchdog_task = self.tasks.spawn("lost-watch", self.jobs_watchdog())  # jobs ComfyUI has lost, not a hung card
+        self.watch_cloud_jobs()   # a remote job survives the window: watch it, never send it again
         self.agents.publish()
 
     def prune_input_cache(self, days=30):
@@ -707,28 +727,83 @@ class App:
             await engine.Installer(ROOT, self.session, quiet).install_nodes(self.comfy_root())
         except Exception as e:
             print(f"Не удалось докачать ноды ({type(e).__name__}): {e}", file=sys.stderr)
-        if not self.process:
+        if not self.engines.process:
             self.start_managed()
 
     async def stop(self, _app):
+        """The one shutdown, in the order that keeps the recovery state safe.
+
+        1. stop accepting new work and new background tasks;
+        2. tell the installers and downloads to stop (their own cancel flags);
+        3. cancel the loops (the engine web socket, the watches, the cloud polls) and wait for them;
+        4. wait for the media writers, so a `.part` is never deleted under a live writer;
+        5. write the recovery state — before anything is closed, so a budget cut cannot lose the
+           queue: a job that was being finalized is already `finalizing` in the database, and the
+           next start takes it from the engine's history instead of rendering it again;
+        6. close the HTTP session, then the database;
+        7. stop the processes this program started (the managed ComfyUI), last: it is the slow part
+           and it owns no state that a cut would lose.
+
+        A remote cloud job is *not* cancelled here: it keeps running on RunningHub, and the next start
+        watches it again (`watch_cloud_jobs`).
+        """
+        if self._stopping:
+            return
+        self._stopping = True
+        started = time.monotonic()
+
+        def left(reserve=0.0):
+            return max(0.5, SHUTDOWN_BUDGET - (time.monotonic() - started) - reserve)
+
         self.agents.unpublish()
-        self.ws_task.cancel()
-        if self.guard_task:
-            self.guard_task.cancel()
-        if self.watchdog_task:
-            self.watchdog_task.cancel()
-        if self.installer:
-            self.installer.cancelled = True
-        if self.process:
-            await asyncio.to_thread(self.process.stop)
+        self.tasks.close()   # from this moment a handler gets None instead of a task on a closed session
+        for installer in (self.installer, getattr(self, "dl_installer", None), self.agent_installer):
+            if installer is not None:
+                installer.cancelled = True
+        if self.ffmpeg_dl:
+            self.ffmpeg_dl["cancel"].set()
+        for job in self.ffmpeg_jobs.values():
+            job["cancel"].set()
+        unfinished = await self.tasks.shutdown(timeout=left(4.0))
+        writers = await self.media.shutdown(timeout=left())
+        self.save_queue()   # the recovery state, while the database is still open
+        if self.session is not None and not self.session.closed:
+            await self.session.close()
+        try:
+            self.db.close()
+        except Exception:  # noqa: BLE001 - a database that is already closed is not a shutdown failure
+            pass
+        try:
+            await asyncio.wait_for(self.engines.stop(), timeout=ENGINE_STOP_TIMEOUT)
+        except asyncio.TimeoutError:
+            unfinished.append("engine-stop")   # the adopted process dies with the program, no state is lost
         await asyncio.to_thread(self.llm.stop)
-        await self.media.shutdown(timeout=10.0)   # writers stop and remove their own `.part` files
-        await self.session.close()
+        self.last_shutdown = {"seconds": round(time.monotonic() - started, 2), "unfinished": unfinished,
+                              "writers": bool(writers)}
+        if unfinished:
+            self.note_error("При закрытии не успели: " + ", ".join(unfinished)
+                            + ". Состояние сохранено, следующий запуск продолжит.")
+
+    async def stop_aware_thread(self, func, *args, cancel=None):
+        """Run a worker that answers a cancel event; a cancelled caller waits for the worker to stop.
+
+        `asyncio.to_thread` cannot be interrupted: cancelling the task leaves FFmpeg writing while
+        the cleanup removes its output. So the event is set and the worker is awaited — it checks the
+        event and exits itself — before the caller is told that the work was cancelled.
+        """
+        worker = asyncio.ensure_future(asyncio.to_thread(func, *args))
+        try:
+            return await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            if cancel is not None:
+                cancel.set()
+            with contextlib.suppress(BaseException):
+                await asyncio.wait_for(asyncio.shield(worker), timeout=15.0)
+            raise
 
     def start_managed(self):
         root = self.comfy_root()
-        self.process = engine.ComfyProcess(root, DATA_DIR / "comfyui.log")
-        self.process.start()
+        self.engines.start_managed(root)
         self.output_dir = root / "ComfyUI" / "output"
 
     async def wait_comfy(self, timeout=300):
@@ -736,10 +811,12 @@ class App:
         loop = asyncio.get_running_loop()
         end = loop.time() + timeout
         while loop.time() < end:
-            died = (self.process and not self.process.alive()) or (
-                not self.process and self.ext_proc is not None and self.ext_proc.poll() is not None)
+            process = self.engines.process
+            external = self.engines.external
+            died = (process is not None and not process.alive()) or (
+                process is None and external is not None and external.poll() is not None)
             if died:
-                tail = self.process.log_tail() if self.process else engine.log_tail(self.ext_log, 20)
+                tail = self.engines.log_tail(20)
                 hint = ("\n\nПохоже, проблема в драйвере видеокарты. Обновите драйвер NVIDIA (nvidia.com/drivers), "
                         "перезагрузите компьютер и нажмите «Продолжить».") if re.search(r"cuda|nvidia|driver", tail, re.I) else ""
                 raise RuntimeError("ComfyUI не запустился:\n" + tail + hint)
@@ -748,8 +825,7 @@ class App:
                 return
             except Exception:
                 await asyncio.sleep(2)
-        raise RuntimeError("ComfyUI долго не отвечает:\n"
-                           + (self.process.log_tail() if self.process else engine.log_tail(self.ext_log, 20)))
+        raise RuntimeError("ComfyUI долго не отвечает:\n" + self.engines.log_tail(20))
 
     async def resolve_models(self):
         """Match the chosen model files against what ComfyUI sees (any subfolder)."""
@@ -904,7 +980,7 @@ class App:
 
     def watchdog_local(self):
         """A rented or otherwise remote ComfyUI cannot be started again from here, and its card is not ours."""
-        return urllib.parse.urlparse(self.comfy).hostname in (None, "", "127.0.0.1", "localhost")
+        return self.engines.local()
 
     def running_jobs(self):
         return [j for j in self.jobs.values() if j.get("state") == "running" and not j.get("task")]
@@ -921,7 +997,7 @@ class App:
 
     async def guard_tick(self):
         """One look at the card. Cheap when nothing runs: nvidia-smi is asked only while a job is going."""
-        if self._restarting:  # the engine is being replaced right now: there is nothing to judge yet
+        if self.engines.restarting:  # the engine is being replaced right now: there is nothing to judge yet
             return
         if not self.watchdog_on() or not self.watchdog_local() or not self.running_jobs():
             self.guard.paused()
@@ -943,41 +1019,16 @@ class App:
             await self.drop_engine_jobs("Задание прервано: движок завис, ComfyUI перезапущен")
             self.guard.reset()
             return
-        if not why:  # a restart was already under way (the user's «Stop» got there first): not a failure
-            return
         text = (f"Перезапустить ComfyUI не получилось: {why}. Закройте окно ComfyUI и запустите его снова. "
                 "Если это повторяется, перезагрузите компьютер и обновите драйвер NVIDIA.")
         self.note_error(text)
         await self.broadcast({"type": "notice", "text": text})
 
     async def restart_engine(self):
-        """Start ComfyUI again: our own engine, or the user's own one from the command line it reports.
-        Returns (ok, why); an empty `why` means another restart was already running, which is not a failure.
-        What really happened is remembered for the sidebar, whichever path asked for it."""
-        if not self.watchdog_local():
-            return False, "это ComfyUI на другом компьютере: перезапустите его там, где он запущен"
-        if self._restarting:
-            return False, ""
-        self._restarting = True
-        try:
-            if self.process:
-                await asyncio.to_thread(self.process.restart)
-            else:
-                if self.ext_proc is not None and self.ext_proc.poll() is not None:
-                    self.ext_proc = None  # an old copy of it is already gone
-                self.ext_proc = await asyncio.to_thread(engine.restart_external, self.stats, self.ext_log, self.comfy)
-            await self.wait_comfy(timeout=240)
-            self.guard_last = {"at": time.time(), "ok": True, "why": ""}
-            return True, ""
-        except Exception as e:
-            why = str(e) or type(e).__name__
-            if not self.process:
-                tail = engine.log_tail(self.ext_log, 6)
-                why = f"{why}. Журнал: {tail}" if tail else why
-            self.guard_last = {"at": time.time(), "ok": False, "why": why}
-            return False, why
-        finally:
-            self._restarting = False
+        """Start ComfyUI again. The engine manager owns the work and its one-restart-at-a-time rule:
+        callers that arrive while it runs wait for it and receive the same answer, so a watch, a
+        cancel timeout and the button never start two engines."""
+        return await self.engines.restart()
 
     async def drop_engine_jobs(self, message=None, kind="error"):
         """The engine was replaced, so its queue is gone: nothing of what it had will finish now."""
@@ -1011,8 +1062,8 @@ class App:
         """What the sidebar shows about the watch: nothing while all is well."""
         if not self.watchdog_on() or not self.watchdog_local():
             return {"state": "off", "text": ""}
-        last = self.guard_last
-        if last and time.time() - last["at"] < 600:
+        last = self.engines.last
+        if last and last.get("at") and time.time() - last["at"] < 600:
             if last.get("ok"):
                 when = time.strftime("%H:%M", time.localtime(last["at"]))
                 return {"state": "warn", "text": f"перезапущен в {when}"}
@@ -1042,13 +1093,11 @@ class App:
         """Settings → «Движок»: start ComfyUI again by hand."""
         if self.installer:
             return web.json_response({"error": "Сначала дождитесь установки"}, status=409)
-        if self._restarting:
+        if self.engines.restarting:
             return web.json_response({"error": "Перезапуск уже идёт"}, status=409)
         self.guard_log("перезапуск по кнопке")
         ok, why = await self.restart_engine()
         if not ok:
-            if not why:
-                return web.json_response({"error": "Перезапуск уже идёт"}, status=409)
             self.note_error(f"Не удалось перезапустить движок по кнопке: {why}")
             return web.json_response({"error": f"Не удалось перезапустить ComfyUI: {why}"}, status=500)
         await self.drop_engine_jobs("Задание остановлено: движок перезапущен вручную")
@@ -1455,7 +1504,9 @@ class App:
                 # a queue that could not be written is not a saved queue: the window says so instead of hiding it
                 "queue_save_error": self.queue_save_error,
                 "data_dir": {"path": str(DATA_DIR), "warning": self.data_dir_warning},
-                "storage": self.storage_state()}
+                "storage": self.storage_state(),
+                # what a closing run could not finish in its budget: the next start may have work to do
+                "shutdown": self.last_shutdown}
         try:
             stats = await self.system_stats()
         except Exception:
@@ -1582,7 +1633,7 @@ class App:
                 await self.broadcast({"type": "mdl", "state": "error", "label": "Скачивание остановлено. Скачанное сохранено: нажмите «Скачать» снова, и оно продолжится."})
             except Exception as ex:
                 await self.broadcast({"type": "mdl", "state": "error", "label": str(ex)[:300]})
-        self.dl_task = asyncio.create_task(run())
+        self.dl_task = self.tasks.spawn("models", run())
         return web.json_response({"ok": True, "folder": str(p), "count": len(entries), "size": sum(e["size"] for e in entries)})
 
     async def h_models_download_cancel(self, _req):
@@ -1768,7 +1819,10 @@ class App:
                 base = f"{pu.scheme}://{pu.hostname}:8000"   # such a link opens the page; the API of the Immers.Cloud image is on port 8000
         url = base + ("/api" if pu.path.rstrip("/").endswith("/api") else "")   # a path or a query in the pasted address is dropped
         self.config.data["comfy_key"] = key
-        self.process = None
+        # switching to the user's own engine: the app's managed ComfyUI is ours, so it is stopped
+        # instead of left running behind the new address (one owner, one process, one card)
+        if self.engines.process is not None:
+            await self.engines.stop()
         stats, last_err, used = None, None, url
         # a rented server may publish the API only under «/api» (as the Immers.Cloud image does): try both
         for cand in ([url] + ([url + "/api"] if remote and not url.rstrip("/").endswith("/api") else [])):
@@ -1838,7 +1892,7 @@ class App:
                            choice=choice, profile=profile, modes=modes, setup_done=False)
         self.setup_log = []
         self.installer = engine.Installer(ROOT, self.session, self.setup_emit)
-        self.installer.task = asyncio.create_task(self.run_install(install_dir, models_dir))
+        self.installer.task = self.tasks.spawn("install", self.run_install(install_dir, models_dir))
         return web.json_response({"ok": True})
 
     async def run_install(self, install_dir, models_dir):
@@ -1850,8 +1904,7 @@ class App:
             if models_dir:
                 inst.write_extra_paths(root, models_dir)
             await inst.step("start", "progress", label="Запускаем ComfyUI…")
-            if self.process:
-                await asyncio.to_thread(self.process.stop)
+            await self.engines.stop()
             self.start_managed()
             await self.wait_comfy()
             await inst.step("start", "done", label="ComfyUI запущен")
@@ -1917,8 +1970,9 @@ class App:
             "long_states": long_states,
             "home": HOME, "data_dir": DATA_DIR, "hw": hw, "page": page.get("page"), "comfy": comfy, "models": models,
             "config": self.config.data, "errors": self.recent_errors, "toasts": page.get("toasts"),
-            "comfy_log": self.process.log_tail(60) if self.process else "",
+            "comfy_log": self.engines.log_tail(60),
             "guard": self.guard_log_tail(), "guard_on": self.watchdog_on(),
+            "shutdown": self.last_shutdown,   # what a closing run could not finish in its budget
             "llm_log": self.llm.log_tail(12)})
         folder = DATA_DIR / "reports"
         folder.mkdir(parents=True, exist_ok=True)
@@ -1950,12 +2004,20 @@ class App:
 
         The queue never lived longer than a week (the JSON version dropped older records), so an older
         record is forgotten here as well instead of being offered forever.
+
+        A cloud job is not in this list: the window closing never cancelled it on RunningHub, so it is
+        watched again at start (`watch_cloud_jobs`) instead of being asked about — and it is never
+        re-sent, which would render (and pay for) the same clip twice.
         """
         week_ago = datetime.now().timestamp() - 7 * 86400
         out = []
+        self.resume_cloud = []
         for record in self.jobs_repo.active():
             if record.created_at and record.created_at < week_ago:
                 self.jobs_repo.delete(record.job_id)
+                continue
+            if record.backend == "cloud" and record.backend_job_id:
+                self.resume_cloud.append(record)
                 continue
             out.append(record)
         return out
@@ -1986,7 +2048,8 @@ class App:
         """
         try:
             live = set()
-            waiting = {record.job_id for record in self.pending_resume}
+            waiting = ({record.job_id for record in self.pending_resume}
+                       | {record.job_id for record in getattr(self, "resume_cloud", ())})
             with self.db.transaction():
                 for job in list(self.jobs.values()):
                     record = self.persisted_job(job)
@@ -2018,7 +2081,34 @@ class App:
                 "stage": None, "meta": legacy.get("meta") or {}, "last_output": legacy.get("last_output", False),
                 "titles": legacy.get("titles") or {}, "graph": record.graph, "scenes": None,
                 "t0": record.created_at or now, "last_ev": now, "preview": legacy.get("preview", False),
+                # a cloud job is watched by its task id; it is never sent to ComfyUI again
+                "task": record.backend_job_id if record.backend == "cloud" else None,
                 "record": record}
+
+    def watch_cloud_jobs(self):
+        """Watch the cloud jobs that were still running when the window closed.
+
+        Closing the program never cancelled them on RunningHub: the task id is in the record, and the
+        new run attaches to it instead of asking ComfyUI (which never had it) or sending it again
+        (which would render — and pay for — the same clip twice). With the cloud switched off the
+        records are kept for the next start, not lost.
+        """
+        records, self.resume_cloud = list(getattr(self, "resume_cloud", ())), []
+        if not records:
+            return
+        rh = self.rh()
+        if rh is None:
+            self.resume_cloud = records
+            self.note_error(f"Облачных заданий ждёт облако: {len(records)} (включите облако, чтобы следить за ними)")
+            return
+        for record in records:
+            job = self.job_from_record(record)
+            pid = job["prompt_id"]
+            if not pid or pid in self.jobs:
+                continue
+            self.jobs[pid] = job
+            self.try_set_job_state(job, JobState.QUEUED)   # the first status of the task moves it on
+            self.tasks.spawn(f"cloud:{pid}", self.poll_cloud(rh, pid), replace=True)
 
     async def _history_done(self, pid):
         """What ComfyUI's history says about a job of the previous run: finished, failed or unknown."""
@@ -2249,9 +2339,7 @@ class App:
         """Back to the first-run wizard; installed files stay where they are."""
         if self.installer:
             return web.json_response({"error": "Сначала остановите установку"}, status=409)
-        if self.process:
-            await asyncio.to_thread(self.process.stop)
-            self.process = None
+        await self.engines.stop()   # the wizard starts over: the engine this app started is stopped
         self.config.update(setup_done=False)
         return web.json_response({"ok": True})
 
@@ -2327,15 +2415,27 @@ class App:
                           "meta": dict(meta, cloud=True), "task": task, "t0": datetime.now().timestamp(),
                           "preview": preview, "record": self.new_record(spec, pid, backend_job_id=task)}
         self.set_job_state(self.jobs[pid], JobState.QUEUED)
-        asyncio.create_task(self.poll_cloud(rh, pid))
+        self.tasks.spawn(f"cloud:{pid}", self.poll_cloud(rh, pid), replace=True)
         return web.json_response({"prompt_id": pid, "seed": meta["seed"]})
 
     async def poll_cloud(self, rh, pid):
         job = self.jobs.get(pid)
         last = None
+        misses = 0   # consecutive "could not ask": a network blink is not a failed remote job
         try:
             while pid in self.jobs:
-                status = await rh.status(job["task"])
+                try:
+                    status = await rh.status(job["task"])
+                except cloud.CloudError:
+                    misses += 1
+                    if misses < 5:
+                        await asyncio.sleep(CLOUD_RETRY)
+                        continue
+                    raise
+                misses = 0
+                if status is None:   # not known there any more (expired, or another key): say why
+                    await rh.outputs(job["task"])   # raises with the provider's own reason
+                    raise cloud.CloudError("RunningHub не знает это задание")
                 if status != last:
                     last = status
                     stage = {"QUEUED": "cloud_queued", "RUNNING": "cloud_run"}.get(status)
@@ -2383,21 +2483,15 @@ class App:
                 if status == "FAILED":
                     await rh.outputs(job["task"])  # raises with the failure reason
                     raise cloud.CloudError("Задание на RunningHub завершилось ошибкой")
+                if pid not in self.jobs:
+                    return   # it was finished, cancelled or dropped while we were asking
                 await asyncio.sleep(5)
-        except Exception as e:
+        except asyncio.CancelledError:
+            raise   # the window is closing: watching stops, the remote job itself is not cancelled
+        except Exception as e:  # noqa: BLE001 - the cloud path reports its own errors to the window
             if pid in self.jobs:
                 job = self.jobs.get(pid)
                 self.try_set_job_state(job, JobState.FAILED, error=str(e))
-                self.keep_meta(job)
-                self.jobs.pop(pid, None)
-                await self.broadcast({"type": "error", "prompt_id": pid, "message": str(e)})
-                if status == "FAILED":
-                    await rh.outputs(job["task"])  # raises with the failure reason
-                    raise cloud.CloudError("Задание на RunningHub завершилось ошибкой")
-                await asyncio.sleep(5)
-        except Exception as e:
-            if pid in self.jobs:
-                job = self.jobs.get(pid)
                 self.keep_meta(job)
                 self.jobs.pop(pid, None)
                 await self.broadcast({"type": "error", "prompt_id": pid, "message": str(e)})
@@ -2422,24 +2516,24 @@ class App:
     async def prepare_engine(self, mode_key):
         """Before a job goes to the engine: the agent's model out of VRAM, the previous job's models freed.
 
-        Not between pictures of the same mode: the same big models would just be loaded from disk again.
+        The rule (when to ask, when to keep the models for the next picture) lives in the engine
+        manager; this is the app side of that handshake.
         """
-        await self.stop_llm()  # the agent's model and H3 do not fit in VRAM together
-        same = mode_key == getattr(self, "last_mode", None) and mode_key in ("krea", "kreareal", "qwen", "flux")
-        self.last_mode = mode_key
-        if not self.jobs and not same:
-            try:
-                await self.comfy_json("POST", "/free", json={"unload_models": True, "free_memory": True})
-                await asyncio.sleep(1.5)
-                gpu = await asyncio.to_thread(self.monitor.gpu)
-                used = (gpu or {}).get("vram_used_gb")
-                if used is not None and used > 2.5:  # right after /free ComfyUI itself holds well under this
-                    await self.broadcast({"type": "notice", "text": (
-                        f"Перед заданием занято {used:g} ГБ видеопамяти. Скорее всего, её держат другие программы "
-                        "(браузер, Adobe, игры). Закройте их, иначе генерация может идти медленнее.")})
-            except Exception:
-                pass
-        return same
+        return await self.engines.prepare(mode_key)
+
+    async def release_vram(self):
+        """The card side of `prepare_engine`: ask ComfyUI to unload, then say what is still held."""
+        try:
+            await self.comfy_json("POST", "/free", json={"unload_models": True, "free_memory": True})
+            await asyncio.sleep(1.5)
+            gpu = await asyncio.to_thread(self.monitor.gpu)
+            used = (gpu or {}).get("vram_used_gb")
+            if used is not None and used > 2.5:  # right after /free ComfyUI itself holds well under this
+                await self.broadcast({"type": "notice", "text": (
+                    f"Перед заданием занято {used:g} ГБ видеопамяти. Скорее всего, её держат другие программы "
+                    "(браузер, Adobe, игры). Закройте их, иначе генерация может идти медленнее.")})
+        except Exception:
+            pass
 
     async def queue(self, graph, stages, meta, last_output=False, titles=None, preview=False, spec=None):
         """The submission of the modes that still build their graph in the handler.
@@ -3217,6 +3311,7 @@ class App:
         self.lora_dl = state
 
         async def work():
+            dl = None
             try:
                 dl = asyncio.create_task(civitai_client.download_file_stream(self.session, url, str(dest), token))
                 state["task"] = dl
@@ -3229,6 +3324,12 @@ class App:
                 await dl
                 await self.broadcast({"type": "loradl", "name": name, "percent": 100, "finished": True})
             except asyncio.CancelledError:
+                # the child download is this task's own: it is stopped and awaited before the file is
+                # removed, or it would keep writing into a deleted file (and raise into nobody)
+                if dl is not None and not dl.done():
+                    dl.cancel()
+                    with contextlib.suppress(BaseException):
+                        await dl
                 dest.unlink(missing_ok=True)
                 await self.broadcast({"type": "loradl", "name": name, "cancelled": True})
             except Exception as ex:  # noqa: BLE001
@@ -3237,7 +3338,7 @@ class App:
             finally:
                 state["done"] = True
 
-        self.lora_dl_task = asyncio.create_task(work())
+        self.lora_dl_task = self.tasks.spawn("lora", work())
         return web.json_response({"ok": True, "name": name, "dir": str(folder)})
 
     async def h_loras_download_cancel(self, _req):
@@ -3761,7 +3862,8 @@ class App:
 
         async def work():
             try:
-                res = await asyncio.to_thread(ffmpeg_mgr.download_and_extract_ffmpeg_sync, folder, prog, cancel)
+                res = await self.stop_aware_thread(ffmpeg_mgr.download_and_extract_ffmpeg_sync, folder, prog,
+                                                   cancel, cancel=cancel)
             except Exception as ex:  # noqa: BLE001 - the UI needs a message, not a traceback
                 res = {"ok": False, "error": str(ex)}
             state["done"] = True
@@ -3773,7 +3875,7 @@ class App:
                 await self.broadcast({"type": "ffmpegdl", "done": True, "error": state["error"],
                                       "cancelled": bool(res.get("cancelled"))})
 
-        self.ffmpeg_dl_task = asyncio.create_task(work())
+        self.ffmpeg_dl_task = self.tasks.spawn("ffmpeg-dl", work())
         return web.json_response({"started": True})
 
     async def h_ffmpeg_download_cancel(self, _req):
@@ -3917,7 +4019,8 @@ class App:
         dest = out_dir / f"{datetime.now():%Y%m%d}_{uuid.uuid4().hex[:8]}.mp4"
         pid = "ff-" + uuid.uuid4().hex[:10]
         cancel = threading.Event()
-        task = asyncio.create_task(self.run_ffmpeg_job(pid, dest, paths, cleanup, options, cancel, len(ids), preview))
+        task = self.tasks.spawn(f"ffmpeg:{pid}",
+                                self.run_ffmpeg_job(pid, dest, paths, cleanup, options, cancel, len(ids), preview))
         self.ffmpeg_jobs[pid] = {"cancel": cancel, "task": task, "dest": dest}
         return web.json_response({"prompt_id": pid})
 
@@ -3939,8 +4042,8 @@ class App:
                 pass
 
         try:
-            await asyncio.to_thread(ffmpeg_mgr.run_studio_montage, st["ffmpeg_path"], st["ffprobe_path"],
-                                    [str(p) for p in paths], str(dest), options, prog, cancel)
+            await self.stop_aware_thread(ffmpeg_mgr.run_studio_montage, st["ffmpeg_path"], st["ffprobe_path"],
+                                          [str(p) for p in paths], str(dest), options, prog, cancel, cancel=cancel)
             info = await asyncio.to_thread(ffmpeg_mgr.probe_media, st["ffprobe_path"], str(dest))
             v = (info or {}).get("video") or None
             res = f'{v["width"]}×{v["height"]}' if v else ""
@@ -4238,9 +4341,7 @@ class App:
                 await self.broadcast({"type": "interrupted", "prompt_id": pid})
             elif accepted:
                 # running: the engine accepted the request, the outcome comes from its event or the watch
-                task = asyncio.create_task(self.interrupt_watch(pid))
-                self._bg.add(task)
-                task.add_done_callback(self._bg.discard)
+                self.tasks.spawn(f"cancel:{pid}", self.interrupt_watch(pid), replace=True)
             return
         # cloud tasks and jobs of an older run have no record: their own paths stay as they were
         if job.get("task"):
@@ -4262,9 +4363,7 @@ class App:
             await self.broadcast({"type": "interrupted", "prompt_id": pid})
         else:
             await self.comfy_json("POST", "/interrupt", json={"prompt_id": pid})
-            task = asyncio.create_task(self.interrupt_watch(pid))
-            self._bg.add(task)
-            task.add_done_callback(self._bg.discard)
+            self.tasks.spawn(f"cancel:{pid}", self.interrupt_watch(pid), replace=True)
 
     async def stop_current(self):
         """The window's «Остановить»: stop whatever the engine is running right now, by explicit request."""
@@ -4664,7 +4763,7 @@ class App:
             finally:
                 self.agent_installer = None
 
-        asyncio.create_task(run())
+        self.tasks.spawn("agent-install", run())
         return web.json_response({"ok": True})
 
     def speech_status(self):
