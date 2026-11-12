@@ -1568,7 +1568,7 @@ img.pr-media{object-position:center 38%}
       <div class="head">
         <div>
           <h1>Очередь</h1>
-          <p>Нажимайте «Сгенерировать» в любом разделе: задания встанут по порядку. Видео само сохранится в Библиотеку, а картинка сначала покажется черновиком — её добавляют в Библиотеку кнопкой. Не закрывайте приложение, пока идёт очередь</p>
+          <p>Нажимайте «Сгенерировать» в любом разделе: задания встанут по порядку. Готовое видео или картинка сначала показываются черновиком, а в Библиотеку попадают по кнопке «Добавить в библиотеку» в своём разделе. Не закрывайте приложение, пока идёт очередь</p>
         </div>
         <button class="btn" id="qClear" hidden>Очистить завершённые</button>
       </div>
@@ -1585,7 +1585,7 @@ img.pr-media{object-position:center 38%}
       </div>
       <details class="agvar" id="resBox" style="max-width:900px">
         <summary>Где хранятся файлы и копии <span id="resBadge" style="color:#e6a45c;font-weight:700"></span></summary>
-        <div class="hint" style="font-size:13px;line-height:1.5;margin-bottom:8px">Программа сама кладёт копию каждого готового видео в свою папку, а картинки — когда вы добавляете их в Библиотеку. Если вы почистите папку ComfyUI (<b>output</b>), файлы в Библиотеке останутся.</div>
+        <div class="hint" style="font-size:13px;line-height:1.5;margin-bottom:8px">Копию каждого результата программа кладёт в свою папку, когда вы добавляете его в Библиотеку. Если вы почистите папку ComfyUI (<b>output</b>), файлы в Библиотеке останутся.</div>
         <label class="cw-chk" style="display:flex;gap:8px;align-items:center;margin-bottom:8px"><input type="checkbox" id="resKeep" checked> Сохранять копию каждого результата</label>
         <div class="hint" style="margin-bottom:4px">Папка копий:</div>
         <div class="path on"><input id="resDir" spellcheck="false"><button class="btn" data-pick="resDir">Обзор…</button><button class="btn pri" id="resApply" type="button">Применить</button></div>
@@ -2004,6 +2004,10 @@ const START_VIEW = (() => { try { return localStorage.getItem('h3-last-view') ||
 
 /* ---------- local server (real ComfyUI) or offline demo ---------- */
 const API = location.protocol.startsWith('http');
+// finished pictures and clips that are not in the Library yet. Declared before the result panels are built:
+// a panel registers its own draft list (`DRAFT_HOOKS`) while it is being created
+const DRAFTS = [];
+const DRAFT_HOOKS = [];  // sections that show their own list of drafts (videos, custom workflows, montage)
 const promptHandlers = new Map(), earlyEvents = new Map();
 const previewHandlers = new Map();
 function onPrompt(id, fn) {
@@ -2331,7 +2335,7 @@ function paramsCard(el, st, opts) {
     if ($('.seed-in', el) !== document.activeElement) $('.seed-in', el).value = st.seed || '';
     $('.seed-hint', el).textContent = st.seedFixed
       ? 'Одинаковый seed + одинаковые настройки и промпт = одинаковое видео. Удобно менять что-то одно и сравнивать. Понравившийся seed можно взять из библиотеки или сразу после генерации.'
-      : 'Каждый раз получается новый вариант. Seed понравившегося видео сохраняется в библиотеке — потом его можно зафиксировать.';
+      : 'Каждый раз получается новый вариант. Seed понравившегося клипа сохраняется в нём — потом его можно зафиксировать.';
     opts.onChange();
   };
   st._upd = upd;  // lets the library and the preview panel switch this mode to a given seed
@@ -2497,12 +2501,15 @@ function previewPanel(el, st, opts) {
     <button class="go"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l2.4 6.6L21 11l-6.6 2.4L12 20l-2.4-6.6L3 11l6.6-2.4z"/></svg>Сгенерировать</button>
     <button class="stop" hidden><i></i>Остановить генерацию</button>
     <div class="cloud-line" hidden>☁ Генерация пойдёт в облако <b>RunningHub</b> (переключить — в разделе «Модели»)</div>
-    <div class="status"></div>`;
+    <div class="status"></div>
+    <div class="cw-hh vh-hh" hidden>Прошлые клипы — нажмите, чтобы открыть</div>
+    <div class="cw-hist vh-hist"></div>`;
   const frame = $('.frame', el), go = $('.go', el), stopB = $('.stop', el), status = $('.status', el);
   const live = $('.live', el), hud = $('.live-hud', el), bar = $('.bar', el);
   const liveImg = $('.live-img', el), result = $('.result', el), wait = $('.wait', el), liveVid = $('.live-vid', el);
+  const vhHh = $('.vh-hh', el), vhHist = $('.vh-hist', el);
   const STEP_MS = 420;
-  let run = null;
+  let run = null, shown = null;   // shown: the clip in the player — a draft of this section or a Library one
   const pbox = $('.pbox', el), pboxBar = $('.pbox-bar i', el), pboxChip = $('.pbox-chip', el);
 
   /* the big bar + a colour chip: green = alive, yellow = quiet for a while, red = probably stuck / connection lost */
@@ -2538,6 +2545,59 @@ function previewPanel(el, st, opts) {
     $('.res', frame).hidden = false; frame.classList.remove('done');
   }
 
+  /* ----- a finished clip: a draft («Добавить в библиотеку») or a Library video with its own buttons ----- */
+  // the buttons fit the clip: a draft waits for the Library button, its result can still be saved, enlarged or redone
+  function resultActions(it, took, fresh) {
+    const draft = !!it.preview && !byId(it.id);
+    const head = draft
+      ? (took ? `Готово за ${took} — черновик, в Библиотеку не добавлен.` : 'Черновик, в Библиотеку не добавлен.')
+      : (took ? `Готово за ${took} — видео в Библиотеке.` : 'Видео в Библиотеке.');
+    status.innerHTML = `${head} Seed: <b style="font-family:var(--mono)">${esc(String(it.seed ?? '—'))}</b> `;
+    if (draft) status.insertAdjacentHTML('beforeend', '<button class="btn pri" id="vKeepBtn" type="button" style="padding:4px 12px;font-size:12px">Добавить в библиотеку</button> ');
+    if (it.seed != null) status.insertAdjacentHTML('beforeend', '<button class="btn" id="keepSeed" type="button" style="padding:4px 10px;font-size:12px">Зафиксировать</button> ');
+    status.insertAdjacentHTML('beforeend', ' <button class="btn pri" id="upBtn" type="button" style="padding:4px 12px;font-size:12px" title="Увеличить разрешение и добавить чёткости (SeedVR2)">Увеличить видео</button>');
+    $('#upBtn', el).onclick = () => openUpscale(byId(it.id) || normItem(it));
+    $('#keepSeed', el)?.addEventListener('click', () => useSeed(st, it.seed));
+    $('#vKeepBtn', el)?.addEventListener('click', async () => {
+      const b = $('#vKeepBtn', el); b.disabled = true;
+      const kept = await keepDraftItem(it);
+      if (!kept) { b.disabled = false; return; }
+      shown = kept; result.dataset.dragid = kept.id; resultActions(kept, took, fresh); refreshHist();
+    });
+    // beginner flow: try another variant, or redo this very one (same seed) in a better size
+    if (!fresh) return;
+    status.insertAdjacentHTML('beforeend', ' <button class="btn" id="otherBtn" type="button" style="padding:4px 12px;font-size:12px" title="Новый вариант с другим seed, настройки те же">Другой вариант</button>');
+    $('#otherBtn', el).addEventListener('click', () => { st.seedFixed = false; st._upd?.(); go.onclick(); });
+    const curQ = QUALITY_ALL.find(x => x.id === st.q), goodQ = QUALITY_ALL.find(x => x.id === '720p');
+    if (it.seed != null && curQ && !(st.cw && st.ch) && curQ.px < goodQ.px) {
+      status.insertAdjacentHTML('beforeend', ' <button class="btn" id="goodBtn" type="button" style="padding:4px 12px;font-size:12px" title="Тот же вариант (seed сохранится), размер 1280×736. Результат будет похож, но не пиксель в пиксель">В хорошем качестве</button>');
+      $('#goodBtn', el).addEventListener('click', () => { st.seedFixed = true; st.seed = String(it.seed); st.q = '720p'; st._upd?.(); go.onclick(); });
+    }
+  }
+  // the clips of this section that are not in the Library yet: they would otherwise be lost when the next one is made
+  function refreshHist() {
+    if (opts.history === false) { vhHh.hidden = true; vhHist.innerHTML = ''; return; }
+    const mode = opts.meta && opts.meta().mode;
+    const mine = [...DRAFTS.filter(x => x.kind !== 'image' && x.mode === mode && !x.missing && x.url),
+                  ...LIB.filter(x => x.kind !== 'image' && x.mode === mode && !x.missing && x.url)]
+      .filter((x, i, a) => a.findIndex(y => y.id === x.id) === i)
+      .sort((a, b) => b.date - a.date).slice(0, 12);
+    vhHh.hidden = !mine.length;
+    vhHist.innerHTML = mine.map(x => `<button draggable="true" class="cw-th${x.preview ? ' draft' : ''}${shown && shown.id === x.id ? ' on' : ''}" data-id="${x.id}" type="button" title="${esc((x.preview ? 'Черновик, не в Библиотеке · ' : '') + (x.prompt || x.sub || 'клип') + ' · ' + fmtDate(x.date))}"><video src="${x.url}#t=0.5" preload="metadata" muted playsinline></video></button>`).join('');
+  }
+  DRAFT_HOOKS.push(refreshHist);
+  vhHist.onclick = e => {
+    const b = e.target.closest('.cw-th'); const it = b && (byId(b.dataset.id) || draftById(b.dataset.id));
+    if (!it || run) return;
+    shown = it;
+    [liveImg, liveVid, wait].forEach(x => x.hidden = true);
+    $('.res', frame).hidden = true;
+    result.src = it.url; result.dataset.dragid = it.id; result.draggable = true; result.hidden = false;
+    playWithSound(result);
+    frame.classList.add('done'); $('.hud-t', el).textContent = 'Готово'; $('.hud-s', el).textContent = '';
+    resultActions(it, '', false); refreshHist();
+  };
+
   /* ----- real generation through the local server ----- */
   const STAGE = {
     queued: ['В очереди ComfyUI…', 0.02, 'в очереди'],
@@ -2558,7 +2618,9 @@ function previewPanel(el, st, opts) {
     go.disabled = true; if (!run) status.textContent = 'Отправляем задание в ComfyUI…';
     let res;
     try {
-      const r = await fetch(opts.real.url, { method: 'POST', body: opts.real.form() });
+      const fd = opts.real.form();
+      if (!fd.has('preview')) fd.append('preview', '1');   // the Library waits for «Добавить в библиотеку»
+      const r = await fetch(opts.real.url, { method: 'POST', body: fd });
       const txt = await r.text();
       try { res = JSON.parse(txt); } catch { res = { error: txt }; }
       if (!r.ok) throw new Error(res.error || r.statusText);
@@ -2652,22 +2714,14 @@ function previewPanel(el, st, opts) {
     const took = fmtTime((performance.now() - run.t0) / 1000);
     run = null;
     if (kind === 'done') {
+      if (!data) { resetFrame(); status.textContent = 'Готово, но программа не получила файл: проверьте «Очередь»'; return; }
+      shown = normItem(data);
       [liveImg, liveVid, wait].forEach(x => x.hidden = true);
-      result.src = data.url; result.dataset.dragid = data.id; result.draggable = true; result.hidden = false; playWithSound(result);
+      $('.res', frame).hidden = true;
+      result.src = shown.url; result.dataset.dragid = shown.id; result.draggable = true; result.hidden = false; playWithSound(result);
       frame.classList.add('done'); $('.hud-t', el).textContent = 'Готово'; $('.hud-s', el).textContent = took;
-      status.innerHTML = `Готово за ${took} — видео в библиотеке. Seed: <b style="font-family:var(--mono)">${esc(String(data.seed ?? '—'))}</b> `
-        + (data.seed != null ? '<button class="btn" id="keepSeed" type="button" style="padding:4px 10px;font-size:12px">Зафиксировать</button>' : '');
-      $('#keepSeed', el)?.addEventListener('click', () => useSeed(st, data.seed));
-      status.insertAdjacentHTML('beforeend', ' <button class="btn pri" id="upBtn" type="button" style="padding:4px 12px;font-size:12px" title="Увеличить разрешение и добавить чёткости (SeedVR2)">Увеличить видео</button>');
-      $('#upBtn', el)?.addEventListener('click', () => openUpscale(byId(data.id) || normItem(data)));
-      // beginner flow: try another variant, or redo this very one (same seed) in a better size
-      status.insertAdjacentHTML('beforeend', ' <button class="btn" id="otherBtn" type="button" style="padding:4px 12px;font-size:12px" title="Новый вариант с другим seed, настройки те же">Другой вариант</button>');
-      $('#otherBtn', el).addEventListener('click', () => { st.seedFixed = false; st._upd?.(); go.onclick(); });
-      const curQ = QUALITY_ALL.find(x => x.id === st.q), goodQ = QUALITY_ALL.find(x => x.id === '720p');
-      if (data.seed != null && curQ && !(st.cw && st.ch) && curQ.px < goodQ.px) {
-        status.insertAdjacentHTML('beforeend', ' <button class="btn" id="goodBtn" type="button" style="padding:4px 12px;font-size:12px" title="Тот же вариант (seed сохранится), размер 1280×736. Результат будет похож, но не пиксель в пиксель">В хорошем качестве</button>');
-        $('#goodBtn', el).addEventListener('click', () => { st.seedFixed = true; st.seed = String(data.seed); st.q = '720p'; st._upd?.(); go.onclick(); });
-      }
+      resultActions(shown, took, true);
+      refreshHist();
     } else {
       resetFrame();
       status.textContent = kind === 'error' ? 'Ошибка ComfyUI: ' + data : 'Генерация остановлена. Поправьте промпт или настройки и запустите снова';
@@ -2723,6 +2777,7 @@ function previewPanel(el, st, opts) {
     run = null;
   }
 
+  queueMicrotask(refreshHist);   // LIB is declared later in the script: the history is filled once everything is ready
   return () => {
     if (!run && $('.res', frame).hidden) resetFrame();
     const effQ = st.effQ ? st.effQ() : st.q, [w, h] = resFor(st.aspect, effQ);
@@ -3790,9 +3845,6 @@ $('.nav[data-view="models"]').addEventListener('click', async () => {
 /* ---------- LIBRARY ---------- */
 const MODE_NAME = { montage: 'Монтаж', custom: 'Свой workflow', video: 'Видео', lipsync: 'Lipsync', refs: 'Референсы', actor: 'Актёрская игра', swap: 'Замена персонажа', action: 'Экшн', long: 'Видеостудия', krea: 'Изображение по тексту', qwen: 'Правка изображения', upscale: 'Увеличение', relayvsr: 'Увеличение' };
 const LIB = [];
-// pictures that are finished but not in the Library yet: «Изображение», «Правка» and «Инпейнт» keep them here
-// (with the server, in memory) until the user presses «Добавить в библиотеку»
-const DRAFTS = [];
 const IMG_PANELS = [];  // refresh functions of the picture result windows
 let libFilter = 'all', selecting = false, selected = new Set(), openId = null;
 const ICON = {
@@ -3850,7 +3902,7 @@ function qAdd(id, mode, prompt) {
 }
 function qHandle(m) {
   if (m.type === 'done') (m.items || [m.item]).filter(Boolean).forEach(it => {   // also work started by an agent
-    if (it.preview) addDraft(normItem(it));   // «Изображение», «Правка», «Инпейнт»: ждёт «Добавить в библиотеку»
+    if (it.preview) addDraft(normItem(it));   // a picture or a clip that waits for «Добавить в библиотеку»
     else if (!LIB.some(x => x.id === it.id)) addToLib(normItem(it), new Date(it.date));
   });
   const j = QUEUE.find(x => x.id === m.prompt_id); if (!j) return;
@@ -3870,7 +3922,7 @@ function qHandle(m) {
       if (it.long && typeof RM !== 'undefined' && RM.long && RM.long.root._partDone) RM.long.root._partDone(normItem(it));
     });
     if (j.mode === 'upscale' && j.itemId && $('#view-queue').classList.contains('active') && $('#viewer').hidden) setTimeout(() => openViewer(j.itemId), 400);  // show before/after at once
-    if (j.detached) toast(j.preview ? `Готово: ${MODE_NAME[j.mode] || 'картинка'} — картинка ждёт в разделе, в Библиотеку сама не попадёт`
+    if (j.detached) toast(j.preview ? `Готово: ${MODE_NAME[j.mode] || 'результат'} — он в разделе, в Библиотеку сам не попадёт`
       : `${j.agent ? 'Агент: готово' : 'Готово'}: ${MODE_NAME[j.mode] || 'видео'} — оно в Библиотеке`);
   } else if (m.type === 'error') { j.state = 'error'; j.msg = m.message; if (j.detached) toast('Задание не получилось: ' + m.message); }
   else if (m.type === 'interrupted') j.state = 'stopped';
@@ -3925,7 +3977,7 @@ function qRender() {
   $('#qClear').hidden = !fin.length;
   const row = (j, n) => {
     const run = j.state === 'running', samp = run && String(j.stage).startsWith('sample') && j.max;
-    let st = run ? (QSTAGE[j.stage] || 'идёт') : j.state === 'queued' ? 'ждёт своей очереди' : j.state === 'done' ? `готово за ${fmtTime(j.took)} · ${j.preview ? 'картинка в разделе, в Библиотеку сама не попадёт' : 'результат в Библиотеке'}`
+    let st = run ? (QSTAGE[j.stage] || 'идёт') : j.state === 'queued' ? 'ждёт своей очереди' : j.state === 'done' ? `готово за ${fmtTime(j.took)} · ${j.preview ? 'результат в разделе, в Библиотеку не добавлен' : 'результат в Библиотеке'}`
       : j.state === 'stopped' ? 'остановлено' : 'ошибка: ' + (j.msg || '');
     if (samp) st += ` · шаг ${j.step || 0} из ${j.max}`;
     if (run && j.t0) st += ` · прошло ${fmtTime((performance.now() - j.t0) / 1000)}`;
@@ -4297,17 +4349,32 @@ function addToLib(item, date = new Date()) {
   LIB.push({ id: Math.random().toString(36).slice(2), date, fav: false, ...item });
   LIB.sort((a, b) => b.date - a.date);
   renderLib();
+  DRAFT_HOOKS.forEach(f => f());
   window.trayFill?.();
 }
-/* a finished picture of the picture sections: shown right away, but the Library gets it only on a button press */
+/* a finished picture or clip: shown right away, but the Library gets it only on «Добавить в библиотеку» */
 function addDraft(item) {
   const i = DRAFTS.findIndex(x => x.id === item.id);
   if (i >= 0) DRAFTS.splice(i, 1);
   DRAFTS.unshift(item);
   if (DRAFTS.length > 24) DRAFTS.length = 24;   // the server keeps a few more; these are just the shown thumbnails
   IMG_PANELS.forEach(f => f());
+  DRAFT_HOOKS.forEach(f => f());
 }
 const draftById = id => DRAFTS.find(x => x.id === id);
+/* the one button behind every draft: the server moves it from `pending` into the Library only now */
+async function keepDraftItem(it) {
+  if (!it) return null;
+  let r;
+  try { r = await postJSON('/api/preview/keep', { id: it.id }); }
+  catch (e) { toast('Не удалось добавить в Библиотеку: ' + e.message); return null; }
+  const kept = normItem(r.item);
+  const i = DRAFTS.findIndex(x => x.id === kept.id); if (i >= 0) DRAFTS.splice(i, 1);
+  addToLib(kept, kept.date);
+  const j = QUEUE.find(x => x.id === kept.prompt_id); if (j) { j.preview = false; qRender(); }   // the queue row stops saying «черновик»
+  toast(kept.kind === 'image' ? 'Картинка добавлена в Библиотеку' : 'Клип добавлен в Библиотеку');
+  return kept;
+}
 function renderLib() {
   $('#libBadge').textContent = LIB.length;
   const items = LIB.filter(it => libFilter === 'all' || (libFilter === 'fav' ? it.fav : libFilter === 'images' ? it.kind === 'image' : libFilter === 'videos' ? it.kind !== 'image' : it.mode === libFilter));
@@ -4734,7 +4801,7 @@ function makeRefMode(cfg) {
     const card = $('.rm-prompt', root).closest('.card');
     card.innerHTML = `<div class="card-h"><h3><span class="n">4</span>Сцены</h3><span class="counter lm-total"></span></div>
       <div class="tl-player"><video class="tl-vid" controls playsinline loop hidden></video><div class="hint tl-empty">Здесь покажется готовая сцена. Выберите фрагмент на ленте ниже и нажмите «Сделать эту сцену».</div></div>
-      <div style="display:flex;gap:8px;margin-bottom:6px;flex-wrap:wrap"><button class="btn pri tl-all" type="button" title="Готовые сцены подряд, как один ролик: первая, вторая, третья...">▶ Смотреть готовые сцены подряд</button><button class="btn pri tl-join" type="button" title="Все готовые сцены по порядку отправляются в «Монтаж»: там остаётся нажать «Склеить», и весь ролик одним файлом появится в Библиотеке, откуда его можно сохранить">⇩ Собрать весь ролик и сохранить</button><span class="hint tl-note" style="align-self:center"></span></div>
+      <div style="display:flex;gap:8px;margin-bottom:6px;flex-wrap:wrap"><button class="btn pri tl-all" type="button" title="Готовые сцены подряд, как один ролик: первая, вторая, третья...">▶ Смотреть готовые сцены подряд</button><button class="btn pri tl-join" type="button" title="Все готовые сцены по порядку отправляются в «Монтаж»: там остаётся нажать «Склеить», и весь ролик одним файлом появится справа — его можно сохранить или добавить в Библиотеку">⇩ Собрать весь ролик и сохранить</button><span class="hint tl-note" style="align-self:center"></span></div>
       <div class="tl" title="Фрагменты ролика по порядку. Нажмите на фрагмент, чтобы настроить его. Потяните его правый край, чтобы изменить длину"></div>
       <div class="hint" style="margin:-6px 0 10px;font-size:12px">Нажмите на фрагмент, чтобы открыть его. Потяните правый край фрагмента, чтобы сделать его короче или длиннее.</div>
       <div class="lm-scenes"></div>
@@ -4744,7 +4811,7 @@ function makeRefMode(cfg) {
       <div class="hint" style="margin-bottom:10px;font-size:12px">Если со сценами что-то не так (зависает, плохой звук или картинка), попробуйте «Без Pika». Выбор действует на «Хорошее качество»; в «Черновике» ускорение другое.</div>
       <div class="seg lm-mode" style="grid-template-columns:1fr 1fr;margin-bottom:6px"><button type="button" data-m="parts">По частям<small>сцена за сценой</small></button><button type="button" data-m="all">Весь ролик<small>одним файлом</small></button></div>
       <div class="hint lm-mode-hint" style="margin-bottom:10px"></div>
-      <button class="btn pri lm-chain" type="button" style="margin-bottom:12px;width:100%;padding:12px" title="Сцены считаются одна за другой сами: следующая запускается, когда предыдущая готова. Можно оставить компьютер на ночь: каждая сцена сохраняется в Библиотеку отдельным клипом.">▶ Сделать все сцены подряд (само, одну за другой)</button>
+      <button class="btn pri lm-chain" type="button" style="margin-bottom:12px;width:100%;padding:12px" title="Сцены считаются одна за другой сами: следующая запускается, когда предыдущая готова. Можно оставить компьютер на ночь: каждая сцена готова отдельным клипом-черновиком.">▶ Сделать все сцены подряд (само, одну за другой)</button>
       <button class="btn pri lm-final" type="button" hidden style="margin-bottom:12px;width:100%;padding:12px" title="Все сцены считаются заново с теми же текстами и тем же seed, но на 8 шагах: детали станут лучше. Один в один они не будут.">✨ Всё готово? Сделать всё в хорошем качестве</button>
       <div class="note lm-src" hidden style="margin-bottom:10px"><span><b>Продолжаем готовое видео:</b> <span class="lm-srcname"></span>. Первая сцена продолжит его конец, как будто это была прошлая сцена.</span> <button class="btn lm-srcx" type="button" style="padding:2px 9px;margin-left:8px">Убрать</button></div>
       <button class="btn" type="button" id="lmAdd" style="margin-top:10px">+ Добавить сцену</button>
@@ -4773,6 +4840,13 @@ function makeRefMode(cfg) {
       } catch { toast('Не удалось передать изображения агенту'); }
     };
     const box = $('.lm-scenes', root);
+    box.addEventListener('click', async e => {   // «Добавить в библиотеку» in the scene line
+      const b = e.target.closest('.sc-addlib'); if (!b) return;
+      e.preventDefault(); e.stopPropagation();
+      b.disabled = true;
+      const kept = await keepDraftItem(draftById(b.dataset.id));
+      if (kept) refreshStates(); else b.disabled = false;
+    });
     const snap = v => { v = Math.max(5, Math.round(v * 24)); return v + (5 - v % 17 + 17) % 17; };
     const accs = () => {  // frames of the finished video after each scene (same arithmetic as the server)
       const out = []; let acc = 0;
@@ -4804,11 +4878,18 @@ function makeRefMode(cfg) {
     }
     function refreshStates() {
       const parts = root._mode === 'parts', ready = readyUpTo();
+      // «Добавить в библиотеку» right in the scene line: a finished scene is a draft until this press
+      // (the button is inside .sc-state, which is redrawn on every refresh)
       $$('.sc', root).forEach((c, i) => {
         $('.sc-act', c).hidden = !parts;
         const done = sigOk(c);
         const stale = c._done && !done;
-        $('.sc-state', c).textContent = done ? '✓ готова, клип в Библиотеке' + (c._done.text != null && c._done.text.trim() !== $('textarea', c).value.trim() ? ' · текст изменён после генерации, клип прежний' : '') : stale ? 'длина изменена: переделайте (следующие тоже)' : i > 0 && !root._canGo(i) ? `сцена ${i} ещё не готова: эта будет сделана как новый план` : '';
+        const inLib = !!(c._done && byId(c._done.id));   // the clip was added to the Library (a draft stays out of it)
+        const note = c._done && c._done.text != null && c._done.text.trim() !== $('textarea', c).value.trim() ? ' · текст изменён после генерации, клип прежний' : '';
+        $('.sc-state', c).innerHTML = done
+          ? `✓ готова, ${inLib ? 'клип в Библиотеке' : 'черновик — в Библиотеку не добавлен'}${note}`
+            + (inLib ? '' : ` <button class="btn sc-addlib" type="button" data-id="${esc(c._done.id)}" style="padding:2px 9px;font-size:11.5px">Добавить в библиотеку</button>`)
+          : stale ? 'длина изменена: переделайте (следующие тоже)' : i > 0 && !root._canGo(i) ? `сцена ${i} ещё не готова: эта будет сделана как новый план` : '';
         $('.sc-state', c).style.color = done ? 'var(--ok, #7bd88f)' : stale ? 'var(--pink)' : '';
         const b = $('.sc-do', c); b.disabled = false; b.style.opacity = ''; $('.sc-undo', c).hidden = !(root._undo && root._undo.length); b.textContent = done ? 'Переделать' : 'Сделать эту сцену';
         const rg = $('.sc-redogo', c); if (rg) rg.hidden = !(done && parts && i < $$('.sc', root).length - 1);
@@ -4821,6 +4902,7 @@ function makeRefMode(cfg) {
       if (root._save && !root._restoring) root._save();
     }
     root._ready = readyUpTo; root._sig = sig;
+    DRAFT_HOOKS.push(() => { if ($$('.sc', root).length) refreshStates(); });   // a scene added to the Library from the result panel updates its line
     root._canGo = i => i === 0 || freshAt()[i] || sigOk($$('.sc', root)[i - 1]);   // a scene may start when it needs no previous one, or the previous one is ready
     S.onSizeChange = kind => {   // another size (or format): the ready scenes were made in the old one, they stay on the ribbon as an old version
       const modes = kind === 'aspect' ? ['draft', 'final'] : [root._q]; let any = false;
@@ -4832,7 +4914,7 @@ function makeRefMode(cfg) {
     const chainNext = () => {
       const all = $$('.sc', root), k = readyUpTo();
       if (root._chainEnd != null && k > root._chainEnd) { root._chainPart = null; root._chainEnd = null; return; }
-      if (k >= all.length) { root._chainPart = null; toast('Все сцены готовы. Клипы лежат в Библиотеке: склейте их в «Монтаже».'); return; }
+      if (k >= all.length) { root._chainPart = null; toast('Все сцены готовы: клипы — черновики. Их можно собрать в «Монтаже» или добавить в Библиотеку кнопкой под сценой.'); return; }
       if (!all[k].querySelector('textarea').value.trim()) { root._chainPart = null; toast(`Сцена ${k + 1} пустая: опишите её, и нажмите «Сделать все сцены подряд» снова.`); return; }
       root._chainPart = k; root._target = k; $('.go', $('.rm-preview', root)).click();
     };
@@ -4885,18 +4967,18 @@ function makeRefMode(cfg) {
       if (root._doneIds && root._doneIds.has(item.id)) return;   // the same result can arrive twice (panel and queue)
       (root._doneIds = root._doneIds || new Set()).add(item.id);
       if (lg.all) {   // the whole video at once: every scene is done, the last one can be continued
-        $$('.sc', root).forEach(c => { c._dn.final = { sig: root._sig(c), url: item.url, id: item.id, text: $('textarea', c).value }; });
-        refreshStates(); toast('Ролик готов. Чтобы продлить его, добавьте сцену и нажмите «Сделать эту сцену» (режим «По частям»).'); return;
+        $$('.sc', root).forEach(c => { c._dn.final = { sig: root._sig(c), url: item.url, id: item.id, text: $('textarea', c).value, preview: !!item.preview }; });
+        refreshStates(); toast('Ролик готов' + (item.preview ? ' — черновик, в Библиотеку не добавлен' : '') + '. Чтобы продлить его, добавьте сцену и нажмите «Сделать эту сцену» (режим «По частям»).'); return;
       }
       const c = $$('.sc', root)[lg.part]; if (!c) return;
       if (lg.test) { c._tests.push({ res: item.res, url: item.url, id: item.id }); c._paintTests(); toast(`Проба сцены ${lg.part + 1} в размере ${item.res} готова: кнопка под сценой`); return; }
-      c._dn[lg.draft ? 'draft' : 'final'] = { sig: (root._sent && root._sent[lg.part]) || root._sig(c), url: item.url, id: item.id, text: root._sentText && root._sentText[lg.part] != null ? root._sentText[lg.part] : $('textarea', c).value };
+      c._dn[lg.draft ? 'draft' : 'final'] = { sig: (root._sent && root._sent[lg.part]) || root._sig(c), url: item.url, id: item.id, text: root._sentText && root._sentText[lg.part] != null ? root._sentText[lg.part] : $('textarea', c).value, preview: !!item.preview };
       { const fr = freshAt(), all = $$('.sc', root), mk = lg.draft ? 'draft' : 'final'; for (let j = lg.part + 1; j < all.length && !fr[j]; j++) { const x = all[j]; if (x._dn[mk]) x._old = { ...(x._old || {}), [mk]: x._dn[mk] }; x._dn[mk] = null; } c._old = { ...(c._old || {}), [mk]: null }; }   // the scenes that continued the old one, up to the next new shot
       refreshStates();
       if (root._chainPart === lg.part) { toast(`Сцена ${lg.part + 1} готова. Запускаю следующую…`); setTimeout(root._chainNext, 800); return; }
       toast(`Сцена ${lg.part + 1} готова` + (lg.part + 1 < lg.n ? '. Можно делать следующую.' : '. Все сцены готовы: склейте клипы в «Монтаже».'));
     };
-    const MODE_HINT = { parts: 'Каждая сцена считается отдельно и сохраняется в Библиотеку своим клипом. Можно посмотреть первую, потом сделать следующую, а неудачную переделать, не трогая остальные. Клипы встают встык без повторов: склейте их в любом видеоредакторе.', all: 'Все сцены считаются подряд и склеиваются в один файл. Удобно, когда уверены в тексте, но если что-то не получится, ждать придётся заново целиком.' };
+    const MODE_HINT = { parts: 'Каждая сцена считается отдельно: готовая сцена — черновик, в Библиотеку её добавляют кнопкой под сценой. Можно посмотреть первую, потом сделать следующую, а неудачную переделать, не трогая остальные. Клипы встают встык без повторов: склейте их в любом видеоредакторе.', all: 'Все сцены считаются подряд и склеиваются в один файл. Удобно, когда уверены в тексте, но если что-то не получится, ждать придётся заново целиком.' };
     const setMode = v => { root._mode = v; $$('.lm-mode button', root).forEach(b => b.classList.toggle('on', b.dataset.m === v)); $('.lm-mode-hint', root).textContent = MODE_HINT[v]; refreshStates(); };
     $('.lm-mode', root).onclick = e => { const b = e.target.closest('button'); if (b) setMode(b.dataset.m); };
     queueMicrotask(() => setMode('parts'));
@@ -4993,7 +5075,7 @@ function makeRefMode(cfg) {
       Object.defineProperty(c, '_done', { get: () => c._dn[root._q || 'final'], set: v => { c._dn[root._q || 'final'] = v; }, configurable: true });
       c.style.cssText = 'margin:0 0 10px;padding:12px;border:1px solid var(--line);border-radius:12px';
       c.innerHTML = `<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px"><b></b><input type="range" min="3" max="15" step="1" value="${sec}" style="display:none"><output class="hint" style="min-width:34px"></output><button class="btn sc-m" type="button" title="Короче на секунду" style="padding:2px 9px">−</button><button class="btn sc-p" type="button" title="Длиннее на секунду" style="padding:2px 9px">+</button><span class="hint sc-win" style="flex:1"></span><button class="x btn" type="button" title="Убрать сцену" style="padding:2px 9px">✕</button></div><textarea placeholder="Что происходит в этой сцене…" style="min-height:90px"></textarea>
-<details class="sc-tdet" style="margin-top:8px"><summary class="hint" style="cursor:pointer;font-size:12px">Проба размера для этой сцены</summary><div class="sc-tst" style="margin-top:6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="hint" style="font-size:12px">Попробовать только эту сцену в другом размере (остальные не меняются):</span><select class="sc-tq">${QUALITY.map(q => `<option value="${q.id}">${q.res}</option>`).join('')}</select><button class="btn sc-tbtn" type="button" title="Сцена считается отдельно, в выбранном размере, на 8 шагов. Результат появится ниже и в Библиотеке, остальные сцены не затрагиваются.">Сделать пробу</button></div><div class="sc-tests" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"></div></details>
+<details class="sc-tdet" style="margin-top:8px"><summary class="hint" style="cursor:pointer;font-size:12px">Проба размера для этой сцены</summary><div class="sc-tst" style="margin-top:6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="hint" style="font-size:12px">Попробовать только эту сцену в другом размере (остальные не меняются):</span><select class="sc-tq">${QUALITY.map(q => `<option value="${q.id}">${q.res}</option>`).join('')}</select><button class="btn sc-tbtn" type="button" title="Сцена считается отдельно, в выбранном размере, на 8 шагов. Результат появится ниже (черновик), остальные сцены не затрагиваются.">Сделать пробу</button></div><div class="sc-tests" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"></div></details>
         <div class="sc-refs" style="margin-top:8px"><div class="hint sc-rhint" style="font-size:12px"></div><div class="sc-thumbs" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:6px"><label class="btn sc-img" style="padding:4px 10px;font-size:12.5px;cursor:pointer" title="Необязательно. Изображения героя, места или реквизита только для этой сцены. Если загрузить, общие референсы сверху для неё не используются. В тексте сцены они называются &lt;Picture 1&gt;, &lt;Picture 2&gt; по порядку.">+ Свои референсы этой сцены<input type="file" accept="image/*" multiple hidden></label></div></div>`;
       const fin = $('.sc-img input', c);
       c._tests = [];
@@ -5295,6 +5377,7 @@ function makeRefMode(cfg) {
   changed();
 
   const prev = previewPanel($('.rm-preview', root), S, {
+    history: !cfg.scenes,   // Video Studio keeps its own clip cards for every scene; the other sections show «Прошлые клипы»
     singleScene: () => cfg.scenes && root._mode === 'parts' && root._chainPart == null,
     goLabel: () => !cfg.scenes ? 'Сгенерировать' : root._mode === 'parts'
       ? `${root._q === 'draft' ? 'Черновик' : 'Хорошее качество'}: сделать сцену ${root._next() + 1}`
@@ -6776,7 +6859,7 @@ function cwRenderInner() {
     <div class="cw-frame" id="cwFrame"><button class="cw-zb" id="cwZoomBtn" type="button" title="Увеличить" hidden><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4M11 8v6M8 11h6"/></svg></button><div class="cw-wait" id="cwWait">Здесь появится результат</div>
       <img id="cwLive" alt="" hidden><video id="cwVideo" controls loop playsinline hidden></video><img id="cwImage" alt="" hidden>
       <div class="cw-bar"><i id="cwBar"></i></div></div>
-    <div class="cw-acts" id="cwActs" hidden><button class="btn" data-a="save" type="button">Сохранить</button><button class="btn" data-a="lib" type="button">В Библиотеке</button><button class="btn" data-a="restore" type="button" title="Вернуть в форму настройки этой генерации">Вернуть настройки</button></div>
+    <div class="cw-acts" id="cwActs" hidden><button class="btn pri" data-a="addlib" type="button" hidden>Добавить в библиотеку</button><button class="btn" data-a="save" type="button">Сохранить</button><button class="btn" data-a="lib" type="button">В Библиотеке</button><button class="btn" data-a="restore" type="button" title="Вернуть в форму настройки этой генерации">Вернуть настройки</button></div>
     <div class="cw-time" id="cwTime"></div><div class="status" id="cwStatus"></div>
     <button class="go" id="cwGo"${r.missing_nodes.length ? ' disabled' : ''}>Сгенерировать</button>
     <button class="stop" id="cwStop" hidden><i></i>Остановить</button>
@@ -7244,16 +7327,10 @@ function imgPanel(el, o) {
   // «Добавить в библиотеку»: until this moment the picture is not in the Library and has no copy of its own
   const keepDraft = async it => {
     const b = $q('[data-a="addlib"]'); b.disabled = true;
-    let r;
-    try { r = await postJSON('/api/preview/keep', { id: it.id }); }
-    catch (err) { b.disabled = false; toast('Не удалось добавить в Библиотеку: ' + err.message); return; }
+    const kept = await keepDraftItem(it);
     b.disabled = false;
-    const kept = normItem(r.item);
-    const i = DRAFTS.findIndex(x => x.id === kept.id); if (i >= 0) DRAFTS.splice(i, 1);
-    addToLib(kept, kept.date);
-    if (last && last.id === kept.id) showItem(kept);
+    if (kept && last && last.id === kept.id) showItem(kept);
     refreshActs(); refresh();
-    toast('Картинка добавлена в Библиотеку');
   };
   // «Применить изменения»: the result becomes the picture this section edits, and the work goes on
   const applyDraft = async it => {
@@ -8306,7 +8383,8 @@ document.addEventListener('pointerdown', e => {
 });
 document.addEventListener('dblclick', e => { if (e.target.closest('#cwRs')) { $('#cwBody').style.removeProperty('--cw-rw'); try { localStorage.removeItem('h3-cw-rw'); } catch {} } });
 try { const rw = +localStorage.getItem('h3-cw-rw'); if (rw >= 300) $('#cwBody').style.setProperty('--cw-rw', rw + 'px'); } catch {}
-const cwMine = () => LIB.filter(x => x.mode === 'custom' && (x.wf ? x.wf === CW.id : x.sub === CW.rep.name)).sort((a, b) => b.date - a.date);
+const cwMine = () => [...DRAFTS, ...LIB].filter(x => x.mode === 'custom' && (x.wf ? x.wf === CW.id : x.sub === CW.rep.name))
+  .filter((x, i, a) => a.findIndex(y => y.id === x.id) === i).sort((a, b) => b.date - a.date);
 function cwFit(w, h) {  // the window takes the shape of the picture, never taller than 68% of the screen
   const f = $('#cwFrame'); if (!f || !w || !h) return;
   f.style.aspectRatio = `${w} / ${h}`; f.style.width = `min(100%, calc(var(--vh,1vh)*${(68 * w / h).toFixed(1)}))`; f.style.minHeight = '0'; f.style.margin = '0 auto';
@@ -8319,8 +8397,10 @@ function cwShow(it) {
   $('#cwWait').hidden = true; $('#cwLive').hidden = true; v.hidden = pic; im.hidden = !pic;
   if (pic) { v.removeAttribute('src'); im.onload = () => cwFit(im.naturalWidth, im.naturalHeight); im.src = it.url; }
   else { v.onloadedmetadata = () => cwFit(v.videoWidth, v.videoHeight); v.src = it.url; playWithSound(v); }
+  const draft = !!it.preview && !byId(it.id);
   $('#cwActs').hidden = false; $('#cwActs [data-a="restore"]').hidden = !it.cw_values;
-  if (!CW.run) { $('#cwBar').style.width = '0'; $('#cwTime').innerHTML = `<b>${pic ? 'Изображение' : 'Видео'}${it.label ? ' · ' + esc(it.label) : ''}</b> · ${fmtDate(it.date)}`; $('#cwStatus').textContent = [it.res, it.sub].filter(Boolean).join(' · '); }
+  $('#cwActs [data-a="addlib"]').hidden = !draft; $('#cwActs [data-a="lib"]').hidden = draft;
+  if (!CW.run) { $('#cwBar').style.width = '0'; $('#cwTime').innerHTML = `<b>${pic ? 'Изображение' : 'Видео'}${it.label ? ' · ' + esc(it.label) : ''}</b> · ${fmtDate(it.date)}`; $('#cwStatus').textContent = [it.res, it.sub, draft ? 'черновик — в Библиотеку не добавлен' : ''].filter(Boolean).join(' · '); }
   $('#cwZoomBtn').hidden = !pic;
   $$('#cwHist .cw-th').forEach(t => t.classList.toggle('on', t.dataset.id === it.id));
 }
@@ -8329,9 +8409,10 @@ function cwHist() {
   const box = $('#cwHist'); if (!box) return;
   const mine = cwMine().slice(0, 16);
   $('#cwHH').hidden = !mine.length;
-  box.innerHTML = mine.map(it => `<button draggable="true" class="cw-th${it.id === CW.shown ? ' on' : ''}" data-id="${it.id}" type="button" title="${esc((it.label ? it.label + ' · ' : '') + fmtDate(it.date))}">${it.missing ? '<i>—</i>'
-    : it.kind === 'image' ? `<img src="${it.url}" alt="" loading="lazy">` : `<video src="${it.url}#t=0.5" preload="metadata" muted></video>`}${it.label ? `<span class="cw-lb">${esc(it.label)}</span>` : ''}</button>`).join('');
+  box.innerHTML = mine.map(it => `<button draggable="true" class="cw-th${it.id === CW.shown ? ' on' : ''}${it.preview ? ' draft' : ''}" data-id="${it.id}" type="button" title="${esc((it.label ? it.label + ' · ' : '') + fmtDate(it.date))}">${it.missing ? '<i>—</i>'
+    : it.kind === 'image' ? `<img src="${it.url}" alt="" loading="lazy">` : `<video src="${it.url}#t=0.5" preload="metadata" muted"></video>`}${it.label ? `<span class="cw-lb">${esc(it.label)}</span>` : ''}</button>`).join('');
 }
+DRAFT_HOOKS.push(() => { if (CW.rep) cwHist(); });   // a new result of this workflow appears in its history at once
 function cwTick() {
   const r = CW.run, bar = $('#cwBar'); if (!r || !bar) return;
   const el = (performance.now() - r.t0) / 1000, sampling = r.stage.startsWith('sample') && r.max;
@@ -8353,9 +8434,11 @@ function cwFinish(kind, ev) {
   if (!$('#cwLive')) return;
   $('#cwLive').hidden = true; $('#cwStop').hidden = true; $('#cwGo').disabled = !!CW.rep.missing_nodes.length;
   if (kind === 'done') {
-    const it = LIB.find(x => x.id === ev.item.id) || normItem(ev.item);
+    const it = byId(ev.item.id) || draftById(ev.item.id) || normItem(ev.item);
     cwShow(it); cwHist(); $('#cwBar').style.width = '100%';
-    $('#cwTime').innerHTML = `<b style="color:var(--ok)">Готово</b> · за ${took}`; $('#cwStatus').textContent = `${it.kind === 'image' ? 'Изображение сохранена' : 'Видео сохранено'} в Библиотеку`;
+    $('#cwTime').innerHTML = `<b style="color:var(--ok)">Готово</b> · за ${took}`;
+    $('#cwStatus').textContent = it.preview ? 'Черновик — в Библиотеку не добавлен: нажмите «Добавить в библиотеку».'
+      : `${it.kind === 'image' ? 'Изображение сохранена' : 'Видео сохранено'} в Библиотеку`;
   } else {
     $('#cwBar').style.width = '0'; $('#cwWait').hidden = false; $('#cwWait').textContent = 'Здесь появится результат';
     $('#cwTime').innerHTML = kind === 'error' ? '<b style="color:var(--pink)">Ошибка</b>' : '<b>Остановлено</b>';
@@ -8365,11 +8448,15 @@ function cwFinish(kind, ev) {
 $('#cwBody').addEventListener('click', async e => {
   const lb = e.target.closest('[data-lib]'); if (lb) { e.preventDefault(); cwPick(lb.dataset.lib); return; }
   if (e.target.closest('#cwZoomBtn') || e.target.closest('#cwImage')) { zoomOpen($('#cwImage').src); return; }
-  const th = e.target.closest('.cw-th'); if (th) { const it = LIB.find(x => x.id === th.dataset.id); if (it) cwShow(it); return; }
+  const th = e.target.closest('.cw-th'); if (th) { const it = byId(th.dataset.id) || draftById(th.dataset.id); if (it) cwShow(it); return; }
   const act = e.target.closest('#cwActs [data-a]');
   if (act) {
-    const it = LIB.find(x => x.id === CW.shown); if (!it) return;
-    if (act.dataset.a === 'save') saveItems([it]);
+    const it = byId(CW.shown) || draftById(CW.shown); if (!it) return;
+    if (act.dataset.a === 'addlib') {
+      const kept = await keepDraftItem(it);
+      if (kept) { CW.shown = kept.id; cwShow(kept); cwHist(); }
+    }
+    else if (act.dataset.a === 'save') saveItems([it]);
     else if (act.dataset.a === 'lib') goTo('library');
     else if (act.dataset.a === 'restore' && it.cw_values) {
       Object.entries(it.cw_values).forEach(([k, v]) => { if (k in CW.vals) CW.vals[k] = v; });
@@ -8391,7 +8478,7 @@ $('#cwBody').addEventListener('click', async e => {
     const v = Math.floor(Math.random() * 2 ** 50); CW.vals[c.dataset.rnd] = v;
     const inp = $(`[data-k="${c.dataset.rnd}"]`, $('#cwBody')); if (inp) inp.value = v;
   });
-  const fd = new FormData(); fd.append('wf', CW.id); fd.append('values', JSON.stringify(CW.vals));
+  const fd = new FormData(); fd.append('wf', CW.id); fd.append('values', JSON.stringify(CW.vals)); fd.append('preview', '1');
   Object.entries(CW.files).forEach(([k, f]) => f && fd.append('f:' + k, f));
   $('#cwGo').disabled = true; status.textContent = 'Отправляем задание в ComfyUI…';
   try {
@@ -8572,11 +8659,11 @@ $('#setReset').onclick = () => {
   try { MT.px = +localStorage.getItem('h3-mt-px') || 26; } catch {}
   const wOf = d => Math.max(Math.round(MT.px * 2.85), Math.round(d * MT.px));   // block width: the clip length at the chosen scale (short clips keep room for buttons)
    // cuts[i]: seconds the clip is trimmed to (null: whole clip)
-  const get = id => id.startsWith('up:') ? MT.up[id.slice(3)] : byId(id);   // a clip of the Library or a file from the computer
+  const get = id => id.startsWith('up:') ? MT.up[id.slice(3)] : (byId(id) || draftById(id));   // a Library clip, a draft, or a file from the computer
   root.innerHTML = `
     <div class="head"><div><h1>Монтаж</h1><p>Склейте клипы из Библиотеки в один ролик: добавьте их по порядку, при необходимости поменяйте местами и нажмите «Склеить»</p></div></div>
     <div class="grid"><div class="col">
-      <div class="card"><div class="card-h"><h3><span class="n">1</span>Клипы из Библиотеки</h3><span class="hint">нажмите на клип, чтобы добавить</span><button type="button" class="btn mini mt-pc" title="Добавить видео со своего компьютера">+ С компьютера</button><input type="file" class="mt-file" accept="video/*" multiple hidden></div><div class="mt-lib"></div><div class="hint mt-hid" style="margin-top:8px"></div></div>
+      <div class="card"><div class="card-h"><h3><span class="n">1</span>Клипы из Библиотеки и черновики</h3><span class="hint">нажмите на клип, чтобы добавить</span><button type="button" class="btn mini mt-pc" title="Добавить видео со своего компьютера">+ С компьютера</button><input type="file" class="mt-file" accept="video/*" multiple hidden></div><div class="mt-lib"></div><div class="hint mt-hid" style="margin-top:8px"></div></div>
       <div class="card"><div class="card-h"><h3><span class="n">2</span>Порядок склейки</h3><span class="counter mt-total"></span><span class="mt-zoom"><button type="button" class="btn mini" data-z="-1" title="Мельче">−</button><button type="button" class="btn mini" data-z="0" title="Уместить всю ленту по ширине">По ширине</button><button type="button" class="btn mini" data-z="1" title="Крупнее">+</button></span></div>
         <div class="mt-strip"></div>
         <div class="mt-vh" title="Потяните вниз или вверх, чтобы клипы стали крупнее или мельче. Двойной щелчок: как было"><i></i></div>
@@ -8599,12 +8686,17 @@ $('#setReset').onclick = () => {
   const hideSet = a => { try { localStorage.setItem('h3-mt-hide', JSON.stringify(a)); } catch {} };
   const fullOf = i => get(MT.ids[i]).len || 5, durOf = i => MT.cuts[i] != null ? MT.cuts[i] : fullOf(i);
   const lenTxt = it => it.len ? it.len.toFixed(1).replace('.0', '') + ' с' : '';
+  DRAFT_HOOKS.push(() => { try { render(); } catch {} });   // a new draft appears in the clip list above at once
   function render() {
     const keep = MT.ids.map(id => !!get(id) && !get(id).missing); MT.cuts = MT.cuts.filter((_, i) => keep[i]); MT.ids = MT.ids.filter((_, i) => keep[i]);
-    const hid = hidden(), all = LIB.filter(it => it.kind !== 'image' && !it.missing && it.url), vids = all.filter(it => !hid.includes(it.id)), nh = all.length - vids.length;
+    const hid = hidden();
+    const seen = new Set(), all = [...DRAFTS.filter(it => it.kind !== 'image' && !it.missing && it.url),
+                                 ...LIB.filter(it => it.kind !== 'image' && !it.missing && it.url)]
+      .filter(it => !seen.has(it.id) && seen.add(it.id));
+    const vids = all.filter(it => !hid.includes(it.id)), nh = all.length - vids.length;
     $('.mt-hid', root).innerHTML = nh ? `Убрано из списка: ${nh} · <button type="button" class="a-change" data-showall>Вернуть все</button>` : '';
-    $('.mt-lib', root).innerHTML = vids.length ? vids.map(it => `<button type="button" class="mt-card" data-id="${it.id}" title="${esc(it.prompt || '')}"><video src="${it.url}#t=0.5" preload="metadata" muted playsinline></video><span class="mt-plus">+</span><span class="mt-x" data-hide="${it.id}" role="button" title="Убрать из этого списка (в Библиотеке клип останется)">✕</span><span class="mt-len">${lenTxt(it)}</span><small>${esc(it.prompt || MODE_NAME[it.mode] || '')}</small></button>`).join('')
-      : '<div class="hint">В Библиотеке пока нет видео. Сначала сгенерируйте клипы.</div>';
+    $('.mt-lib', root).innerHTML = vids.length ? vids.map(it => `<button type="button" class="mt-card" data-id="${it.id}" title="${esc(it.prompt || '')}"><video src="${it.url}#t=0.5" preload="metadata" muted playsinline></video><span class="mt-plus">+</span><span class="mt-x" data-hide="${it.id}" role="button" title="Убрать из этого списка (в Библиотеке клип останется)">✕</span><span class="mt-len">${lenTxt(it)}</span><small>${esc(it.prompt || MODE_NAME[it.mode] || '')}${it.preview ? ' · черновик' : ''}</small></button>`).join('')
+      : '<div class="hint">Видео пока нет: сгенерируйте клипы в любом видеоразделе — готовые появятся здесь.</div>';
     $('.mt-strip', root).innerHTML = MT.ids.length ? MT.ids.map((id, i) => { const it = get(id), d = durOf(i); return `<div class="mt-item" draggable="true" data-i="${i}" style="width:${wOf(d)}px"><video src="${it.url}#t=0.5" preload="metadata" muted playsinline></video><span class="mt-n">${i + 1}</span>${window.mtPipeDone && window.mtPipeDone(id) ? '<span class="mt-ok" title="Клип обработан">✓</span>' : ''}<span class="mt-len">${d.toFixed(1).replace('.0', '')} с${MT.cuts[i] != null ? ' ✂' : ''}</span><div class="mt-b"><button type="button" data-mv="-1" title="Влево">◀</button><button type="button" data-rm title="Убрать">✕</button><button type="button" data-mv="1" title="Вправо">▶</button></div><i class="mt-rh" title="Потяните, чтобы сделать клип короче или длиннее (длиннее оригинала нельзя)"></i></div>`; }).join('')
       : '<div class="hint">Пока пусто: нажмите на клипы сверху.</div>';
     const total = MT.ids.reduce((a, id, i) => a + durOf(i), 0);
@@ -8683,7 +8775,7 @@ $('#setReset').onclick = () => {
     return 8;
   }
   const setPx = v => { MT.px = Math.min(90, Math.max(8, Math.round(v))); try { localStorage.setItem('h3-mt-px', MT.px); } catch {} render(); };
-  window.montageLoad = ids => { MT.ids = ids.slice(); MT.cuts = ids.map(() => null); render(); const st = $('.mt-status', root); st.textContent = 'Сцены из Видеостудии уже стоят по порядку. Нажмите «Склеить»: готовый ролик появится справа и в Библиотеке.'; };
+  window.montageLoad = ids => { MT.ids = ids.slice(); MT.cuts = ids.map(() => null); render(); const st = $('.mt-status', root); st.textContent = 'Сцены из Видеостудии уже стоят по порядку. Нажмите «Склеить»: готовый ролик появится справа — его можно сохранить или добавить в Библиотеку.'; };
   $('.mt-pc', root).onclick = () => $('.mt-file', root).click();
   $('.mt-file', root).onchange = async e => {
     const files = [...e.target.files]; e.target.value = '';
@@ -8744,7 +8836,7 @@ $('#setReset').onclick = () => {
     const have = id => PIPE.steps[id] || {};
     if (PIPE.doUp && n) { const c = MT.ids.filter(id => have(id).up).length; h += line(`Увеличение: ${c} из ${n} клипов${c === n ? ' — завершено' : ''}`, c === n); }
     if (PIPE.grain > 0 && n) { const c = MT.ids.filter(id => have(id).gr).length; h += line(`Зерно: ${c} из ${n} клипов${c === n ? ' — завершено' : ''}`, c === n); }
-    const j = PIPE.joined && byId(PIPE.joined.id) ? PIPE.joined : null;
+    const j = PIPE.joined && (byId(PIPE.joined.id) || draftById(PIPE.joined.id)) ? PIPE.joined : null;
     if (MT.joining) h += line('Склейка: идёт…', false);
     else if (j && j.key === orderKey()) h += line('Склейка завершена, ролик можно сохранять', true);
     else if (j) h += line('Склейка устарела: порядок или обрезка изменились, склейте заново', false);
@@ -8752,16 +8844,33 @@ $('#setReset').onclick = () => {
     box.innerHTML = h; box.hidden = !h;
   }
   window.mtPipePaint = pipePaint;
-  function showDone(item) {
+  function showDone(item, play = true) {
     const st = $('.mt-status', root), v = $('.mt-res', root);
-    v.src = item.url; MT.res = true; showMode('res'); playWithSound(v);
-    st.innerHTML = 'Склейка завершена: ролик лежит в Библиотеке. <button class="btn pri" id="mtSave" type="button" style="padding:4px 12px;font-size:12px" title="Сохранить готовый ролик целиком на компьютер">Сохранить на компьютер</button> <button class="btn" id="mtUp" type="button" style="padding:4px 12px;font-size:12px" title="Увеличить разрешение (долго)">Увеличить</button>';
+    v.src = item.url; MT.res = true; showMode('res');
+    if (play) playWithSound(v);
+    else {   // a reel from the last run waits on its first frame: the sound must not start by itself after a restart
+      v.preload = 'metadata';
+      v.addEventListener('loadedmetadata', () => { try { v.currentTime = .04; } catch {} }, { once: true });
+    }
+    const draft = !!item.preview && !byId(item.id);
+    st.innerHTML = (draft ? 'Склейка завершена: черновик, в Библиотеку не добавлен. ' : 'Склейка завершена: ролик лежит в Библиотеке. ')
+      + (draft ? '<button class="btn pri" id="mtAddLib" type="button" style="padding:4px 12px;font-size:12px">Добавить в библиотеку</button> ' : '')
+      + '<button class="btn pri" id="mtSave" type="button" style="padding:4px 12px;font-size:12px" title="Сохранить готовый ролик целиком на компьютер">Сохранить на компьютер</button> '
+      + '<button class="btn" id="mtUp" type="button" style="padding:4px 12px;font-size:12px" title="Увеличить разрешение (долго)">Увеличить</button>';
     $('#mtSave', root).onclick = () => saveItems([byId(item.id) || normItem(item)]);
     $('#mtUp', root).onclick = () => openUpscale(byId(item.id) || normItem(item));
+    $('#mtAddLib', root)?.addEventListener('click', async () => {
+      const b = $('#mtAddLib', root); b.disabled = true;
+      const kept = await keepDraftItem(item);
+      if (!kept) { b.disabled = false; return; }
+      if (PIPE.joined) PIPE.joined = { ...PIPE.joined, id: kept.id };
+      pipeSave();
+      showDone(kept, false);
+    });
   }
   window.mtRestoreResult = () => {   // after a restart: show the joined video again if it is still in the Library
     const j = PIPE.joined, it = j && byId(j.id); if (!it || MT.res || it.missing) return;
-    showDone(it);
+    showDone(it, false);   // shown, but paused: only a join finished right now plays by itself
   };
 
   $('.mt-go', root).onclick = () => { if (+$('.mt-grain', root).value > 0) chain('none'); else joinNow(MT.ids.slice(), durList()); };
@@ -8773,7 +8882,7 @@ $('#setReset').onclick = () => {
     MT.busy = true; MT.joining = true; $('.mt-go', root).disabled = true; st.textContent = 'Отправляем клипы в ComfyUI…'; pipePaint();
     const fail = msg => { MT.busy = false; MT.joining = false; MT.chaining = false; $('.mt-go', root).disabled = false; st.textContent = msg; pipePaint(); };
     try {
-      const fd = new FormData(); fd.append('ids', JSON.stringify(ids)); fd.append('durs', JSON.stringify(durs));
+      const fd = new FormData(); fd.append('ids', JSON.stringify(ids)); fd.append('durs', JSON.stringify(durs)); fd.append('preview', '1');
       ids.filter(id => id.startsWith('up:')).forEach(id => { const u = get(id), k = id.slice(3); fd.append('res_' + k, u.res || ''); fd.append('len_' + k, String(u.len || 0)); fd.append('file_' + k, u.file, u.file.name); });
       const r = await fetch('/api/montage', { method: 'POST', body: fd });
       const txt = await r.text(); let res; try { res = JSON.parse(txt); } catch { res = { error: txt }; }

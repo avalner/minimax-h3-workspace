@@ -2138,10 +2138,11 @@ class App:
         for key, comfy in uploads.items():   # a file the simple form of this workflow asked for
             w = by_key.get(key) or {}
             inputs.append(media_input(w.get("title") or w.get("name") or key, w.get("mkind") or "image", comfy=comfy))
+        preview = form.get("preview") == "1"   # a result of a custom workflow waits for «Добавить в библиотеку»
         return await self.queue(graph, customwf.stage_map(graph), {
             "mode": "custom", "sub": wf_file["name"], "wf": form.get("wf"), "cw_values": values,
             "prompt": prompt, "aspect": "", "q": "", "len": 0.0, "res": "",
-            "seed": seed if isinstance(seed, (int, float)) else None, "inputs": inputs}, last_output=True,
+            "seed": seed if isinstance(seed, (int, float)) else None, "inputs": inputs}, last_output=True, preview=preview,
             titles={nid: (n.get("_meta") or {}).get("title", "") for nid, n in graph.items() if n["class_type"].startswith("Save")})
 
     async def read_image_form(self, req):
@@ -2462,6 +2463,7 @@ class App:
     async def h_generate_video(self, req):
         await self.need_models("video")
         form, images, prompt, aspect, quality, seed = await self.read_form(req, ("first", "last"))
+        preview = form.get("preview") == "1"   # from the video sections: the Library waits for «Добавить в библиотеку»
         seconds = min(MAX_SECONDS, max(3.0, float(form.get("duration", 5))))
         width, height = wf.resolution(aspect, quality, form)
         first, last = images.get("first"), images.get("last") if images.get("first") else None
@@ -2498,12 +2500,13 @@ class App:
             inputs.append(media_input("Последний кадр", "image", comfy=last))
         return await self.queue(graph, stages, {
             "mode": "video", "sub": sub, "prompt": prompt, "aspect": aspect, "q": quality,
-            "len": seconds, "res": f"{width}×{height}", "seed": seed, "inputs": inputs})
+            "len": seconds, "res": f"{width}×{height}", "seed": seed, "inputs": inputs}, preview=preview)
 
     async def h_generate_lipsync(self, req):
         await self.need_models("lipsync")
         ref_fields = tuple(f"ref{i}" for i in range(9))
         form, files, prompt, aspect, quality, seed = await self.read_form(req, ref_fields + ("audio",))
+        preview = form.get("preview") == "1"   # from the video sections: the Library waits for «Добавить в библиотеку»
         if "audio" not in files:
             raise web.HTTPBadRequest(text="Загрузите аудио")
         refs = [files[f] for f in ref_fields if f in files]
@@ -2526,7 +2529,7 @@ class App:
         return await self.queue(graph, stages, {
             "mode": "lipsync", "sub": f"{len(refs)} реф. ({speed}) · аудио {seconds:.1f} с", "prompt": prompt,
             "aspect": aspect, "q": quality, "len": seconds, "res": f"{out_w}×{out_h}", "seed": seed,
-            "ref_size": ref_size, "inputs": inputs})
+            "ref_size": ref_size, "inputs": inputs}, preview=preview)
 
     async def read_ref_form(self, req, max_images):
         fields = tuple(f"img{i}" for i in range(max_images)) + tuple(f"vid{i}" for i in range(3)) + \
@@ -2611,6 +2614,7 @@ class App:
     async def h_generate_refs(self, req):
         await self.need_models("refs")
         form, prompt, aspect, quality, seed, images, videos, audios, seconds = await self.read_ref_form(req, 9)
+        preview = form.get("preview") == "1"   # from the video sections: the Library waits for «Добавить в библиотеку»
         steps = int(form.get("steps", 6)) if form.get("steps", "6").isdigit() else 6
         steps = min(8, max(4, steps))
         ref_size = form.get("ref_size") if form.get("ref_size") in ("match", "max") else "max"
@@ -2641,7 +2645,7 @@ class App:
         inputs += [media_input(f"Аудио {i + 1}", "audio", comfy=name) for i, name in enumerate(audios)]
         return await self.queue(graph, stages, {
             "mode": "refs", "sub": sub, "prompt": prompt, "aspect": aspect, "q": quality, "len": seconds,
-            "res": f"{width}×{height}", "seed": seed, "steps": steps, "ref_size": ref_size, "inputs": inputs})
+            "res": f"{width}×{height}", "seed": seed, "steps": steps, "ref_size": ref_size, "inputs": inputs}, preview=preview)
 
     async def long_source(self, item_id, uploaded, first_sec):
         """A video the user already has (from the library, or a file from the computer) to continue from: put it into ComfyUI and
@@ -2649,7 +2653,7 @@ class App:
         if uploaded:
             name = uploaded   # read_form already uploaded it to ComfyUI
         else:
-            it = self.library.get(item_id)
+            it = self.find_item(item_id)   # a Library clip, or a clip that is still a draft
             if not it or it.get("kind") == "image":
                 raise web.HTTPBadRequest(text="Видео для продолжения не найдено в Библиотеке")
             data = await self.item_bytes(it)
@@ -2811,6 +2815,7 @@ class App:
 
     async def generate_long(self, req):
         form, files, prompt, aspect, quality, seed = await self.read_form(req, ("img0", "img1", "img2", "img3", "img4", "aud0", "srcvid") + tuple(f"simg{i}_{j}" for i in range(12) for j in range(5)), need_prompt=False)   # the texts are in the scenes, there is no single prompt
+        preview = form.get("preview") == "1"   # every scene waits for «Добавить в библиотеку»
         self._long_run = re.sub(r"[^A-Za-z0-9]", "", form.get("run", ""))[:32]   # the references are kept even if the request is refused later
         try:
             scenes = [(str(x.get("prompt", "")).strip(), float(x.get("sec", 10)), bool(x.get("fresh"))) for x in json.loads(form.get("scenes") or "[]")]
@@ -2896,7 +2901,7 @@ class App:
             if cont:
                 inputs.append(media_input("Видео, с которого продолжаем", "video", comfy=cont[0]))
             elif form.get("src_item"):
-                src_it = self.library.get(form.get("src_item"))
+                src_it = self.find_item(form.get("src_item"))
                 if src_it:
                     inputs.append(media_input("Видео, с которого продолжаем", "video", item=src_it))
             elif files.get("srcvid"):
@@ -2904,7 +2909,7 @@ class App:
             return await self.queue(graph, stages, {
                 "mode": "long", "sub": sub + (" · черновик" if draft else f" · проба {width}×{height}" if test else ""), "prompt": scenes[k][0], "aspect": aspect, "q": quality,
                 "len": round((plan[k]["total"] - plan[k]["ov"]) / wf.FPS, 1), "res": f"{width}×{height}", "seed": seed,
-                "long": {"run": run, "part": k, "n": len(scenes), "draft": draft, "test": test}, "inputs": inputs})
+                "long": {"run": run, "part": k, "n": len(scenes), "draft": draft, "test": test}, "inputs": inputs}, preview=preview)
         graph, stages = wf.long_graph(self.model_names, scenes, width, height, seed, images, audio, start,
                                       dmad if draft else fin, self.custom_loras("long"), "match", vocals, await self.preview_opts(), fresh, False, draft)
         run = re.sub(r"[^A-Za-z0-9]", "", form.get("run", ""))[:32]
@@ -2915,7 +2920,7 @@ class App:
                 "len": round(total, 1), "res": f"{width}×{height}", "seed": seed, "inputs": long_inputs}
         if run:
             meta["long"] = {"run": run, "part": len(scenes) - 1, "n": len(scenes), "all": True}
-        return await self.queue(graph, stages, meta)
+        return await self.queue(graph, stages, meta, preview=preview)
 
     async def h_long_state(self, req):
         """Which scenes of a long video project have a saved continuation point (so the project can go on after a restart)."""
@@ -2954,6 +2959,7 @@ class App:
             durs = json.loads(form.get("durs") or "[]")
         except ValueError:
             durs = []
+        preview = form.get("preview") == "1"   # the final join waits for «Добавить в библиотеку»
         items = []
         for i in ids:
             if i.startswith("up:"):
@@ -2967,7 +2973,7 @@ class App:
                 items.append({"kind": "video", "_up": files[k], "res": form.get("res_" + k, ""), "len": ln,
                               "ext": (Path(files[k][0]).suffix.lstrip(".").lower() or "mp4")[:5]})
             else:
-                items.append(self.library.get(i))
+                items.append(self.find_item(i))   # a Library clip or a draft of the video sections
         if len(items) < 2 or any(not it or it.get("kind") == "image" for it in items):
             raise web.HTTPBadRequest(text="Добавьте хотя бы два видео")
         if self.rh():
@@ -3003,7 +3009,7 @@ class App:
                 inputs.append(media_input(role, "video", item=it))
         return await self.queue(graph, stages, {
             "mode": "montage", "sub": f"{len(items)} клипов", "prompt": "", "aspect": items[0].get("aspect", ""), "q": "",
-            "len": round(total, 1), "res": items[0].get("res", ""), "seed": 0, "inputs": inputs}, last_output=True)
+            "len": round(total, 1), "res": items[0].get("res", ""), "seed": 0, "inputs": inputs}, last_output=True, preview=preview)
 
     async def h_grain(self, req):
         """Film grain on ONE clip (a library clip or a file from the computer) as a job of its own: the frames of a clip are decoded
@@ -3032,7 +3038,7 @@ class App:
                                           "Поставьте пакет (например, через ComfyUI Manager) или уберите ползунок «Зерно плёнки» в 0.")
         item = {"kind": "video", "res": form.get("res", ""), "prompt": "", "aspect": ""}
         if content is None:
-            item = self.library.get(form.get("id", ""))
+            item = self.find_item(form.get("id", ""))   # a Library clip or a draft
             if not item or item.get("kind") == "image":
                 raise web.HTTPBadRequest(text="Видео не найдено")
             content = await self.item_bytes(item)
@@ -3059,6 +3065,7 @@ class App:
     async def h_generate_actor(self, req):
         await self.need_models("actor")
         form, prompt, aspect, quality, seed, images, videos, audios, seconds = await self.read_ref_form(req, 3)
+        preview = form.get("preview") == "1"   # from the video sections: the Library waits for «Добавить в библиотеку»
         realism = None
         v = lora_strength(form, "realism", 0.7)  # on by default, as in the original workflow
         missing = {m["role"] for m in self.missing}
@@ -3072,12 +3079,13 @@ class App:
         inputs += [media_input(f"Образец голоса {i + 1}", "audio", comfy=name) for i, name in enumerate(audios)]
         return await self.queue(graph, stages, {
             "mode": "actor", "sub": sub, "prompt": prompt, "aspect": aspect, "q": quality, "len": seconds,
-            "res": f"{width}×{height}", "seed": seed, "inputs": inputs})
+            "res": f"{width}×{height}", "seed": seed, "inputs": inputs}, preview=preview)
 
     async def h_generate_swap(self, req):
         """Preset «Замена персонажа»: one video + up to two character pictures, the app writes the prompt."""
         await self.need_models("swap")
         form, prompt, aspect, quality, seed, images, videos, audios, seconds = await self.read_ref_form(req, 2)
+        preview = form.get("preview") == "1"   # from the video sections: the Library waits for «Добавить в библиотеку»
         if not videos:
             raise web.HTTPBadRequest(text="Добавьте видео, в котором нужно заменить человека")
         if not images:
@@ -3137,7 +3145,7 @@ class App:
         return await self.queue(graph, stages, {
             "mode": "swap", "sub": "Замена персонажа" + (f", планов: {len(shots)}" if shots else (f" ({len(images)})" if len(images) > 1 else "")) + (" · Pika" if pika else ""),
             "prompt": prompt or whos[0], "aspect": aspect, "q": quality, "len": seconds,
-            "res": f"{width}×{height}", "seed": seed, "inputs": inputs})
+            "res": f"{width}×{height}", "seed": seed, "inputs": inputs}, preview=preview)
 
     async def action_setup(self):
         """What the original action workflow needs and what this ComfyUI has."""
@@ -3168,6 +3176,7 @@ class App:
     async def h_generate_action(self, req):
         await self.need_models("action")
         form, prompt, aspect, quality, seed, images, videos, audios, seconds = await self.read_ref_form(req, 6)
+        preview = form.get("preview") == "1"   # from the video sections: the Library waits for «Добавить в библиотеку»
         if self.rh():
             # on RunningHub only built-in nodes are assumed; LoRAs are used if the user's RH workflow has them
             rh_files = {n.replace("\\", "/").split("/")[-1].lower(): n for n in (getattr(self, "rh_models", None) or [])}
@@ -3195,7 +3204,7 @@ class App:
         inputs += [media_input(f"Аудио {i + 1}", "audio", comfy=name) for i, name in enumerate(audios)]
         return await self.queue(graph, stages, {
             "mode": "action", "sub": sub, "prompt": prompt, "aspect": aspect, "q": quality, "len": seconds,
-            "res": f"{width}×{height}", "seed": seed, "faithful": s["faithful"], "inputs": inputs})
+            "res": f"{width}×{height}", "seed": seed, "faithful": s["faithful"], "inputs": inputs}, preview=preview)
 
     # ---------- audio: voice / music separation (MelBand RoFormer through ComfyUI) ----------
 
