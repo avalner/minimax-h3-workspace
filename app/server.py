@@ -347,6 +347,7 @@ LIBRARY_FILE = DATA_DIR / "library.json"
 QUEUE_FILE = DATA_DIR / "queue.json"
 WORKFLOWS_DIR = DATA_DIR / "workflows"
 MAX_SECONDS = 25.0  # H3 itself is made for up to 15 s; longer clips are allowed, quality is the user's call
+PREVIEW_LIMIT = 40  # finished pictures waiting for «Добавить в библиотеку»: the newest are kept, the rest is forgotten
 
 CLIENT_ID = "h3studio-" + uuid.uuid4().hex[:8]
 
@@ -393,6 +394,9 @@ class App:
         self.saved_queue = self.load_queue()  # unfinished jobs of the previous run (asked about at start)
         self.jobs = JobStore(self.save_queue)  # prompt_id -> job dict
         self.library = Library(LIBRARY_FILE)
+        # finished pictures of the picture sections that the user has not added to the Library yet:
+        # they are served and saved to disk like Library items, but stay out of the Library list
+        self.pending = {}  # item id -> item; memory only, so a restart forgets them
         self.output_dir = None
         self.comfy_online = False
         self.process = None  # engine.ComfyProcess in managed mode
@@ -1025,12 +1029,13 @@ class App:
             return
         if videos:
             picked = [videos[-1] if job.get("last_output") else videos[0]]
-        else:  # a workflow that makes pictures: every saved picture goes to the library
+        else:  # a workflow that makes pictures: every saved picture is a result (the picture sections keep it as a draft)
             picked = images[:12]
             def order(f):  # the glued sheet first, then the frames 1, 2, 3...
                 t = str((job.get("titles") or {}).get(node_of.get(id(f)), ""))
                 return (0 if t.startswith("Лист") else 1, t)
             picked.sort(key=order)
+        preview = bool(job.get("preview"))
         items = []
         for f in picked:
             item = dict(job["meta"], id=uuid.uuid4().hex[:12], prompt_id=pid,
@@ -1045,8 +1050,11 @@ class App:
             meta = f.get("metadata") or {}
             if meta.get("width") and meta.get("height") and not (item.get("mode") == "upscale" and item.get("res")):
                 item["res"] = f'{meta["width"]}×{meta["height"]}'
-            self.library.add(item)
-            await self.archive_item(item)
+            if preview:   # the picture sections: wait for «Добавить в библиотеку»
+                self.hold_preview(item)
+            else:
+                self.library.add(item)
+                await self.archive_item(item)
             items.append(self.public(item))
         await self.broadcast({"type": "done", "prompt_id": pid, "item": items[0], "items": items})
 
@@ -1098,6 +1106,17 @@ class App:
         if local and Path(local).exists():
             return Path(local)
         return orig
+
+    def find_item(self, item_id):
+        """A Library record, or a finished picture that is still waiting for «Добавить в библиотеку»."""
+        return self.library.get(item_id) or self.pending.get(item_id)
+
+    def hold_preview(self, item):
+        """A picture is not added to the Library by itself: it waits until the user presses «Добавить в библиотеку»."""
+        item["preview"] = True
+        self.pending[item["id"]] = item
+        while len(self.pending) > PREVIEW_LIMIT:
+            self.pending.pop(next(iter(self.pending)))
 
     # ---------- own copies of the results (they must not vanish when ComfyUI's output folder is cleaned) ----------
 
@@ -1693,7 +1712,8 @@ class App:
     def save_queue(self):
         items = list(self.saved_queue) + [
             {"graph": j["graph"], "stages": j.get("stages") or {}, "meta": j.get("meta") or {}, "last_output": j.get("last_output", False),
-             "titles": j.get("titles") or {}, "pid": j.get("prompt_id"), "saved": datetime.now().timestamp()}
+             "titles": j.get("titles") or {}, "pid": j.get("prompt_id"), "preview": j.get("preview", False),
+             "saved": datetime.now().timestamp()}
             for j in dict.values(self.jobs) if j.get("graph")]
         try:
             if items:
@@ -1719,7 +1739,7 @@ class App:
         for j in items:
             if j.get("pid") and (j["pid"] in alive):
                 continue
-            resp = await self.queue(j["graph"], j.get("stages") or {}, j.get("meta") or {}, j.get("last_output", False), j.get("titles"))
+            resp = await self.queue(j["graph"], j.get("stages") or {}, j.get("meta") or {}, j.get("last_output", False), j.get("titles"), j.get("preview", False))
             pid = json.loads(resp.text)["prompt_id"]
             out.append({"prompt_id": pid, "mode": j["meta"].get("mode"), "prompt": j["meta"].get("prompt", "")})
         return web.json_response({"jobs": out})
@@ -1738,7 +1758,7 @@ class App:
             out.update(state=job.get("state") or "queued", stage=job.get("stage"), step=job.get("step"),
                        max=job.get("step_max"), created=job.get("t0"), meta=job.get("meta") or {})
             return web.json_response(out)
-        items = [self.public(x) for x in self.library.items if x.get("prompt_id") == pid]
+        items = [self.public(x) for x in (*self.library.items, *self.pending.values()) if x.get("prompt_id") == pid]
         if items:   # finished: the Library record keeps the job's own meta (prompt, format, inputs)
             drop = {"file", "url", "local", "fav", "id", "kind", "ext", "prompt_id", "date", "missing"}
             out.update(state="done", meta={k: v for k, v in items[0].items() if k not in drop},
@@ -1909,7 +1929,7 @@ class App:
             return web.json_response({"error": str(e)}, status=400)
         return web.json_response({"ok": True, "account": acc, "models": sorted(names)[:40]})
 
-    async def queue_cloud(self, rh, graph, stages, meta):
+    async def queue_cloud(self, rh, graph, stages, meta, preview=False):
         if not self.config.get("rh_workflow_id"):
             return web.json_response({"error": "Укажите ID любого вашего workflow на RunningHub (раздел «Настройки» → «Облако»)"},
                                      status=400)
@@ -1925,7 +1945,7 @@ class App:
             return web.json_response({"error": str(e)}, status=400)
         pid = "rh-" + task
         self.jobs[pid] = {"prompt_id": pid, "state": "queued", "stages": {}, "stage": None,
-                          "meta": dict(meta, cloud=True), "task": task, "t0": datetime.now().timestamp()}
+                          "meta": dict(meta, cloud=True), "task": task, "t0": datetime.now().timestamp(), "preview": preview}
         asyncio.create_task(self.poll_cloud(rh, pid))
         return web.json_response({"prompt_id": pid, "seed": meta["seed"]})
 
@@ -1956,7 +1976,10 @@ class App:
                                 file={"type": "local", "path": str(dest), "filename": dest.name})
                     if video.get("consumeCoins"):
                         item["sub"] = f'{item.get("sub", "")} · ☁ {video["consumeCoins"]} RH'.strip(" ·")
-                    self.library.add(item)
+                    if job.get("preview"):
+                        self.hold_preview(item)
+                    else:
+                        self.library.add(item)
                     await self.broadcast({"type": "done", "prompt_id": pid, "item": self.public(item)})
                     return
                 if status == "FAILED":
@@ -1987,11 +2010,11 @@ class App:
         seed = int(form["seed"]) if form.get("seed", "").isdigit() else random.randrange(2 ** 50)
         return form, files, prompt, aspect, quality, seed
 
-    async def queue(self, graph, stages, meta, last_output=False, titles=None):
+    async def queue(self, graph, stages, meta, last_output=False, titles=None, preview=False):
         scenes = stages.pop("__scenes__", None)   # which sampler is which scene (long video), for the progress text
         rh = self.rh()
         if rh:
-            return await self.queue_cloud(rh, graph, stages, meta)
+            return await self.queue_cloud(rh, graph, stages, meta, preview)
         await self.stop_llm()  # the agent's model and H3 do not fit in VRAM together
         mode_key = (meta or {}).get("mode", "")
         same = mode_key == getattr(self, "last_mode", None) and mode_key in ("krea", "kreareal", "qwen", "flux")
@@ -2017,7 +2040,7 @@ class App:
             return web.json_response({"error": comfy_error_text(res)}, status=400)
         pid = res["prompt_id"]
         self.jobs[pid] = {"prompt_id": pid, "state": "queued", "stages": stages, "stage": None, "meta": meta, "last_output": last_output, "titles": titles or {},
-                          "graph": graph, "scenes": scenes, "t0": datetime.now().timestamp()}
+                          "graph": graph, "scenes": scenes, "t0": datetime.now().timestamp(), "preview": preview}
         return web.json_response({"prompt_id": pid, "seed": meta["seed"], "queue_number": res.get("number")})
 
     async def need_models(self, mode):
@@ -2156,7 +2179,7 @@ class App:
         if self.rh():
             raise web.HTTPBadRequest(text="Увеличение работает только на своём ComfyUI (не в облаке RunningHub).")
         body = peek
-        item = self.library.get(body.get("id", ""))
+        item = self.find_item(body.get("id", ""))   # a Library picture, or a draft of the picture sections
         if not item:
             raise web.HTTPBadRequest(text="Файл не найден")
         if soft and item.get("kind") != "image":
@@ -2272,6 +2295,7 @@ class App:
         prompt = form.get("prompt", "").strip()
         if not prompt:
             raise web.HTTPBadRequest(text="Напишите промпт")
+        preview = form.get("preview") == "1"   # from the picture sections: the Library waits for «Добавить в библиотеку»
         lab = {"label": form["batch_label"][:20]} if form.get("batch_label") else {}  # "3 из 8" for a series from a prompt list
         aspect = form.get("aspect", "16:9")
         if aspect not in wf.KREA_SIZES:
@@ -2286,27 +2310,28 @@ class App:
             graph, stages = wf.flux_t2i_graph(self.model_names, prompt, width, height, seed)
             return await self.queue(graph, stages, {
                 "mode": "krea", "sub": "Изображение (FLUX.2)", "prompt": prompt, "aspect": aspect, "q": "1K",
-                "len": 0.0, "res": f"{width}×{height}", "seed": seed, "inputs": [], **lab})
+                "len": 0.0, "res": f"{width}×{height}", "seed": seed, "inputs": [], **lab}, preview=preview)
         if engine == "qwen":
             await self.need_models("qwen")
             graph, stages = wf.qwen_t2i_graph(self.model_names, prompt, form.get("negative", "").strip()[:600], width, height, seed)
             return await self.queue(graph, stages, {
                 "mode": "krea", "sub": "Изображение (Qwen 2.1)", "prompt": prompt, "aspect": aspect, "q": "1K",
-                "len": 0.0, "res": f"{width}×{height}", "seed": seed, "inputs": [], **lab})
+                "len": 0.0, "res": f"{width}×{height}", "seed": seed, "inputs": [], **lab}, preview=preview)
         if form.get("style") == "real":
             await self.need_models("kreareal")
             scale = wf.KREA_REAL_SCALES.get(form.get("scale", "2k"), 1.5)
             graph, stages = wf.krea_real_graph(self.model_names, prompt, width, height, seed, scale)
             return await self.queue(graph, stages, {
                 "mode": "krea", "sub": "Изображение: реализм", "prompt": prompt, "aspect": aspect, "q": "4K" if scale > 2 else "2K",
-                "len": 0.0, "res": f"{int(width * scale)}×{int(height * scale)}", "seed": seed, "inputs": [], **lab})
+                "len": 0.0, "res": f"{int(width * scale)}×{int(height * scale)}", "seed": seed, "inputs": [], **lab}, preview=preview)
         graph, stages = wf.krea_graph(self.model_names, prompt, width, height, seed)
         return await self.queue(graph, stages, {
             "mode": "krea", "sub": "Изображение по тексту", "prompt": prompt, "aspect": aspect, "q": "1K",
-            "len": 0.0, "res": f"{width}×{height}", "seed": seed, "inputs": [], **lab})
+            "len": 0.0, "res": f"{width}×{height}", "seed": seed, "inputs": [], **lab}, preview=preview)
 
     async def h_generate_qwen(self, req):
         form, image, seed = await self.read_image_form(req)
+        preview = form.get("preview") == "1"   # from the picture sections: the Library waits for «Добавить в библиотеку»
         flux = form.get("kind") != "sheet" and form.get("engine") == "flux"
         await self.need_models("flux" if flux else "qwen")
 
@@ -2322,7 +2347,7 @@ class App:
             graph, stages = wf.qwen_edit_graph(self.model_names, wf.BG_REMOVE_PROMPT, image, mp, seed)
             return await self.queue(graph, stages, {
                 "mode": "qwen", "sub": "Убрать фон", "prompt": "", "aspect": "",
-                "q": "", "len": 0.0, "res": "", "seed": seed})
+                "q": "", "len": 0.0, "res": "", "seed": seed}, preview=preview)
         if form.get("kind") == "outpaint":   # extend the picture: client builds the larger canvas and the offset
             if not image or not form.get("_orig"):
                 raise web.HTTPBadRequest(text="Загрузите изображение")
@@ -2342,7 +2367,7 @@ class App:
             graph, stages = wf.qwen_outpaint_graph(self.model_names, prompt, image, form["_orig"], x, y, (w, h), seed, lora)
             return await self.queue(graph, stages, {
                 "mode": "qwen", "sub": "Расширение изображения", "prompt": prompt, "aspect": "",
-                "q": "", "len": 0.0, "res": f"{w}×{h}", "seed": seed})
+                "q": "", "len": 0.0, "res": f"{w}×{h}", "seed": seed}, preview=preview)
         if form.get("kind") == "story" and form.get("frames") == "1":
             # storyboard frame by frame (FLUX.2 klein): every frame is its own picture, the sheet is glued from them
             use_qwen = form.get("engine") == "qwen"
@@ -2355,7 +2380,7 @@ class App:
             graph, stages, titles = build(self.model_names, refs, frames, seed, size=round_size(form) or wf.FRAME_SIZE, line=form.get("line", "white"))
             return await self.queue(graph, stages, {
                 "mode": "qwen", "sub": "Раскадровка по кадрам", "prompt": form.get("prompt", "").strip(), "aspect": "",
-                "q": "", "len": 0.0, "res": "", "seed": seed, "inputs": pics("Референс персонажа")}, titles=titles)
+                "q": "", "len": 0.0, "res": "", "seed": seed, "inputs": pics("Референс персонажа")}, titles=titles, preview=preview)
         if not image:
             raise web.HTTPBadRequest(text="Загрузите изображение")
         if form.get("kind") == "story":
@@ -2370,7 +2395,7 @@ class App:
                 graph, stages = wf.qwen_story_graph(self.model_names, refs, prompt, seed, sz)
             return await self.queue(graph, stages, {
                 "mode": "qwen", "sub": "Раскадровка по изображениям", "prompt": prompt, "aspect": "",
-                "q": "", "len": 0.0, "res": "%d×%d" % wf.STORY_SIZE, "seed": seed, "inputs": pics("Главный герой")})
+                "q": "", "len": 0.0, "res": "%d×%d" % wf.STORY_SIZE, "seed": seed, "inputs": pics("Главный герой")}, preview=preview)
         if flux:
             prompt = form.get("prompt", "").strip()
             if not prompt:
@@ -2379,7 +2404,7 @@ class App:
             graph, stages = wf.flux_edit_graph(self.model_names, prompt, image, mp, seed, form.get("_extra") or (), round_size(form))
             return await self.queue(graph, stages, {
                 "mode": "qwen", "sub": "Правка изображения (FLUX.2)", "prompt": prompt, "aspect": "",
-                "q": "", "len": 0.0, "res": "", "seed": seed, "inputs": pics("Исходное изображение")})
+                "q": "", "len": 0.0, "res": "", "seed": seed, "inputs": pics("Исходное изображение")}, preview=preview)
         if form.get("kind") == "sheet":
             panels = 6 if form.get("panels") == "6" else 4
             graph, stages, prompt = wf.qwen_sheet_graph(
@@ -2399,7 +2424,7 @@ class App:
                   else pics("Исходное изображение"))
         return await self.queue(graph, stages, {
             "mode": "qwen", "sub": sub, "prompt": prompt, "aspect": form.get("aspect", "") if form.get("kind") != "sheet" else "",
-            "q": "", "len": 0.0, "res": res, "seed": seed, "inputs": inputs})
+            "q": "", "len": 0.0, "res": res, "seed": seed, "inputs": inputs}, preview=preview)
 
     async def fused_model(self):
         """The Fused Turbo checkpoint for the Video section, or None when its file is not in this ComfyUI."""
@@ -2408,6 +2433,7 @@ class App:
 
     async def h_generate_inpaint(self, req):
         form, image, seed = await self.read_image_form(req)
+        preview = form.get("preview") == "1"   # the Library waits for «Добавить в библиотеку»
         await self.need_models("qwen")
         if not image:
             raise web.HTTPBadRequest(text="Загрузите изображение")
@@ -2431,7 +2457,7 @@ class App:
                                               x, y, mp, seed, size)
         return await self.queue(graph, stages, {
             "mode": "qwen", "sub": "Инпейнт", "prompt": prompt, "aspect": "",
-            "q": "", "len": 0.0, "res": "", "seed": seed})
+            "q": "", "len": 0.0, "res": "", "seed": seed}, preview=preview)
 
     async def h_generate_video(self, req):
         await self.need_models("video")
@@ -3391,6 +3417,17 @@ class App:
     async def h_library(self, _req):
         return web.json_response([self.public(x) for x in self.library.items])
 
+    async def h_preview_keep(self, req):
+        """«Добавить в библиотеку»: the picture waits in `pending` until this moment, so nothing was archived before."""
+        body = await req.json()
+        item = self.pending.pop(str(body.get("id") or ""), None)
+        if not item:
+            raise web.HTTPBadRequest(text="Эта картинка уже не ждёт: возможно, её уже добавили в Библиотеку. Сгенерируйте заново")
+        item.pop("preview", None)
+        self.library.add(item)
+        await self.archive_item(item)   # the program's own copy, as for every Library result
+        return web.json_response({"item": self.public(item)})
+
     async def h_library_patch(self, req):
         item = self.library.get(req.match_info["id"])
         if not item:
@@ -3471,7 +3508,7 @@ class App:
         return web.json_response({"removed": len(gone), **json.loads((await self.h_results_get(req)).text)})
 
     async def h_file(self, req):
-        item = self.library.get(req.match_info["id"])
+        item = self.find_item(req.match_info["id"])
         if not item:
             raise web.HTTPNotFound()
         f = item["file"]
@@ -3497,7 +3534,7 @@ class App:
         item = self.library.get(req.match_info["id"])
         if not item:
             raise web.HTTPNotFound()
-        src = self.library.get(item.get("src") or "")
+        src = self.find_item(item.get("src") or "")
         if src and (p := self.file_path(src)) and p.exists():
             return web.FileResponse(p)
         f = item.get("src_file")
@@ -4042,6 +4079,7 @@ def build_app(comfy_override=None, port=None):
         web.post("/api/results/backfill", state.h_results_backfill),
         web.post("/api/results/clean", state.h_results_clean),
         web.get("/api/library", state.h_library),
+        web.post("/api/preview/keep", state.h_preview_keep),
         web.patch("/api/library/{id}", state.h_library_patch),
         web.delete("/api/library/{id}", state.h_library_delete),
         web.post("/api/library/delete", state.h_library_delete_many),
