@@ -32,7 +32,9 @@ VSVersionInfo(
 a = Analysis(
     [str(APP / "main.py")],
     pathex=[str(APP)],
-    datas=[(str(APP / "ui" / "index.html"), "ui"), (str(APP / "ui" / "previews"), "ui/previews"), (str(APP / "skills"), "skills"), (str(APP / "bin"), "bin")],
+    # the whole ui folder: index.html, css, js modules and the mode previews. Listing the files by
+    # name used to leave a new js/css file out of the bundled app.
+    datas=[(str(APP / "ui"), "ui"), (str(APP / "skills"), "skills"), (str(APP / "bin"), "bin")],
     hiddenimports=["webview.platforms.edgechromium", "webview.platforms.winforms", "clr", "certifi"],
     excludes=["tkinter", "matplotlib", "numpy", "PIL", "pandas", "scipy", "IPython"],
 )

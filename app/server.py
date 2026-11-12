@@ -57,6 +57,7 @@ from domain.errors import DomainError, InvalidSpec, InvalidTransition, JobConfli
 from domain.jobs import (MAX_SECONDS, InputRef, JobRecord, JobSpec, JobState, ResultPolicy, new_job_id,
                          public_state)
 from http_errors import window_error
+import jobmeta
 from runtime.events import EventHub
 from runtime.tasks import TaskSupervisor
 from services.engines import EngineManager
@@ -375,6 +376,13 @@ import workflows as wf
 ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 HOME = Path(sys.executable).parent if getattr(sys, "frozen", False) else ROOT
 UI_DIR = ROOT / "ui"
+# The window's files are served with an explicit type: `web.static` guesses from the Windows registry,
+# where `.js` is often `text/plain` — a module script is then refused and the window opens blank.
+# Only these extensions are served from /ui at all.
+UI_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
+            ".css": "text/css; charset=utf-8", ".json": "application/json",
+            ".mp4": "video/mp4", ".webm": "video/webm", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+            ".png": "image/png", ".webp": "image/webp", ".svg": "image/svg+xml", ".ico": "image/x-icon"}
 DATA_DIR = Path(os.environ.get("H3STUDIO_DATA", HOME / "data"))
 TOOLS_DIR = Path(os.environ.get("H3STUDIO_TOOLS") or HOME / "tools")  # portable FFmpeg and other helpers
 LONG_DIR = DATA_DIR / "long"   # saved scene states of the long video made scene by scene
@@ -2259,19 +2267,19 @@ class App:
         if job:
             record = job.get("record")
             out.update(state=job.get("state") or "queued", stage=job.get("stage"), step=job.get("step"),
-                       max=job.get("step_max"), created=job.get("t0"), meta=job.get("meta") or {},
+                       max=job.get("step_max"), created=job.get("t0"), meta=jobmeta.for_ui(job.get("meta")),
                        finalizing=bool(job.get("finalizing")),
                        phase=record.state.value if record is not None else None)
             return web.json_response(out)
         items = [self.public(x) for x in (*self.library.items, *self.pending.values()) if x.get("prompt_id") == pid]
         if items:   # finished: the Library record keeps the job's own meta (prompt, format, inputs)
             drop = {"file", "url", "local", "fav", "id", "kind", "ext", "prompt_id", "date", "missing"}
-            out.update(state="done", meta={k: v for k, v in items[0].items() if k not in drop},
+            out.update(state="done", meta=jobmeta.for_ui({k: v for k, v in items[0].items() if k not in drop}),
                        created=items[0].get("date"), items=items)
             return web.json_response(out)
         kept = self.history.get(pid) or {}
         if kept:
-            out.update(meta=kept.get("meta") or {}, created=kept.get("created"))
+            out.update(meta=jobmeta.for_ui(kept.get("meta")), created=kept.get("created"))
         if pid in self.recent:
             r = self.recent[pid]
             out.update(state=r.get("state") or "unknown", message=r.get("message") or "")
@@ -2280,7 +2288,7 @@ class App:
                             if (record.prompt_id or record.backend_job_id) == pid), None)
             if not waiting:
                 raise web.HTTPNotFound()
-            out.update(state="queued", meta=(waiting.legacy or {}).get("meta") or {},
+            out.update(state="queued", meta=jobmeta.for_ui((waiting.legacy or {}).get("meta")),
                        created=waiting.created_at, phase=waiting.state.value)
         return web.json_response(out)
 
@@ -3078,7 +3086,9 @@ class App:
         if last and last != first:
             inputs.append(media_input("Последний кадр", "image", comfy=last))
         meta = {"mode": "video", "sub": spec.sub, "prompt": spec.prompt, "aspect": spec.aspect, "q": spec.quality,
-                "len": spec.seconds, "res": f"{spec.width}×{spec.height}", "seed": spec.seed, "inputs": inputs}
+                "len": spec.seconds, "res": f"{spec.width}×{spec.height}", "seed": spec.seed, "inputs": inputs,
+                # the parameters themselves, not only the caption: a restore must not parse "· Fused Turbo"
+                "model": spec.model, "acceleration": spec.acceleration}
         try:
             record, _ = await self.start_video_job(spec, meta=meta, preview=preview)
         except SubmitRejected as e:
@@ -3438,7 +3448,8 @@ class App:
         inputs += [media_input(f"Аудио {i + 1}", "audio", comfy=name) for i, name in enumerate(audios)]
         return await self.queue(graph, stages, {
             "mode": "refs", "sub": sub, "prompt": prompt, "aspect": aspect, "q": quality, "len": seconds,
-            "res": f"{width}×{height}", "seed": seed, "steps": steps, "ref_size": ref_size, "inputs": inputs}, preview=preview)
+            "res": f"{width}×{height}", "seed": seed, "steps": steps, "ref_size": ref_size, "inputs": inputs,
+            "model": "fused" if fused else "fast", "acceleration": "normal"}, preview=preview)
 
     async def long_source(self, item_id, uploaded, first_sec):
         """A video the user already has (from the library, or a file from the computer) to continue from: put it into ComfyUI and
@@ -5071,6 +5082,18 @@ class App:
     async def h_index(self, _req):
         return web.FileResponse(UI_DIR / "index.html", headers={"Cache-Control": "no-store"})
 
+    async def h_ui(self, req):
+        """A file of the window (`/ui/...`) with its own content type; nothing outside these types."""
+        rel = req.match_info.get("path", "").replace("/", os.sep)
+        root = UI_DIR.resolve()
+        path = (root / rel).resolve()
+        if not path.is_relative_to(root) or not path.is_file():
+            raise web.HTTPNotFound()
+        content_type = UI_TYPES.get(path.suffix.lower())
+        if content_type is None:
+            raise web.HTTPNotFound()
+        return web.FileResponse(path, headers={"Content-Type": content_type, "Cache-Control": "no-cache"})
+
 
 def lora_strength(form, key, default):
     """Strength sent by the UI: a number when the LoRA is on, "off" when off, nothing -> the default (None = off)."""
@@ -5252,7 +5275,7 @@ def build_app(comfy_override=None, port=None):
         web.get("/api/events", state.h_events),
         web.get("/api/agent/allow", state.h_agent_allow),
         web.post("/api/agent/allow", state.h_agent_allow),
-        web.static("/ui", UI_DIR),
+        web.get("/ui/{path:.*}", state.h_ui),   # the window's js/css/media, with explicit content types
     ])
     app.add_routes(state.agents.routes())  # /api/agent/v1/...: the contract other programs use
     return app

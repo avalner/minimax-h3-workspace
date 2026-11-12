@@ -546,6 +546,7 @@ class AgentAPI:
             meta = {"mode": "video", "sub": spec.sub,
                     "prompt": spec.prompt, "aspect": spec.aspect, "q": spec.quality, "len": spec.seconds,
                     "res": f"{spec.width}×{spec.height}", "seed": spec.seed, "inputs": inputs,
+                    "model": spec.model, "acceleration": spec.acceleration,
                     "origin": {"kind": "agent", "client": str(body.get("client") or "")[:40] or None,
                                "idempotency_key": key or None}}
             record, deduplicated = await app.start_video_job(spec, meta=meta, key=key or None)

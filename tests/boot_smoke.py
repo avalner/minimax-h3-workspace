@@ -48,6 +48,13 @@ def get(url, method="GET", timeout=10):
         return response.status, response.read()
 
 
+def head(url, timeout=10):
+    """(status, content-type, bytes): the content type matters as much as the body for js/css."""
+    request = urllib.request.Request(url, method="GET")
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return response.status, response.headers.get("Content-Type", ""), response.read()
+
+
 def main():
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -119,6 +126,27 @@ def main():
 
         status, body = get(base + "/")
         check("the window itself is served", status == 200 and b"<" in body and len(body) > 10000, str(len(body)))
+        check("the page loads the css and the js modules, and has no inline style left",
+              b"/ui/css/app.css" in body and b"/ui/js/api.js" in body and b"/ui/js/events.js" in body
+              and b"<style" not in body[:6000], body[:200].decode("utf-8", "replace"))
+
+        # the window's own files: the content type is part of the contract — a module script served as
+        # text/plain is refused by the browser and the window opens blank (Windows registry, .js)
+        status, ctype, css = head(base + "/ui/css/app.css")
+        check("the stylesheet is a file served as text/css", status == 200 and ctype.startswith("text/css") and b":root" in css,
+              f"{status} {ctype} {len(css)}")
+        status, ctype, js = head(base + "/ui/js/api.js")
+        check("the HTTP module is served as JavaScript", status == 200 and "javascript" in ctype and b"export" in js,
+              f"{status} {ctype} {len(js)}")
+        status, ctype, _ = head(base + "/ui/js/events.js")
+        check("the event module is served as JavaScript too", status == 200 and "javascript" in ctype, f"{status} {ctype}")
+        status, ctype, _ = head(base + "/ui/previews/action.mp4")
+        check("a mode preview keeps its video type", status == 200 and ctype.startswith("video/"), f"{status} {ctype}")
+        try:
+            head(base + "/ui/%2e%2e%2fserver.py")
+            check("a file outside the window folder is refused", False, "отдал файл вне ui")
+        except urllib.error.HTTPError as e:
+            check("a file outside the window folder is refused", e.code in (400, 403, 404), str(e.code))
 
         try:
             get(base + "/api/agent/v1/capabilities")
