@@ -7,7 +7,11 @@
  * - a wrong status is an `ApiError` with `status`, `code` and `hint` (the server's own words are
  *   used, so the window shows "Длительность должна быть от 3 до 25 секунд", not "409 Conflict");
  * - `timeout` aborts the request (AbortController) and says so, instead of hanging the button;
- * - a caller can pass its own `signal` (cancel button) — the timeout and that signal both abort.
+ * - a caller can pass its own `signal` (cancel button) — the timeout and that signal both abort;
+ * - `body` may be JSON (an object), FormData, a Blob, an ArrayBuffer or a string: files are sent as
+ *   they are and no JSON header is invented for them;
+ * - `raw` asks for the response itself (`"response"`, `"blob"`, `"text"`, `"arrayBuffer"`) when the
+ *   caller needs bytes, headers or a status of its own.
  *
  * No automatic retry: a POST that starts a generation must never be repeated by the transport. The
  * idempotency key is the caller's decision, not a convenience of this module.
@@ -41,7 +45,20 @@ function detailsOf(payload) {
   return { code: "", hint: "" };
 }
 
-export async function request(path, { method = "GET", body, headers = {}, timeout = 30000, signal } = {}) {
+function parse(text) {
+  if (!text) return null;
+  try { return JSON.parse(text); } catch { return text; }
+}
+
+function isRawBody(body) {
+  return typeof body === "string" || body instanceof FormData || body instanceof Blob
+    || body instanceof ArrayBuffer || ArrayBuffer.isView(body);
+}
+
+const RAW = new Set(["response", "blob", "text", "arrayBuffer"]);
+
+export async function request(path, { method = "GET", body, headers = {}, timeout = 30000, signal, cache, raw } = {}) {
+  if (raw !== undefined && !RAW.has(raw)) throw new Error(`api: unknown raw mode ${raw}`);
   const controller = new AbortController();
   const abortOuter = () => controller.abort(signal.reason);
   if (signal) {
@@ -50,30 +67,43 @@ export async function request(path, { method = "GET", body, headers = {}, timeou
   }
   const timer = timeout ? setTimeout(() => controller.abort(new DOMException(`Нет ответа за ${Math.round(timeout / 1000)} с`, "TimeoutError")), timeout) : null;
   const init = { method, signal: controller.signal, headers: { ...headers } };
+  if (cache) init.cache = cache;
   if (body !== undefined) {
-    init.body = JSON.stringify(body);
-    init.headers["Content-Type"] = init.headers["Content-Type"] || "application/json";
+    if (isRawBody(body)) init.body = body;
+    else {
+      init.body = JSON.stringify(body);
+      init.headers["Content-Type"] = init.headers["Content-Type"] || "application/json";
+    }
   }
-  let response, text;
+  let response;
   try {
     response = await fetch(path, init);
-    text = await response.text();
   } catch (e) {
     if (controller.signal.reason && controller.signal.reason.name === "TimeoutError") throw new ApiError(String(controller.signal.reason.message), { path });
     if (signal && signal.aborted) throw new ApiError("Запрос отменён", { path });
     throw new ApiError("Нет связи с программой", { path });
+  }
+  try {
+    if (!response.ok) {
+      // the server's words are the message even for a byte response: read the body once, as text
+      const payload = parse(await response.text().catch(() => ""));
+      const { code, hint } = detailsOf(payload);
+      throw new ApiError(messageOf(payload, response.statusText, response.status),
+                         { status: response.status, code, hint, path });
+    }
+    if (raw === "response") return response;
+    if (raw === "blob") return await response.blob();
+    if (raw === "text") return await response.text();
+    if (raw === "arrayBuffer") return await response.arrayBuffer();
+    return parse(await response.text());
+  } catch (e) {
+    if (e instanceof ApiError) throw e;
+    if (controller.signal.reason && controller.signal.reason.name === "TimeoutError") throw new ApiError(String(controller.signal.reason.message), { path });
+    throw new ApiError("Связь оборвалась, пока читали ответ", { path });
   } finally {
     if (timer) clearTimeout(timer);
     if (signal) signal.removeEventListener("abort", abortOuter);
   }
-  let payload = null;
-  if (text) { try { payload = JSON.parse(text); } catch { payload = text; } }
-  if (!response.ok) {
-    const { code, hint } = detailsOf(payload);
-    throw new ApiError(messageOf(payload, response.statusText, response.status),
-                       { status: response.status, code, hint, path });
-  }
-  return payload;
 }
 
 export const getJSON = (path, options = {}) => request(path, options);

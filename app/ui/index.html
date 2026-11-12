@@ -906,6 +906,11 @@ equirements.txt</code><br>
 
 <div class="toast" id="toast"></div>
 
+<!-- The window's own state: one owner for the queue records and each job's outcome. A classic
+     script on purpose: the first preview panels are built while the page is parsed and ask for a
+     job record right away, so a deferred ES module would arrive too late. -->
+<script src="/ui/js/state.js"></script>
+
 <script>
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -915,6 +920,23 @@ const START_VIEW = (() => { try { return localStorage.getItem('h3-last-view') ||
 
 /* ---------- local server (real ComfyUI) or offline demo ---------- */
 const API = location.protocol.startsWith('http');
+/* The page's one door to HTTP: /ui/js/api.js owns statuses, the server's own error words, timeouts
+   and file bodies. The module is deferred, so every call here happens after boot — the page's first
+   network requests are moved to `boot()` on DOMContentLoaded, when the module is guaranteed to be in. */
+function http() {
+  const module = window.h3Api;
+  if (!module) throw new Error('Модуль HTTP не загрузился — перезапустите программу');
+  return module;
+}
+const apiGet = (url, options) => http().getJSON(url, options);
+const apiPost = (url, body, options) => http().postJSON(url, body, options);
+const apiSend = (url, options) => http().request(url, options);
+/* Deferred work that must happen after the modules are in: ES modules execute before
+   DOMContentLoaded, so that is the first moment the page may call h3Api. */
+const afterModules = fn => {
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', fn, { once: true });
+  else fn();
+};
 // finished pictures and clips that are not in the Library yet. Declared before the result panels are built:
 // a panel registers its own draft list (`DRAFT_HOOKS`) while it is being created
 const DRAFTS = [];
@@ -952,9 +974,7 @@ function onServerMessage(m) {
   if (m.type === 'ffmpegdl') { window.onFFDownload && window.onFFDownload(m); return; }
   if (m.type === 'loradl') { window.onLoraDownload && window.onLoraDownload(m); return; }
   if (m.type === 'external_job') {   // a job started by another program (agent): show it in the queue like your own
-    qAdd(m.prompt_id, m.mode, m.prompt);
-    const j = QUEUE.find(x => x.id === m.prompt_id);
-    if (j) { j.detached = true; j.agent = true; }
+    qAdd(m.prompt_id, m.mode, m.prompt, { detached: true, agent: true });
     return;
   }
   qHandle(m);
@@ -963,48 +983,16 @@ function onServerMessage(m) {
   else if (m.prompt_id) earlyEvents.set(m.prompt_id, [...(earlyEvents.get(m.prompt_id) || []), m].slice(-50));
 }
 function onServerBinary(data) {
-  const rj = QUEUE.find(x => x.state === 'running');
-  if (rj) rj.lastEv = performance.now();
+  window.h3State.touch(window.h3State.running()?.id);
   previewHandlers.forEach(f => f(data));
 }
 /* The first message of every connection: what the window missed while it was not connected.
    It is a snapshot, not a journal: events after it are updates, and a repeated or a missed event
-   cannot leave a queue row in a wrong state. The server sends it before any event of this socket. */
+   cannot leave a queue row in a wrong state. The server sends it before any event of this socket.
+   The snapshot itself is applied by state.js; the page only says what the engine is doing. */
 function onSnapshot(m) {
   if (typeof m.engine !== 'undefined') setEngine(!!m.engine);
-  const active = new Set();
-  (m.jobs || []).forEach(j => {
-    active.add(j.prompt_id);
-    let q = QUEUE.find(x => x.id === j.prompt_id);
-    if (!q) {
-      qAdd(j.prompt_id, j.mode, j.prompt || '');
-      q = QUEUE[QUEUE.length - 1];
-      if (q) { q.detached = !!j.agent; q.agent = !!j.agent; }
-    }
-    if (!q) return;
-    if (j.state === 'running') {
-      q.state = 'running'; q.stage = j.stage || q.stage; q.step = j.step; q.max = j.max;
-      q.t0 = q.t0 || performance.now();
-    } else {
-      q.state = 'queued';
-    }
-  });
-  (m.results || []).forEach(it => {
-    if (it.preview) { if (!DRAFTS.some(x => x.id === it.id)) addDraft(normItem(it)); }
-    else if (!LIB.some(x => x.id === it.id)) addToLib(normItem(it), new Date(it.date));
-  });
-  const recent = new Map((m.recent || []).map(r => [r.prompt_id, r]));
-  QUEUE.forEach(q => {
-    if (!['queued', 'running'].includes(q.state) || active.has(q.id)) return;
-    const res = (m.results || []).find(it => it.prompt_id === q.id);
-    const rec = recent.get(q.id);
-    if (res) { q.state = 'done'; q.itemId = res.id; }
-    else if (rec) {
-      q.state = rec.state === 'error' ? 'error' : rec.state === 'interrupted' ? 'stopped' : 'done';
-      if (rec.message) q.msg = rec.message;
-    }
-  });
-  qRender(); qJobTick();
+  window.h3State.resync(m);
 }
 let ENGINE_ON = true;
 function setEngine(on) {
@@ -1048,9 +1036,9 @@ let SQ_ASKED = false;
 async function askSavedQueue() {
   if (SQ_ASKED) return; SQ_ASKED = true;
   try {
-    const r = await (await fetch('/api/queue/saved')).json();
+    const r = await apiGet('/api/queue/saved');
     if (!r.count) return;
-    const cancel = () => fetch('/api/queue/discard', { method: 'POST' });
+    const cancel = () => apiPost('/api/queue/discard', {}).catch(() => {});
     const btn = $('#confirm [data-close]'); btn.addEventListener('click', cancel, { once: true });
     confirmBox('Продолжить очередь?', `В прошлый раз осталось ${r.count} незавершённых заданий (программу закрыли или пропало питание). Продолжить их? Задание, которое шло, начнётся заново. Если нажать «Отмена», они будут забыты.`, 'Продолжить', async () => {
       btn.removeEventListener('click', cancel);
@@ -1071,7 +1059,7 @@ function offerNewModes(s) {
     if (!$('#confirm').hidden) return setTimeout(show, 3000);  // another question is open: wait
     const name = { flux: 'Правка изображения: FLUX.2 klein (можно в коммерцию)', long: 'Видеостудия (клипы и ролики по сценам)' }[o.mode] || o.mode;
     const btn = $('#confirm [data-close]');
-    const later = () => fetch('/api/mode/offered', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: o.mode }) });
+    const later = () => apiPost('/api/mode/offered', { mode: o.mode }).catch(() => {});
     btn.addEventListener('click', later, { once: true });
     confirmBox('Новый режим', `В обновлении появился режим «${name}». Чтобы он заработал, нужно скачать модели (около ${String(o.gb).replace('.', ',')} ГБ). Добавить сейчас? Скачивание можно закрыть и продолжить позже, оно докачается с того же места.`, 'Добавить', async () => {
       btn.removeEventListener('click', later); await later();
@@ -1080,7 +1068,7 @@ function offerNewModes(s) {
           await postJSON('/api/mode/add', { mode: o.mode }); await loadStatus(); goTo('models');
           if (MD_NEED.length) mdStart(MD_NEED);
         } else {
-          if (!setupInfo) setupInfo = await (await fetch('/api/setup/info')).json();
+          if (!setupInfo) setupInfo = await apiGet('/api/setup/info');
           const c = setupInfo.config;
           await postJSON('/api/setup/install', { install_dir: c.install_dir, models_dir: c.models_dir || '', add_mode: o.mode });
           showSetupPane('progress'); setStep(2); resetProgress();
@@ -1101,7 +1089,7 @@ function warnDataFolder(s) {
 }
 async function loadStatus() {
   try {
-    const s = await (await fetch('/api/status')).json();
+    const s = await apiGet('/api/status');
     warnDataFolder(s);
     $('#setCustomBox').hidden = s.engine !== 'external';
     setEngine(s.online);
@@ -1122,7 +1110,7 @@ const g1 = n => (+n).toFixed(n >= 100 ? 0 : 1).replace(/\.0$/, '');
 async function pollSystem() {
   if (!API || document.hidden) return;
   try {
-    const s = await (await fetch('/api/system')).json();
+    const s = await apiGet('/api/system');
     const gpu = s.gpu;
     if (gpu) {
       $('#gpuName').textContent = gpu.name;
@@ -1607,15 +1595,12 @@ function previewPanel(el, st, opts) {
     try {
       const fd = opts.real.form();
       if (!fd.has('preview')) fd.append('preview', '1');   // the Library waits for «Добавить в библиотеку»
-      const r = await fetch(opts.real.url, { method: 'POST', body: fd });
-      const txt = await r.text();
-      try { res = JSON.parse(txt); } catch { res = { error: txt }; }
-      if (!r.ok) throw new Error(res.error || r.statusText);
+      res = await apiSend(opts.real.url, { method: 'POST', body: fd, timeout: 180000 });
     } catch (e) { go.disabled = false; if (run) toast('Ошибка: ' + e.message); else status.textContent = 'Ошибка: ' + e.message; return; }
     go.disabled = false;
     if (run) {  // the previous job keeps going in the queue; this panel now follows the new one
       clearInterval(run.tick); offPrompt(run.id);
-      const old = QUEUE.find(j => j.id === run.id); if (old) old.detached = true;
+      if (window.h3State.has(run.id)) window.h3State.update(run.id, { detached: true });
       run = null;
     }
     qAdd(res.prompt_id, meta.mode, meta.prompt);
@@ -1745,7 +1730,7 @@ function previewPanel(el, st, opts) {
   stopB.onclick = () => {
     if (!run?.real) return finish(false);
     status.textContent = 'Останавливаем…'; run.stopping = performance.now(); showStage();
-    fetch('/api/interrupt', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt_id: run.id }) });
+    apiPost('/api/interrupt', { prompt_id: run.id }).catch(() => {});
   };
 
   function finish(ok) {
@@ -1941,7 +1926,7 @@ async function vAccCheck() {
   const hint = $('.v-achint'); hint.hidden = true; hint.innerHTML = '';
   if (V.accel !== 'sla') return;
   try {
-    const st = await (await fetch('/api/status')).json();
+    const st = await apiGet('/api/status');
     const m = (st.models || []).find(x => x.role === 'sla_lora');
     if (m && !m.have) {
       hint.hidden = false;
@@ -1955,7 +1940,7 @@ async function vFusedCheck() {   // the model is chosen in this section, so it i
   hint.hidden = true; hint.innerHTML = '';
   if (V.unet !== 'fused') { V.fusedHave = null; return; }
   try {
-    const st = await (await fetch('/api/status')).json();
+    const st = await apiGet('/api/status');
     const m = (st.models || []).find(x => x.role === 'fused_unet');
     V.fusedHave = m ? !!m.have : null;
     if (m && !m.have) {
@@ -2213,7 +2198,7 @@ $('#apApply').onclick = () => {
 let vocalsOk = null;
 async function checkVocals() {
   if (!API) return;
-  try { vocalsOk = await (await fetch('/api/audio/info')).json(); } catch { vocalsOk = { available: false, reason: 'ComfyUI не запущен.' }; }
+  try { vocalsOk = await apiGet('/api/audio/info'); } catch { vocalsOk = { available: false, reason: 'ComfyUI не запущен.' }; }
   const b = $('#aVocals'); b.disabled = !vocalsOk.available;
   b.title = vocalsOk.available ? 'Оставить только голос, без музыки' : 'Недоступно: ' + vocalsOk.reason;
 }
@@ -2223,9 +2208,7 @@ $('#aVocals').onclick = async () => {
   const b = $('#aVocals'), old = b.textContent; b.disabled = true; b.textContent = 'Отделяем голос…'; stop();
   try {
     const fd = new FormData(); fd.append('file', wavSlice(abuf, 0, abuf.duration), 'a.wav');
-    const r = await fetch('/api/audio/separate', { method: 'POST', body: fd });
-    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'Не удалось отделить голос');
-    const nb = await actx.decodeAudioData(await r.arrayBuffer());
+    const nb = await actx.decodeAudioData(await apiSend('/api/audio/separate', { method: 'POST', body: fd, raw: 'arrayBuffer' }));
     commitEdit(nb, t => Math.min(t, nb.duration));
     toast('Голос отделён, музыки больше нет. Прослушайте (▶). Не понравилось — «Отменить».');
   } catch (e) { toast(e.message); }
@@ -2351,7 +2334,7 @@ async function openSetup() {
   const qs = new URLSearchParams({ modes: setupModes.join(',') });
   if ($('#instDir').value) qs.set('install_dir', $('#instDir').value);
   if (setupProfile) qs.set('profile', setupProfile);
-  setupInfo = await (await fetch('/api/setup/info?' + qs)).json();
+  setupInfo = await apiGet('/api/setup/info?' + qs);
   setupProfile = setupInfo.profile;
   if (setupInfo.installing) { showSetupPane('progress'); setStep(2); replaySetup(setupInfo); return; }
   const hw = setupInfo.hardware, c = setupInfo.config;
@@ -2364,7 +2347,7 @@ async function openSetup() {
   $('#hwVerdict').className = 'verdict ' + V[0]; $('#hwVerdict').textContent = V[1];
   $('#hwNotes').innerHTML = setupInfo.notes.map(n => `<li>${esc(n)}</li>`).join('')
     + (hw.nvidia && hw.driver && hw.driver < 580 ? '<li style="list-style:none;margin-left:-18px"><button class="btn pri" id="drvBtn" type="button">Скачать свежий драйвер NVIDIA</button></li>' : '');
-  const drvBtn = $('#drvBtn'); if (drvBtn) drvBtn.onclick = () => fetch('/api/open-driver-page', { method: 'POST' });
+  const drvBtn = $('#drvBtn'); if (drvBtn) drvBtn.onclick = () => apiPost('/api/open-driver-page', {}).catch(() => {});
   if (!$('#instDir').value) $('#instDir').value = setupInfo.install_dir;
 
   if (c.comfy_url) $('#comfyUrl').value = c.comfy_url;
@@ -2441,17 +2424,13 @@ $$('[data-pick]').forEach(b => b.onclick = async () => {
 });
 
 async function postJSON(url, body) {
-  // the HTTP rules (status, the server's own error text, a timeout that aborts) live in /ui/js/api.js
-  if (window.h3Api) return window.h3Api.postJSON(url, body);
-  const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
-  const txt = await r.text(); let j; try { j = JSON.parse(txt); } catch { j = { error: txt }; }
-  if (!r.ok) throw new Error(j.error || r.statusText);
-  return j;
+  // the page keeps its own door: JSON POSTs read like before, and the rules live in /ui/js/api.js
+  return apiPost(url, body);
 }
 // Library: own copies of the results (settings)
 async function resLoad(s) {
   if (!API) return;
-  try { s = s || await (await fetch('/api/results')).json(); } catch { return; }
+  try { s = s || await apiGet('/api/results'); } catch { return; }
   $('#resKeep').checked = s.keep; if (!$('#resDir').value || s.dir) $('#resDir').value = s.dir;
   $('#resBadge').textContent = s.lost ? `· файлов не найдено: ${s.lost}` : '';
   $('#resInfo').textContent = `Без копии: ${s.nocopy} · записей без файла: ${s.lost}`;
@@ -2461,8 +2440,8 @@ $('#resBox').addEventListener('toggle', () => { if ($('#resBox').open) resLoad()
 $('#resKeep').onchange = async e => { try { resLoad(await postJSON('/api/results', { keep: e.target.checked })); toast(e.target.checked ? 'Копии включены' : 'Копии выключены'); } catch (err) { toast(err.message); } };
 $('#resApply').onclick = async () => { try { resLoad(await postJSON('/api/results', { dir: $('#resDir').value })); toast('Папка копий сохранена: новые результаты пойдут туда'); } catch (err) { toast(err.message); } };
 $('#resBackfill').onclick = async () => { $('#resBackfill').disabled = true; try { const r = await postJSON('/api/results/backfill'); resLoad(r); toast(`Скопировано файлов: ${r.copied}`); } catch (err) { toast(err.message); } };
-$('#resClean').onclick = async () => { if (!confirm('Убрать из Библиотеки записи, у которых нет файла? Файлы на диске не затрагиваются.')) return; try { const r = await postJSON('/api/results/clean'); resLoad(r); toast(`Убрано записей: ${r.removed}`); const items = await (await fetch('/api/library')).json(); LIB.length = 0; items.forEach(it => LIB.push(normItem(it))); renderLib(); } catch (err) { toast(err.message); } };
-if (API) resLoad();
+$('#resClean').onclick = async () => { if (!confirm('Убрать из Библиотеки записи, у которых нет файла? Файлы на диске не затрагиваются.')) return; try { const r = await postJSON('/api/results/clean'); resLoad(r); toast(`Убрано записей: ${r.removed}`); const items = await apiGet('/api/library'); LIB.length = 0; items.forEach(it => LIB.push(normItem(it))); renderLib(); } catch (err) { toast(err.message); } };
+if (API) afterModules(resLoad);
 // «Увеличение видео и фото»: any file of the user, not only the ones made in the program
 function upPick(f) {
   if (!f) return;
@@ -2636,7 +2615,7 @@ $('#mdMirror').onchange = async e => {
 /* agents: other programs on this computer may drive the studio (Settings → Агенты) */
 async function loadAgents() {
   try {
-    const j = await (await fetch('/api/agent/allow')).json();
+    const j = await apiGet('/api/agent/allow');
     $('#setAgents').checked = !!j.enabled;
     $('#agentApiState').textContent = j.enabled ? 'включено' : 'выключено';
     $('#agentApiFile').textContent = j.file ? `${j.port ? `Порт ${j.port}. ` : ''}Адрес и ключ лежат в ${j.file}` : '';
@@ -2653,7 +2632,7 @@ loadAgents();
 /* the video card watch (Settings → Движок и видеокарта) */
 async function loadWatch() {
   try {
-    const s = await (await fetch('/api/system')).json();
+    const s = await apiGet('/api/system');
     const w = s.watch || {};
     $('#setWatchdog').checked = s.watchdog !== false;
     $('#watchStateTxt').textContent = s.watchdog === false ? 'выключено'
@@ -2676,7 +2655,7 @@ $('#engRestart').onclick = async e => {
 };
 loadWatch();
 $('#mdFix').onclick = async () => {
-  if (!setupInfo) setupInfo = await (await fetch('/api/setup/info')).json();
+  if (!setupInfo) setupInfo = await apiGet('/api/setup/info');
   const c = setupInfo.config;
   try {
     await postJSON('/api/setup/install', { install_dir: c.install_dir, models_dir: c.models_dir || '' });
@@ -2689,7 +2668,7 @@ $('#mdAdd').onclick = async e => {
     try { await postJSON('/api/mode/add', { mode: b.dataset.add }); toast('Режим добавлен: файлы моделей — в списке ниже'); loadStatus(); } catch (err) { toast(err.message); }
     return;
   }
-  if (!setupInfo) setupInfo = await (await fetch('/api/setup/info')).json();
+  if (!setupInfo) setupInfo = await apiGet('/api/setup/info');
   const c = setupInfo.config;
   try {
     await postJSON('/api/setup/install', { install_dir: c.install_dir, models_dir: c.models_dir || '', add_mode: b.dataset.add });
@@ -2700,7 +2679,7 @@ $('#mdAdd').onclick = async e => {
 let CLOUD = { enabled: false };
 async function loadCloud() {
   if (!API) return CLOUD;
-  CLOUD = await (await fetch('/api/cloud')).json();
+  CLOUD = await apiGet('/api/cloud');
   $$('.cloud-line').forEach(el => el.hidden = !CLOUD.enabled);
   document.body.classList.toggle('cloud-on', !!CLOUD.enabled);   // the RunningHub card is hidden for everyone except those who already switched it on (so they can switch it off)
   if (CLOUD.enabled) { $('#engTxt').textContent = 'облако'; $('#engDot').classList.remove('off'); }
@@ -2796,11 +2775,11 @@ function onMdl(m) {
 $('#mdOwnGo').onclick = () => $('#mdReset').click();
 // custom nodes the sections need, for people who use their own ComfyUI
 async function loadNodes() {
-  const card = $('#mdNodesCard'), st = await (await fetch('/api/status')).json().catch(() => ({}));
+  const card = $('#mdNodesCard'), st = await apiGet('/api/status').catch(() => ({}));
   card.hidden = st.engine !== 'external';
   $('#mdOwnCard').hidden = st.engine !== 'managed';
   if (card.hidden) return;
-  let r; try { r = await (await fetch('/api/nodes')).json(); } catch { return; }
+  let r; try { r = await apiGet('/api/nodes'); } catch { return; }
   const list = r.nodes || [];
   $('#mdNodes').innerHTML = list.map(n => `<div class="m"><b>${esc(n.pack)}<small>${esc(n.why)}${n.optional ? ' · необязательно' : ''}</small></b>
     <span class="hint" style="font-family:var(--mono);font-size:11px;word-break:break-all">${n.have ? '' : esc(n.url)}</span>
@@ -2826,9 +2805,9 @@ $('.nav[data-view="models"]').addEventListener('click', async () => {
   try { localStorage.setItem('h3-seen-settings', '1'); } catch {}
   firstRun(SET_LOCK);
   if (!API) return;
-  const s = await (await fetch('/api/status')).json();
+  const s = await apiGet('/api/status');
   if (!s.configured) openSetup();
-  else { showSetupPane('status'); setupInfo = setupInfo || await (await fetch('/api/setup/info')).json(); renderModels(s); mountCloud($('#mdCloud'), false).then(() => { $('#mdCloudBox').open = !!CLOUD.enabled; }); loadNodes(); }
+  else { showSetupPane('status'); setupInfo = setupInfo || await apiGet('/api/setup/info'); renderModels(s); mountCloud($('#mdCloud'), false).then(() => { $('#mdCloudBox').open = !!CLOUD.enabled; }); loadNodes(); }
 });
 
 /* ---------- LIBRARY ---------- */
@@ -2848,7 +2827,7 @@ const TOASTS = [];
 const noteMsg = s => { TOASTS.push(new Date().toLocaleTimeString('ru') + ' ' + String(s).slice(0, 300)); if (TOASTS.length > 20) TOASTS.shift(); };
 window.addEventListener('error', e => noteMsg('Ошибка скрипта: ' + e.message + ' (' + (e.filename || '').split('/').pop() + ':' + e.lineno + ')'));
 window.addEventListener('unhandledrejection', e => noteMsg('Ошибка: ' + (e.reason && e.reason.message || e.reason)));
-$('#supBtn').onclick = () => fetch('/api/support', { method: 'POST' }).then(() => toast('Открываю страницу поддержки в браузере'), () => {});
+$('#supBtn').onclick = () => apiPost('/api/support', {}).then(() => toast('Открываю страницу поддержки в браузере'), () => {});
 $('#repBtn').onclick = async () => {
   const b = $('#repBtn'); b.disabled = true;
   try {
@@ -2879,51 +2858,44 @@ function fmtDate(d) {
 }
 const fileName = it => `h3_${it.mode}_${it.date.toISOString().slice(0, 16).replace(/[-:T]/g, '')}.${it.ext || 'mp4'}`;
 
-/* ---------- общая очередь заданий ---------- */
-const QUEUE = [];
+/* ---------- общая очередь заданий: состояние живёт в /ui/js/state.js ---------- */
+// The page renders the queue and asks the module to change it; a record itself is written only
+// there. `qAdd`/`qHandle` stay as the page's two doors: the panels and the event router call them,
+// the rules (one record per id, the outcome of a job, one publication of a result) are in the module.
 const QSTAGE = { queued: 'ждёт своей очереди', load: 'загрузка моделей', encode: 'кодирование', sample: 'генерация', sample2: 'проход 2', upscale: 'апскейл',
   decode: 'сборка видео', save: 'сохранение', cloud_queued: 'в очереди RunningHub', cloud_run: 'считается в облаке', ffmpeg: 'сборка FFmpeg' };
-function qAdd(id, mode, prompt) {
-  const j = { id, mode, prompt: prompt || '', state: 'queued', stage: 'queued', t0: null, detached: false, lastEv: performance.now() };
-  QUEUE.push(j);
-  (earlyEvents.get(id) || []).forEach(qHandle);
-  qRender();
+function qAdd(id, mode, prompt, extra) {
+  const j = window.h3State.addJob({ id, mode, prompt, ...(extra || {}) });
+  (earlyEvents.get(id) || []).forEach(qHandle);   // events of this id that came before the panel
+  return j;
 }
 function qHandle(m) {
-  if (m.type === 'done') (m.items || [m.item]).filter(Boolean).forEach(it => {   // also work started by an agent
-    if (it.preview) addDraft(normItem(it));   // a picture or a clip that waits for «Добавить в библиотеку»
-    else if (!LIB.some(x => x.id === it.id)) addToLib(normItem(it), new Date(it.date));
-  });
-  const j = QUEUE.find(x => x.id === m.prompt_id); if (!j) return;
-  j.lastEv = performance.now();
-  if (m.type === 'stage') {
-    const samp = String(m.stage).startsWith('sample');
-    if (samp && (j.stage !== m.stage || (m.scene && j.scene !== m.scene))) j.step1T = null;
-    if (samp && m.step) { j.stepT = performance.now(); if (m.step === 1) j.step1T = j.stepT; }
-    j.scene = m.scene; j.nscenes = m.scenes;
-    j.state = 'running'; j.stage = m.stage; j.step = m.step; j.max = m.max; j.t0 = j.t0 || performance.now();
-  } else if (m.type === 'done') {
-    const items = (m.items || [m.item]).filter(Boolean);
-    j.state = 'done'; j.took = j.t0 ? (performance.now() - j.t0) / 1000 : 0; j.itemId = (m.item || items[0] || {}).id;
-    j.preview = !!items.length && items.every(it => it.preview);   // a picture that is not in the Library yet
-    items.forEach(it => {
-      if (!it.preview && !LIB.some(x => x.id === it.id)) addToLib(normItem(it), new Date(it.date));
-      if (it.long && typeof RM !== 'undefined' && RM.long && RM.long.root._partDone) RM.long.root._partDone(normItem(it));
-    });
-    if (j.mode === 'upscale' && j.itemId && $('#view-queue').classList.contains('active') && $('#viewer').hidden) setTimeout(() => openViewer(j.itemId), 400);  // show before/after at once
-    if (j.detached) toast(j.preview ? `Готово: ${MODE_NAME[j.mode] || 'результат'} — он в разделе, в Библиотеку сам не попадёт`
-      : `${j.agent ? 'Агент: готово' : 'Готово'}: ${MODE_NAME[j.mode] || 'видео'} — оно в Библиотеке`);
-  } else if (m.type === 'error') { j.state = 'error'; j.msg = m.message; if (j.detached) toast('Задание не получилось: ' + m.message); }
-  else if (m.type === 'interrupted') j.state = 'stopped';
-  qRender();
-  qJobTick();
+  window.h3State.handle(m);
 }
+/* every change of the state redraws the queue and the running job's details: one notification path,
+   no matter whether the change came from an event, a snapshot or the page itself */
+window.h3State.subscribe(change => {
+  qRender(); qJobTick();
+  if (!change || change.type !== 'done' || !change.record) return;
+  const j = change.record;
+  if (j.mode === 'upscale' && j.itemId && $('#view-queue').classList.contains('active') && $('#viewer').hidden) setTimeout(() => openViewer(j.itemId), 400);  // show before/after at once
+  if (j.detached) toast(j.preview ? `Готово: ${MODE_NAME[j.mode] || 'результат'} — он в разделе, в Библиотеку сам не попадёт`
+    : `${j.agent ? 'Агент: готово' : 'Готово'}: ${MODE_NAME[j.mode] || 'видео'} — оно в Библиотеке`);
+});
+window.h3State.configure({
+  onResult: (it, via) => {
+    if (it.preview) { if (!DRAFTS.some(x => x.id === it.id)) addDraft(it); }
+    else if (!LIB.some(x => x.id === it.id)) addToLib(it, it.date);
+    // a scene of a long video: only a live event continues the chain, a snapshot must not repeat it
+    if (via === 'event' && it.long && typeof RM !== 'undefined' && RM.long && RM.long.root._partDone) RM.long.root._partDone(it);
+  },
+});
 const QBASE = { queued: .02, load: .05, encode: .12, sample: .15, upscale: .67, sample2: .7, decode: .92, save: .98, cloud_queued: .05, cloud_run: .4, ffmpeg: .02 };
 /* what the user should see about a job: how far it is, and whether it is alive (green), quiet (yellow) or probably stuck (red) */
 function jobView(j) {
   const now = performance.now();
   if (j.state === 'queued') {
-    const n = QUEUE.filter(x => x.state === 'queued' || x.state === 'running').indexOf(j);
+    const n = window.h3State.position(j);
     return { p: 0, lvl: 'ok', label: 'В очереди', txt: n > 0 ? `Ждёт своей очереди: впереди ${n} ${n === 1 ? 'задание' : 'задания(й)'}` : 'Ждёт, пока освободится ComfyUI' };
   }
   const samp = String(j.stage).startsWith('sample') && j.max;
@@ -2950,7 +2922,7 @@ function jobView(j) {
   return { p, lvl, label, txt };
 }
 function dockRender() {
-  const act = QUEUE.filter(j => j.state === 'queued' || j.state === 'running');
+  const act = window.h3State.active();
   const j = act.find(x => x.state === 'running') || act[0], d = $('#dock');
   const hide = !j || $('#view-queue').classList.contains('active') || !!document.querySelector('.view.active .pbox:not([hidden])') || !$('#viewer').hidden;
   d.hidden = hide; if (hide) return;
@@ -2963,10 +2935,10 @@ function dockRender() {
 $('#dock').onclick = () => goTo('queue');
 function qRender() {
   dockRender();
-  const act = QUEUE.filter(j => j.state === 'queued' || j.state === 'running');
+  const act = window.h3State.active();
   const badge = $('#qBadge'); badge.hidden = !act.length; badge.textContent = act.length;
   const box = $('#qList'); if (!box) return;
-  const fin = QUEUE.filter(j => !act.includes(j)).slice(-30).reverse();
+  const fin = window.h3State.finished().slice(-30).reverse();
   $('#qClear').hidden = !fin.length;
   const row = (j, n) => {
     const run = j.state === 'running', samp = run && String(j.stage).startsWith('sample') && j.max;
@@ -2986,7 +2958,7 @@ function qRender() {
     return `<div class="q-row${cls}" data-id="${j.id}" role="button" tabindex="0" title="Открыть подробности задания" aria-label="${esc(mn + ': подробности')}"><div class="q-n">${n || (j.state === 'done' ? '✓' : '·')}</div><div><div class="q-t">${esc(pt === mn ? mn : mn + ': ' + pt)}</div>`
       + `<div class="q-s">${esc(st)}</div>${big}</div><div class="q-btns">${det}${cmpB || btn}</div></div>`;
   };
-  box.innerHTML = QUEUE.length ? act.map((j, i) => row(j, i + 1)).join('') + fin.map(j => row(j, 0)).join('')
+  box.innerHTML = window.h3State.count() ? act.map((j, i) => row(j, i + 1)).join('') + fin.map(j => row(j, 0)).join('')
     : '<div class="q-empty">Очередь пуста. Нажмите «Сгенерировать» в любом разделе — задание появится здесь.</div>';
 }
 $('#qList').addEventListener('click', e => {
@@ -3000,15 +2972,15 @@ $('#qList').addEventListener('click', e => {
   if (b.dataset.q === 'lib') return goTo('library');
   if (b.dataset.q === 'cmp') return openViewer(b.dataset.id);
   b.disabled = true;
-  const sj = QUEUE.find(j => j.id === b.dataset.id); if (sj) { sj.stopping = true; qRender(); }   // the list is redrawn every second: remember that a stop was asked, so the button doesn't come back
-  fetch('/api/interrupt', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt_id: b.dataset.id }) });
+  window.h3State.markStopping(b.dataset.id);   // the list is redrawn every second: remember that a stop was asked, so the button doesn't come back
+  window.h3Api?.postJSON('/api/interrupt', { prompt_id: b.dataset.id }).catch(() => {});
 });
 $('#qList').addEventListener('keydown', e => {
   const row = e.target.closest('.q-row'); if (!row || e.target.closest('button')) return;
   if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); if (row.dataset.id) openJobWindow(row.dataset.id); }
 });
-$('#qClear').onclick = () => { for (let i = QUEUE.length - 1; i >= 0; i--) if (!['queued', 'running'].includes(QUEUE[i].state)) QUEUE.splice(i, 1); qRender(); };
-setInterval(() => { if (QUEUE.some(j => j.state === 'running' || j.state === 'queued')) qRender(); else dockRender(); qJobTick(); }, 1000);
+$('#qClear').onclick = () => { window.h3State.removeFinished(); };
+setInterval(() => { if (window.h3State.active().length) qRender(); else dockRender(); qJobTick(); }, 1000);
 qRender();
 
 /* ---------- подробности одного задания: что использовалось, формат, промпт, параметры ---------- */
@@ -3027,24 +2999,25 @@ function qJobClose() {
   QJ = null;
 }
 async function openJobWindow(id) {
-  const j = QUEUE.find(x => x.id === id); if (!j) return;
+  const j = window.h3State.get(id); if (!j) return;
   QJ = { id, data: null, error: '' };
   $('#qjob').hidden = false;
   qJobPaint();
   if (!API) { QJ.error = 'Подробности берутся у программы, а страница открыта без неё'; qJobPaint(); return; }
   let data = null, error = '';
   try {
-    const r = await fetch('/api/job/' + encodeURIComponent(id), { cache: 'no-store' });
-    if (r.ok) data = await r.json();
-    else error = r.status === 404 ? 'Программа уже не помнит это задание: подробности не сохранились' : 'Не удалось загрузить подробности задания';
-  } catch (e) { error = 'Нет связи с программой: ' + e.message; }
+    data = await apiGet('/api/job/' + encodeURIComponent(id), { cache: 'no-store' });
+  } catch (e) {
+    error = e.status === 404 ? 'Программа уже не помнит это задание: подробности не сохранились'
+      : e.status ? 'Не удалось загрузить подробности задания' : 'Нет связи с программой: ' + e.message;
+  }
   if (!QJ || QJ.id !== id) return;   // пока грузили, открыли другое задание
   QJ.data = data; QJ.error = error;
   qJobPaint();
 }
 function qJobPaint() {
   if (!QJ || $('#qjob').hidden) return;
-  const j = QUEUE.find(x => x.id === QJ.id) || {};
+  const j = window.h3State.get(QJ.id) || {};
   const d = QJ.data, meta = { ...(d && d.meta || {}) };
   const mode = meta.mode || j.mode || '';
   const prompt = meta.prompt || j.prompt || '';
@@ -3118,7 +3091,7 @@ function qJobMediaPaint(meta, mode) {
 }
 function qJobResultPaint() {
   if (!QJ) return;
-  const j = QUEUE.find(x => x.id === QJ.id) || {};
+  const j = window.h3State.get(QJ.id) || {};
   const items = LIB.filter(x => x.prompt_id === QJ.id);
   const it = items.find(x => x.id === j.itemId) || items.find(x => !x.missing) || items[0];
   $('#qjResultSec').hidden = !it;
@@ -3133,7 +3106,7 @@ function qJobResultPaint() {
 }
 function qJobTick() {
   if (!QJ || $('#qjob').hidden) return;
-  const j = QUEUE.find(x => x.id === QJ.id) || {};
+  const j = window.h3State.get(QJ.id) || {};
   const state = j.state || (QJ.data && QJ.data.state) || 'unknown';
   const chip = $('#qjState'), bar = $('#qjBar');
   let txt = 'Задание', cls = '', p = null, note = '';
@@ -3170,8 +3143,9 @@ $('#qjCopy').onclick = () => {
   navigator.clipboard?.writeText(t).then(() => toast('Промпт скопирован'), () => toast('Не удалось скопировать'));
 };
 $('#qjStop').onclick = () => {
-  const j = QUEUE.find(x => x.id === QJ?.id); if (!j) return;
-  j.stopping = true; fetch('/api/interrupt', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt_id: j.id }) });
+  const j = window.h3State.get(QJ?.id); if (!j) return;
+  window.h3State.markStopping(j.id);
+  window.h3Api?.postJSON('/api/interrupt', { prompt_id: j.id }).catch(() => {});
   qJobTick(); qRender();
 };
 
@@ -3200,9 +3174,7 @@ async function jobFiles(meta) {
   let lost = 0;
   const got = await Promise.all(list.map(async x => {
     try {
-      const r = await fetch(x.url, { cache: 'no-store' });
-      if (!r.ok) throw new Error(String(r.status));
-      const blob = await r.blob();
+      const blob = await apiGet(x.url, { cache: 'no-store', raw: 'blob' });
       const kind = x.kind === 'video' || x.kind === 'audio' ? x.kind : 'image';
       const type = blob.type || (kind === 'image' ? 'image/png' : kind === 'video' ? 'video/mp4' : 'audio/wav');
       const file = new File([blob], x.file || ('job.' + { image: 'png', video: 'mp4', audio: 'wav' }[kind]), { type });
@@ -3322,7 +3294,7 @@ async function jobEditFill(meta, mode, files) {
 async function jobEditOpen() {
   const d = QJ && QJ.data; if (!d) { toast('Подробности задания ещё загружаются'); return; }
   const meta = { ...(d.meta || {}) };
-  const mode = meta.mode || (QUEUE.find(x => x.id === QJ.id) || {}).mode || '';
+  const mode = meta.mode || (window.h3State.get(QJ.id) || {}).mode || '';
   const name = JOB_EDITOR[mode];
   if (!name) { toast(JOB_NO_FORM[mode] || 'У этого задания нет формы с настройками'); return; }
   const btn = $('#qjEdit'), label = btn.textContent, jid = QJ.id;
@@ -3382,7 +3354,7 @@ async function keepDraftItem(it) {
   const kept = normItem(r.item);
   const i = DRAFTS.findIndex(x => x.id === kept.id); if (i >= 0) DRAFTS.splice(i, 1);
   addToLib(kept, kept.date);
-  const j = QUEUE.find(x => x.id === kept.prompt_id); if (j) { j.preview = false; qRender(); }   // the queue row stops saying «черновик»
+  if (window.h3State.has(kept.prompt_id)) window.h3State.update(kept.prompt_id, { preview: false });   // the queue row stops saying «черновик»
   toast(kept.kind === 'image' ? 'Картинка добавлена в Библиотеку' : 'Клип добавлен в Библиотеку');
   return kept;
 }
@@ -3466,8 +3438,7 @@ function askDelete(ids) {
       $$('video').forEach(v => { try { v.pause(); v.removeAttribute('src'); v.load(); } catch {} });
       toast(ids.length === 1 ? 'Удаляем…' : `Удаляем ${ids.length}…`);
       try {
-        const r = await fetch('/api/library/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids }) });
-        const j = await r.json();
+        const j = await apiPost('/api/library/delete', { ids });
         if (j.failed?.length) { toast(`Не удалось удалить: ${j.failed.length}. Возможно, файл открыт в другой программе.`); const bad = new Set(j.failed); ids = ids.filter(x => !bad.has(x)); }
       } catch { toast('Не удалось удалить'); ids = []; }
     }
@@ -3479,7 +3450,7 @@ function askDelete(ids) {
 }
 function setFav(it, fav) {
   it.fav = fav;
-  if (API) fetch(`/api/library/${it.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fav }) });
+  if (API) apiSend(`/api/library/${it.id}`, { method: 'PATCH', body: { fav } }).catch(() => {});
 }
 function openViewer(id) {
   const it = byId(id); if (!it) return; openId = id;
@@ -4010,7 +3981,7 @@ function makeRefMode(cfg) {
         const all = loadAll(); all[run] = proj;
         Object.keys(all).sort((a, b) => all[b].t - all[a].t).slice(8).forEach(k => delete all[k]);   // the 8 latest projects
         localStorage.setItem(PKEY, JSON.stringify(all)); localStorage.setItem('h3-long-last', run);
-        fetch('/api/long/project', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ run, project: proj }) }).catch(() => {});
+        apiPost('/api/long/project', { run, project: proj }).catch(() => {});
         $$('.ref', imgsEl).forEach((r, i) => putFile(`long/${run}/img${i}`, r._file));
         putFile(`long/${run}/aud0`, slotA ? slotA._file : null);
         putFile(`long/${run}/src`, root._src && root._src.file ? root._src.file : null);
@@ -4020,20 +3991,20 @@ function makeRefMode(cfg) {
     root._save = () => { clearTimeout(saveT); saveT = setTimeout(saveNow, 700); };
     root._snap = () => { saveNow(); return JSON.parse(JSON.stringify(loadAll()[root._run] || null)); };   // a stage of the work: the whole project as it is now
     root._openStage = async (proj, sid) => {
-      let r = {}; try { r = await (await fetch('/api/long/stage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ run: proj.run, id: sid, action: 'restore' }) })).json(); } catch {}
+      let r = {}; try { r = await apiPost('/api/long/stage', { run: proj.run, id: sid, action: 'restore' }); } catch {}
       const all = loadAll(); all[proj.run] = { ...proj, t: Date.now() }; localStorage.setItem(PKEY, JSON.stringify(all));
       root._diskRefs = !!r.refs; try { const ok = await root._openRun(proj.run); return { ok, files: !!r.ok }; } finally { root._diskRefs = false; }
     };
     const putInto = async (input, f) => { if (!input || !(f instanceof File)) return; const dt = new DataTransfer(); dt.items.add(f); input.files = dt.files; input.dispatchEvent(new Event('change')); };
     root._openRun = async run => {   // load a saved project (from the library: continue this video)
       let p = loadAll()[run], onDisk = null;
-      try { onDisk = await (await fetch('/api/long/project?run=' + run)).json(); } catch {}
+      try { onDisk = await apiGet('/api/long/project?run=' + run); } catch {}
       if (!p && onDisk && onDisk.project) p = onDisk.project;
       if (!p) return false;
       const getRef = async key => {   // a picture of the project: the browser's memory, else the copy kept by the program (after a stage is opened: the copy first)
         if (!root._diskRefs) { const f = await memFile('get', `long/${run}/${key}`); if (f instanceof File) return f; }
         const nm = ((onDisk && onDisk.refs) || []).find(x => x.startsWith(key + '.')); if (!nm) return null;
-        try { const r = await fetch(`/api/long/ref/${run}/${nm}`); if (!r.ok) return null; return new File([await r.blob()], nm, { type: r.headers.get('content-type') || 'image/png' }); } catch { return null; }
+        try { const r = await apiGet(`/api/long/ref/${run}/${nm}`, { raw: 'response' }); return new File([await r.blob()], nm, { type: r.headers.get('content-type') || 'image/png' }); } catch { return null; }
       };
       root._run = run; root._restoring = true;
       const okQ = v => QUALITY_ALL.some(x => x.id === v) ? v : '720p';   // a broken saved value (a mode name instead of a size) must not get through
@@ -4058,7 +4029,7 @@ function makeRefMode(cfg) {
       const okDone = d => d && byId(d.id) ? { sig: d.sig, url: d.url, id: d.id, text: d.text } : null;
       p.scenes.forEach((x, i) => { cards[i]._dn = { final: okDone(x.done), draft: okDone(x.draftDone) }; });
       // the continuation point of the last finished scene must still be on the disk (for the finished row and for the draft row)
-      let st = {}; try { st = await (await fetch('/api/long/state?run=' + run)).json(); } catch {}
+      let st = {}; try { st = await apiGet('/api/long/state?run=' + run); } catch {}
       for (const mk of ['final', 'draft']) {
         root._q = mk; const ready = readyUpTo(), parts = (mk === 'draft' ? st.draft_parts : st.parts) || [];
         if (ready && !parts.includes(ready - 1)) { cards.forEach(c => { c._dn[mk] = null; }); toast('Точка продолжения не найдена на диске: сцены нужно сделать заново.'); }
@@ -4071,7 +4042,7 @@ function makeRefMode(cfg) {
     setTimeout(async () => {
       try {
         let last = localStorage.getItem('h3-long-last');
-        if (!last) { const r = await (await fetch('/api/long/project?last=1')).json(); last = r.run || ''; }
+        if (!last) { const r = await apiGet('/api/long/project?last=1'); last = r.run || ''; }
         if (last) await root._openRun(last);
       } catch {}
       root._restoring = false; root._save();
@@ -4117,7 +4088,7 @@ function makeRefMode(cfg) {
       $('.sc-redogo', c).onclick = () => { const i = $$('.sc', root).indexOf(c); c._var = (c._var || 0) + 1; root._chainEnd = null; root._chainPart = i; root._target = i; $('.go', $('.rm-preview', root)).click(); };
       $('.sc-do', c).onclick = () => {
         const i = $$('.sc', root).indexOf(c), ready = readyUpTo();
-        const active = QUEUE.some(j => j.mode === 'long' && (j.state === 'queued' || j.state === 'running'));
+        const active = window.h3State.active().some(j => j.mode === 'long');
         if (!root._canGo(i)) {   // the previous scene is not ready
           if (active && root._pending && i === root._pending.k + 1) { root._chainPart = root._pending.k; root._chainEnd = i; toast(`Сцена ${i + 1} запустится сама, когда будет готова сцена ${i}.`); return; }
           $('.sc-fresh', c).checked = true; recount();   // it does not wait: it is made as a new shot (not continuing the previous scene)
@@ -4235,7 +4206,7 @@ function makeRefMode(cfg) {
     // (before, any such error landed in the same catch and left «Черновик недоступен» for good, even with the file in place).
     const checkDmad = async first => {
       let r;
-      try { r = await (await fetch('/api/loras/custom')).json(); } catch { r = null; }
+      try { r = await apiGet('/api/loras/custom'); } catch { r = null; }
       if (!r || !Array.isArray(r.files)) { if (root._dmad == null) { root._dmad = false; try { setQ('final'); } catch (e) { console.warn(e); } } return; }   // ComfyUI did not answer: try again when the section is opened
       const was = root._dmad;
       root._dmadFiles = r.files.filter(f => /dmad/i.test(f));
@@ -4346,12 +4317,10 @@ function makeRefMode(cfg) {
       if (!slot._file) { toast('Сначала загрузите аудио'); return; }
       const b = $('#lmVoice', root), old = b.textContent; b.disabled = true; b.textContent = 'Отделяем голос…';
       try {
-        const info = await (await fetch('/api/audio/info')).json();
+        const info = await apiGet('/api/audio/info');
         if (!info.available) throw new Error('Недоступно: ' + info.reason);
         const fd = new FormData(); fd.append('file', slot._file, slot._file.name);
-        const r = await fetch('/api/audio/separate', { method: 'POST', body: fd });
-        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'Не удалось отделить голос');
-        const blob = await r.blob();
+        const blob = await apiSend('/api/audio/separate', { method: 'POST', body: fd, raw: 'blob' });
         slot._orig = slot._orig || slot._file;
         const nf = new File([blob], slot._orig.name.replace(/\.[^.]+$/, '') + '_голос.flac', { type: blob.type || 'audio/flac' });
         slot._file = nf; $('span', slot).textContent = nf.name; $('#lmVoiceBack', root).hidden = false;
@@ -4553,7 +4522,7 @@ function makeRefMode(cfg) {
     hint.hidden = true; hint.innerHTML = '';
     if (S.unet !== 'fused') { S.fusedHave = null; return; }
     try {
-      const st = await (await fetch('/api/status')).json();
+      const st = await apiGet('/api/status');
       const m = (st.models || []).find(x => x.role === 'fused_unet');
       S.fusedHave = m ? !!m.have : null;
       if (m && !m.have) {
@@ -4563,21 +4532,21 @@ function makeRefMode(cfg) {
       }
     } catch {}
   }
-  if (cfg.mode === 'refs') { REF_FUSED_CHECK = rmFusedCheck; rmFusedCheck(); }
+  if (cfg.mode === 'refs') { REF_FUSED_CHECK = rmFusedCheck; afterModules(rmFusedCheck); }
   upd();
   if (cfg.mode === 'refs') mountLoras($('.rm-loras', root), S, ['realism', 'motion']);
-  if ((cfg.mode === 'refs' || cfg.swap) && API) fetch('/api/status').then(r => r.json()).then(st => {  // Pika is the default when its file is there
+  if ((cfg.mode === 'refs' || cfg.swap) && API) afterModules(() => apiGet('/api/status').then(st => {  // Pika is the default when its file is there
     const m = (st.models || []).find(x => x.role === 'pika_lora'); S.pikaHave = !!(m && m.have);
     if (S.pikaHave) { S.accel = 'pika'; S.steps = 8; }
     upd();
-  }).catch(() => {});
+  }).catch(() => {}));
   if (cfg.mode === 'actor') { S.loras = { realism: { on: true, v: .7 } }; mountLoras($('.rm-loras', root), S, ['realism']); }
 
   if (cfg.mode === 'action' && API) {
     const box = $('.rm-act', root);
     const check = async () => {
       try {
-        const a = await (await fetch('/api/action/info')).json();
+        const a = await apiGet('/api/action/info');
         S.faithful = a.faithful; upd();
         // only the LoRAs this ComfyUI actually has can be switched and tuned
         mountLoras($('.rm-loras', root), S, [...(a.dmad ? ['dmad'] : []), ...(a.speed ? ['speed'] : [])]);
@@ -4591,7 +4560,7 @@ function makeRefMode(cfg) {
       } catch { box.innerHTML = '<span class="hint">ComfyUI не отвечает</span>'; }
     };
     $(`.nav[data-view="action"]`).addEventListener('click', check);
-    check();
+    afterModules(check);
   }
   return { root, S, upd, voice: () => files('.rm-auds .slot').length, prompt: () => promptEl(), imgSlots: () => $$('.ref input', imgsEl) };
 }
@@ -4720,8 +4689,8 @@ function openRent() {
     <div class="note" style="margin-top:12px"><span><b>Про деньги.</b> Пока машина включена, оплата идёт даже без работы. Закончили: удалите машину (диск с моделями можно оставить). Ключ и ссылку никому не показывайте.</span></div>
     <div class="rent-row"><button class="btn" data-site type="button">Открыть сайт Immers.Cloud</button><button class="btn pri" data-connect type="button">Подключить арендованный сервер</button></div>
     <div class="hint" id="rentRef" style="margin-top:10px;font-size:12.5px;line-height:1.5" hidden>Кнопка «Открыть сайт» ведёт по <b>реферальной ссылке автора программы</b>. Если зарегистрироваться по ней, Immers.Cloud начислит вам <b>бонус 20% от суммы первого пополнения баланса</b>. Автор программы за это получает 10% от ваших платежей в Immers.Cloud. Цены для вас от этого не растут.</div></div>`;
-  fetch('/api/rent/info').then(r => r.json()).then(j => { const el = $('#rentRef'); if (el) el.hidden = !j.ref; }).catch(() => {});
-  m.onclick = e => { if (e.target === m || e.target.closest('[data-x]')) { m.hidden = true; return; } if (e.target.closest('[data-site]')) { fetch('/api/rent/open', { method: 'POST' }); return; } if (e.target.closest('[data-connect]')) { m.hidden = true; connectRent(); } };
+  afterModules(() => apiGet('/api/rent/info').then(j => { const el = $('#rentRef'); if (el) el.hidden = !j.ref; }).catch(() => {}));
+  m.onclick = e => { if (e.target === m || e.target.closest('[data-x]')) { m.hidden = true; return; } if (e.target.closest('[data-site]')) { apiPost('/api/rent/open', {}).catch(() => {}); return; } if (e.target.closest('[data-connect]')) { m.hidden = true; connectRent(); } };
 }
 $('#mdRentCard').addEventListener('click', e => { const b = e.target.closest('[data-rent]'); if (!b) return; if (b.dataset.rent === 'how') openRent(); else connectRent(); });
 $('#view-presets').innerHTML = `<div class="pr-steps" id="prSteps"><span class="st"><i>1</i>Тип</span><u></u><span class="st"><i>2</i>Вариант</span><u></u><span class="st"><i>3</i>Создать</span></div>
@@ -4751,7 +4720,7 @@ $('#view-presets .pr-grid').onclick = e => {
   const c = e.target.closest('.pr-card'); if (c) goTo(c.dataset.p);
 };
 async function presetsHave() {
-  try { const st = await (await fetch('/api/status')).json(); (st.models || []).forEach(m => { PR.have[m.role] = !!m.have; }); } catch {}
+  try { const st = await apiGet('/api/status'); (st.models || []).forEach(m => { PR.have[m.role] = !!m.have; }); } catch {}
   return PR.have;
 }
 async function swapCheck() {
@@ -4893,9 +4862,7 @@ function renderMsgs() {
 /* audio in the chat: words from a clip (for lipsync prompts) and voice input */
 async function transcribeWav(blob, lang = 'auto') {
   const fd = new FormData(); fd.append('file', blob, 'a.wav'); fd.append('lang', lang);
-  const r = await fetch('/api/speech/transcribe', { method: 'POST', body: fd });
-  const j = await r.json(); if (!r.ok) throw new Error(j.error || 'Не удалось распознать');
-  return j;
+  return await apiSend('/api/speech/transcribe', { method: 'POST', body: fd });
 }
 function needSpeech() {
   if (AG.status?.speech_ready) return false;
@@ -4946,7 +4913,7 @@ $('#agLib').onclick = () => {
       if (tab === 'img') { await agAttachFile(await libToFile(it)); toast('Изображение добавлена в чат'); }
       else {
         toast('Берём звук из видео…');
-        const buf = await new AudioContext().decodeAudioData(await (await fetch(it.url)).arrayBuffer());
+        const buf = await new AudioContext().decodeAudioData(await apiGet(it.url, { raw: 'arrayBuffer' }));
         if (buf.duration > 120) toast('Длинное аудио: берём первые 2 минуты.');
         const d = Math.min(buf.duration, 120);
         await setChatAudio(wavSlice(buf, 0, d), (it.label || it.sub || 'видео из Библиотеки'), d);
@@ -5016,9 +4983,9 @@ async function agSend() {
   if (AG.target === 'actor') ctx.voice = RM.actor.voice() ? 1 : 0;
   if (AG.target === 'long') ctx.long = { sound: RM.long.root._snd, secs: $$('.sc input[type=range]', RM.long.root).map(r => +r.value) };
   try {
-    const r = await fetch('/api/agent/chat', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: AG.ctrl.signal,
-      body: JSON.stringify({ target: AG.target, ctx, think: AG.think, messages: AG.msgs.slice(0, -1).map(m => ({ role: m.role, content: m.content, images: m.images, frames: m.nframes || 0 })) }),
+    const r = await apiSend('/api/agent/chat', {
+      method: 'POST', signal: AG.ctrl.signal, raw: 'response', timeout: 0,
+      body: { target: AG.target, ctx, think: AG.think, messages: AG.msgs.slice(0, -1).map(m => ({ role: m.role, content: m.content, images: m.images, frames: m.nframes || 0 })) },
     });
     const reader = r.body.getReader(), dec = new TextDecoder(); let buf = '';
     for (;;) {
@@ -5060,14 +5027,14 @@ $('#agSend').onclick = agSend;
 async function saveChat() {
   if (!API || !AG.msgs.length) return;
   AG.id = AG.id || Math.random().toString(36).slice(2, 14).replace(/[^a-z0-9]/g, 'x');
-  await fetch(`/api/agent/chats/${AG.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ target: AG.target, messages: AG.msgs.map(({ files, status, audioFile, ...m }) => m) }) });
+  await apiSend(`/api/agent/chats/${AG.id}`, { method: 'PUT',
+    body: { target: AG.target, messages: AG.msgs.map(({ files, status, audioFile, ...m }) => m) } }).catch(() => {});
   loadChats();
 }
 function fmtShort(iso) { return iso ? fmtDate(new Date(iso)) : ''; }
 async function loadChats() {
   if (!API) return;
-  const list = await (await fetch('/api/agent/chats')).json();
+  const list = await apiGet('/api/agent/chats');
   $('#agHist').innerHTML = list.length ? list.map(c => `<div class="ag-h${c.id === AG.id ? ' on' : ''}" data-id="${c.id}">
       <div><b title="${esc(c.title)}">${esc(c.title)}</b><small>${fmtShort(c.updated)}</small></div>
       <button title="Удалить чат">✕</button></div>`).join('')
@@ -5079,7 +5046,7 @@ function newChat() {
 }
 async function openChat(id) {
   if (AG.busy) AG.ctrl?.abort();
-  const c = await (await fetch(`/api/agent/chats/${id}`)).json();
+  const c = await apiGet(`/api/agent/chats/${id}`);
   AG.id = id; AG.msgs = c.messages || []; AG.att = []; renderAtt();
   const b = $(`#agTarget button[data-t="${c.target}"], #agTarget2 button[data-t="${c.target}"]`); if (b) b.click();
   renderMsgs(); agCtx(); loadChats();
@@ -5093,7 +5060,7 @@ $('#agHist').addEventListener('click', e => {
   const row = e.target.closest('.ag-h'); if (!row) return;
   if (e.target.closest('button')) {
     confirmBox('Удалить чат?', `«${$('b', row).textContent}» будет удалён без возможности восстановления.`, 'Удалить', async () => {
-      await fetch(`/api/agent/chats/${row.dataset.id}`, { method: 'DELETE' });
+      await apiSend(`/api/agent/chats/${row.dataset.id}`, { method: 'DELETE' }).catch(() => {});
       if (row.dataset.id === AG.id) newChat(); else loadChats();
       toast('Чат удалён');
     });
@@ -5102,7 +5069,7 @@ $('#agHist').addEventListener('click', e => {
   openChat(row.dataset.id);
 });
 $('#agClear').onclick = () => confirmBox('Очистить всю историю?', 'Все переписки с агентом будут удалены.', 'Очистить', async () => {
-  await fetch('/api/agent/chats', { method: 'DELETE' }); newChat(); toast('История очищена');
+  await apiSend('/api/agent/chats', { method: 'DELETE' }).catch(() => {}); newChat(); toast('История очищена');
 });
 $('#agNew').onclick = newChat;
 $('#agNew2').onclick = newChat;
@@ -5229,7 +5196,7 @@ $('#agMsgs').addEventListener('change', e => {
 
 async function clipText() {
   try { const t = await navigator.clipboard.readText(); if (t) return t; } catch {}
-  try { return (await (await fetch('/api/clipboard', { method: 'POST' })).json()).text || ''; } catch { return ''; }
+  try { return (await apiPost('/api/clipboard', {})).text || ''; } catch { return ''; }
 }
 
 // right-click menu: copy / cut / paste / select all in every text field, copy on any selectable text
@@ -5304,7 +5271,7 @@ async function clipText() {
 // model status / download
 async function agStatus() {
   if (!API) return;
-  const s = AG.status = await (await fetch('/api/agent/status')).json();
+  const s = AG.status = await apiGet('/api/agent/status');
   const st = s.installing ? ['weak', 'скачивается'] : !s.installed ? ['unsupported', 'не скачана'] : s.running ? ['ok', 'в памяти'] : ['ok', 'готова'];
   $('#agState').className = 'verdict ' + st[0]; $('#agState').textContent = st[1];
   const big = $('#agBig'), curName = s.custom ? s.title : ((s.variants || []).find(o => o.current) || {}).title || s.title;
@@ -5415,20 +5382,20 @@ try { skShow(localStorage.getItem('h3-sk-open') === '1'); } catch {}
 $('#skList').addEventListener('change', async e => {
   const card = e.target.closest('.sk'); if (!card) return;
   const body = e.target.tagName === 'SELECT' ? { mode: e.target.value } : { keywords: e.target.value.split(',') };
-  await fetch(`/api/agent/skills/${encodeURIComponent(card.dataset.id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  await apiSend(`/api/agent/skills/${encodeURIComponent(card.dataset.id)}`, { method: 'PATCH', body }).catch(() => {});
   agStatus();
 });
 $('#skList').addEventListener('click', async e => {
   if (!e.target.closest('.x')) return;
   const card = e.target.closest('.sk');
-  await fetch(`/api/agent/skills/${encodeURIComponent(card.dataset.id)}`, { method: 'DELETE' });
+  await apiSend(`/api/agent/skills/${encodeURIComponent(card.dataset.id)}`, { method: 'DELETE' }).catch(() => {});
   toast('Скилл удалён'); agStatus();
 });
 $('#skUp').onchange = async e => {
   const fd = new FormData();
   for (const f of e.target.files) if (/\.(md|txt)$/i.test(f.name)) fd.append('f', f, f.webkitRelativePath || f.name);
   e.target.value = '';
-  try { const r = await fetch('/api/agent/skills', { method: 'POST', body: fd }); const j = await r.json(); if (!r.ok) throw new Error(j.error); toast('Скилл загружен'); agStatus(); }
+  try { const j = await apiSend('/api/agent/skills', { method: 'POST', body: fd }); toast('Скилл загружен'); agStatus(); }
   catch (err) { toast(err.message); }
 };
 $('.nav[data-view="agent"]').addEventListener('click', () => { agStatus(); agCtx(); loadChats(); });
@@ -5496,7 +5463,7 @@ $('#mlist').addEventListener('click', async e => {
   const b = e.target.closest('[data-pickmodel]'); if (!b) return;
   const row = b.closest('.m'), role = b.dataset.pickmodel;
   try {
-    const r = await (await fetch('/api/models/files?role=' + role)).json();
+    const r = await apiGet('/api/models/files?role=' + role);
     if (!r.files?.length) { toast(`ComfyUI не видит файлов в папке ${r.folder}`); return; }
     b.hidden = true;
     row.insertAdjacentHTML('beforeend', `<div class="pm"><input type="search" class="pm-q" placeholder="Поиск по имени…" spellcheck="false"><select><option value="">как по умолчанию</option>${r.files.map(f => `<option>${esc(f)}</option>`).join('')}</select><button class="btn mini pri" type="button">Выбрать</button></div>`);
@@ -5518,7 +5485,7 @@ $('#mlist').addEventListener('click', async e => {
 $('#mlist').addEventListener('click', async e => {
   const b = e.target.closest('[data-variant]'); if (!b) return;
   const row = b.closest('.m'), role = b.dataset.variant;
-  const s = await (await fetch('/api/status')).json(), m = (s.models || []).find(x => x.role === role); if (!m) return;
+  const s = await apiGet('/api/status'), m = (s.models || []).find(x => x.role === role); if (!m) return;
   $('.pv', row)?.remove(); b.hidden = true;
   row.insertAdjacentHTML('beforeend', `<div class="pm pv"><select>${m.variants.map(v => `<option value="${v.key}"${v.current ? ' selected' : ''}>${esc(v.label)} · ${GB(v.size)}${v.have ? ' · есть на диске' : ''}</option>`).join('')}</select><button class="btn mini pri" type="button" data-ok>Выбрать</button><button class="btn mini" type="button" data-no>Отмена</button><div class="hint" style="flex-basis:100%">Подходят только версии этой же модели: они заменяют друг друга. Остальные файлы не затрагиваются.</div></div>`);
   const pv = $('.pv', row);
@@ -5539,7 +5506,7 @@ $('#mlist').addEventListener('click', async e => {
 $('#vwUp').onclick = () => openUpscale(byId(openId));
 async function openUpscale(it, file) {   // `file`: any file of the user (not from the Library)
   if (!it) return;
-  const st = await (await fetch('/api/status')).json();
+  const st = await apiGet('/api/status');
   const have = (st.modes || []).includes('upscale') && !(st.models || []).some(m => m.role.startsWith('seedvr') && !m.have);
   const haveRelay = (st.modes || []).includes('relayvsr') && !(st.models || []).some(m => m.role.startsWith('relayvsr') && !m.have);
   let m = $('#upMenu');
@@ -5573,7 +5540,7 @@ async function openUpscale(it, file) {   // `file`: any file of the user (not fr
     if (e.target === m || e.target.closest('[data-x]')) { m.hidden = true; return; }
     if (e.target.closest('[data-dl]')) {
       m.hidden = true; closeViewer();
-      if (!setupInfo) setupInfo = await (await fetch('/api/setup/info')).json();
+      if (!setupInfo) setupInfo = await apiGet('/api/setup/info');
       const c = setupInfo.config;
       try { await postJSON('/api/setup/install', { install_dir: c.install_dir, models_dir: c.models_dir || '', add_mode: e.target.closest('[data-dl]').dataset.dl || 'upscale' }); goTo('models'); showSetupPane('progress'); setStep(2); resetProgress(); } catch (err) { toast(err.message); }
       return;
@@ -5586,9 +5553,7 @@ async function openUpscale(it, file) {   // `file`: any file of the user (not fr
         const fd = new FormData(); fd.append('scale', b.dataset.k); fd.append('method', b.dataset.m || ''); fd.append('engine', b.dataset.e || '');
         fd.append('detail', detail); fd.append('sharp', sharp);
         fd.append('res', it.res || ''); fd.append('len', it.len || 0); fd.append('file', file);
-        const resp = await fetch('/api/upscale_file', { method: 'POST', body: fd }); const txt = await resp.text();
-        let j; try { j = JSON.parse(txt); } catch { j = { error: txt }; }
-        if (!resp.ok) throw new Error(j.error || txt || resp.statusText);
+        const j = await apiSend('/api/upscale_file', { method: 'POST', body: fd, timeout: 180000 });
         r = j;
       } else r = await postJSON('/api/upscale', { id: it.id, scale: b.dataset.k, method: b.dataset.m || '', engine: b.dataset.e || '', detail, sharp });
       qAdd(r.prompt_id, 'upscale', it.prompt || 'Увеличение');
@@ -5715,7 +5680,7 @@ async function bmSave(mode, opt = {}) {
   list.push({ id, mode, name, auto: !!opt.auto, title: text.slice(0, 200), date: new Date().toISOString(), s: JSON.parse(JSON.stringify(o)), prompt: text, files });
   bmStore(list); bmRender(); if (!opt.auto) toast('Этап сохранён: «' + name + '». Он лежит в списке «Этапы» вверху раздела');
 }
-const stageDrop = b => { if (b && b.mode === 'long' && b.run) fetch('/api/long/stage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ run: b.run, id: b.id, action: 'delete' }) }).catch(() => {}); };
+const stageDrop = b => { if (b && b.mode === 'long' && b.run) apiPost('/api/long/stage', { run: b.run, id: b.id, action: 'delete' }).catch(() => {}); };
 const stageName = text => new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) + ' · ' + ((text || '').replace(/\s+/g, ' ').slice(0, 26) || 'без текста') + ((text || '').length > 26 ? '…' : '');
 async function bmSaveLong(opt = {}) {
   const root = $('#view-long'), proj = root && root._snap && root._snap(); if (!proj || !(proj.scenes || []).length) { if (!opt.auto) toast('В проекте пока нет сцен'); return; }
@@ -5727,7 +5692,7 @@ async function bmSaveLong(opt = {}) {
   const done = proj.scenes.filter(x => x.done || x.draftDone).length;
   const name = opt.auto ? 'Было до открытия этапа' : stageName(first) + ` · сцен ${proj.scenes.length}, готово ${done}`;
   const sid = Math.random().toString(36).slice(2, 10);
-  try { await fetch('/api/long/stage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ run: proj.run, id: sid, action: 'save' }) }); } catch {}   // the continuation points and pictures are copied on the disk
+  try { await apiPost('/api/long/stage', { run: proj.run, id: sid, action: 'save' }); } catch {}   // the continuation points and pictures are copied on the disk
   list.push({ id: sid, mode: 'long', run: proj.run, name, auto: !!opt.auto, title: first.slice(0, 200), date: new Date().toISOString(), s: proj, prompt: first, files: [] });
   bmStore(list); bmRender(); if (!opt.auto) toast('Этап сохранён: «' + name + '»');
 }
@@ -5787,7 +5752,7 @@ $('#optCloudShow').onclick = () => { $('.opt[data-opt="cloud"]').hidden = false;
 const CW = { id: null, rep: null, vals: {}, files: {}, run: null, shown: null };
 async function cwList(select) {
   let items = [];
-  try { items = await (await fetch('/api/wf/list')).json(); } catch {}
+  try { items = await apiGet('/api/wf/list'); } catch {}
   const sel = $('#cwSel');
   sel.innerHTML = items.length ? items.map(x => `<option value="${x.id}">${esc(x.name)}</option>`).join('') : '<option value="">нет сохранённых</option>';
   let last = ''; try { last = localStorage.getItem('h3-cw-last') || ''; } catch {}
@@ -5800,9 +5765,7 @@ async function cwOpen(id) {
   CW.id = id; CW.shown = null; try { localStorage.setItem('h3-cw-last', id); } catch {} CW.vals = {}; CW.files = {}; $('#cwHowto').hidden = true;
   $('#cwBody').innerHTML = '<div class="hint">Разбираем workflow…</div>';
   try {
-    const r = await fetch('/api/wf/' + id);
-    if (!r.ok) throw new Error(await r.text());
-    CW.rep = await r.json();
+    CW.rep = await apiGet('/api/wf/' + id);
   } catch (e) { $('#cwBody').innerHTML = `<div class="note warn"><span>${esc(e.message || 'ComfyUI не отвечает. Запустите его и откройте раздел снова')}</span></div>`; return; }
   CW.rep.widgets.forEach(w => { CW.vals[w.key] = w.missing ? w.suggest : w.value; });
   try {  // what was set last time in this workflow
@@ -5948,7 +5911,7 @@ function cwPick(key) {
     const th = e.target.closest('.cw-th'); if (!th) return;
     const it = LIB.find(x => x.id === th.dataset.id); if (!it) return;
     try {
-      const blob = await (await fetch(it.url)).blob();
+      const blob = await apiGet(it.url, { raw: 'blob' });
       cwSetFile(key, new File([blob], `${it.id}.${it.ext || (w.mkind === 'image' ? 'png' : 'mp4')}`, { type: blob.type }));
       m.hidden = true; toast('Файл взят из Библиотеки');
     } catch { toast('Не удалось взять файл'); }
@@ -5998,7 +5961,7 @@ function picSourceStep() {
     + (filled ? `<div class="pm-sep"></div><button class="pm-i" type="button" role="menuitem" data-s="copy">${PIC_IC.copy}<span>Копировать</span></button>` : '');
   picPlace();
   const pb = $('[data-s="paste"]', el), k = $('.pm-k', pb);
-  fetch('/api/clipboard/has-image', { cache: 'no-store' }).then(r => r.json()).then(j => {
+  apiGet('/api/clipboard/has-image', { cache: 'no-store' }).then(j => {
     if (!pb.isConnected) return;
     const have = !!(j && j.have);
     pb.disabled = !have;
@@ -6104,9 +6067,10 @@ addEventListener('keydown', e => { if (e.key === 'Escape' && PIC.el) { e.stopPro
 /* the picture clipboard is the server's job: the web view is not allowed to touch it */
 const PIC_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/bmp': 'bmp', 'image/gif': 'gif', 'image/avif': 'avif' };
 async function pasteFromClipboard() {
-  const r = await fetch('/api/clipboard/image', { cache: 'no-store' });
-  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'В буфере обмена нет картинки');
-  const blob = await r.blob();
+  const blob = await apiGet('/api/clipboard/image', { cache: 'no-store', raw: 'blob' }).catch(e => {
+    throw new Error(e.status ? e.message : 'В буфере обмена нет картинки');
+  });
+  if (!blob.size) throw new Error('В буфере обмена нет картинки');
   const type = PIC_EXT[blob.type] ? blob.type : 'image/png';  // a file copied in Explorer keeps its own format
   return new File([blob], `clipboard-${Date.now()}.${PIC_EXT[type]}`, { type });
 }
@@ -6118,12 +6082,13 @@ async function copyToClipboard(file) {
     c.getContext('2d').drawImage(img, 0, 0); if (img.close) img.close();
     blob = await new Promise((ok, no) => c.toBlob(b => b ? ok(b) : no(new Error('Не удалось подготовить картинку')), 'image/png'));
   }
-  const r = await fetch('/api/clipboard/image', { method: 'POST', headers: { 'Content-Type': 'image/png' }, body: blob });
-  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'Не удалось скопировать картинку');
+  await apiSend('/api/clipboard/image', { method: 'POST', body: blob }).catch(e => {
+    throw new Error(e.status ? e.message : 'Не удалось скопировать картинку');
+  });
 }
 async function libToFile(it) {
   let blob;
-  if (it.kind === 'image') blob = await (await fetch(it.url)).blob();
+  if (it.kind === 'image') blob = await apiGet(it.url, { raw: 'blob' });
   else {  // a video: take its last frame, handy for continuing a scene
     const v = document.createElement('video'); v.muted = true; v.preload = 'auto'; v.src = it.url;
     await new Promise((ok, no) => { v.onloadedmetadata = ok; v.onerror = no; });
@@ -6295,13 +6260,10 @@ function imgPanel(el, o) {
     go.disabled = true; if (!run) status.textContent = 'Отправляем задание в ComfyUI…';
     let r;
     try {
-      const resp = await fetch(o.url, { method: 'POST', body: o.form() });
-      const txt = await resp.text();
-      try { r = JSON.parse(txt); } catch { r = { error: txt }; }
-      if (!resp.ok) throw new Error(r.error || resp.statusText);
+      r = await apiSend(o.url, { method: 'POST', body: o.form(), timeout: 180000 });
     } catch (e) { go.disabled = false; status.textContent = 'Ошибка: ' + e.message; return; }
     go.disabled = false;
-    if (run) { clearInterval(run.tick); offPrompt(run.id); const old = QUEUE.find(j => j.id === run.id); if (old) old.detached = true; run = null; }
+    if (run) { clearInterval(run.tick); offPrompt(run.id); if (window.h3State.has(run.id)) window.h3State.update(run.id, { detached: true }); run = null; }
     qAdd(r.prompt_id, o.mode, o.promptText());
     live.hidden = true; res.hidden = true; empty.hidden = true; acts.hidden = true; zb.hidden = true; dim.textContent = '';
     run = { id: r.prompt_id, t0: performance.now(), stage: 'queued' };
@@ -6334,7 +6296,7 @@ function imgPanel(el, o) {
       }
     });
   };
-  stopB.onclick = () => { if (!run) return; status.textContent = 'Останавливаем…'; fetch('/api/interrupt', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt_id: run.id }) }); };
+  stopB.onclick = () => { if (!run) return; status.textContent = 'Останавливаем…'; apiPost('/api/interrupt', { prompt_id: run.id }).catch(() => {}); };
   // «Добавить в библиотеку»: until this moment the picture is not in the Library and has no copy of its own
   const keepDraft = async it => {
     const b = $q('[data-a="addlib"]'); b.disabled = true;
@@ -6451,7 +6413,7 @@ function imgJobSeed(root, S, seed) {
     if (S.engine === 'krea') return;
     const role = S.engine === 'flux' ? 'flux' : 'qwen';
     try {
-      const st = await (await fetch('/api/status')).json();
+      const st = await apiGet('/api/status');
       const miss = (st.models || []).filter(m => m.role.startsWith(role) && !m.have);
       if (!(st.modes || []).includes(role) || miss.length) {
         hint.hidden = false;
@@ -6471,7 +6433,7 @@ function imgJobSeed(root, S, seed) {
     const hint = $('.kr-realhint', root); hint.hidden = true;
     if (S.style !== 'real') return;
     try {
-      const st = await (await fetch('/api/status')).json();
+      const st = await apiGet('/api/status');
       const miss = (st.models || []).filter(m => m.role.startsWith('kreareal') && !m.have);
       if (!(st.modes || []).includes('kreareal') || miss.length) {
         hint.hidden = false;
@@ -6526,8 +6488,7 @@ function imgJobSeed(root, S, seed) {
         const fd = krForm(K.items[i]);
         if (seed) fd.set('seed', seed); else fd.delete('seed');   // every picture its own random seed unless it is a series
         fd.append('batch_label', `${i + 1} из ${n}`);
-        const r = await fetch('/api/generate/krea', { method: 'POST', body: fd }); const txt = await r.text(); let res; try { res = JSON.parse(txt); } catch { res = { error: txt }; }
-        if (!r.ok) throw new Error(res.error || r.statusText);
+        const res = await apiSend('/api/generate/krea', { method: 'POST', body: fd, timeout: 180000 });
         qAdd(res.prompt_id, 'krea', K.items[i]); ok++;
       } catch (err) { st.textContent = `Ошибка на промпте ${i + 1}: ${err.message}. В очередь поставлено: ${ok}.`; go.disabled = false; return; }
     }
@@ -6696,7 +6657,7 @@ function imgJobSeed(root, S, seed) {
     const hint = $('.qw-fluxhint', root); hint.hidden = true;
     if (S.engine !== 'flux') return;
     try {
-      const st = await (await fetch('/api/status')).json();
+      const st = await apiGet('/api/status');
       const miss = (st.models || []).filter(m => m.role.startsWith('flux') && !m.have);
       if (!(st.modes || []).includes('flux') || miss.length) {
         hint.hidden = false;
@@ -7362,13 +7323,13 @@ function imgJobSeed(root, S, seed) {
 })();
 
 
-fetch('/api/version').then(r => r.json()).then(v => { $('#appVer').textContent = 'Версия ' + v.version + (v.built ? ' · сборка от ' + v.built : ''); }).catch(() => {});
+afterModules(() => apiGet('/api/version').then(v => { $('#appVer').textContent = 'Версия ' + v.version + (v.built ? ' · сборка от ' + v.built : ''); }).catch(() => {}));
 /* ---------- updates: a new release on GitHub -> a bar with "Обновить" ---------- */
 (() => {
   if (!API) return;
   const bar = document.createElement('div'); bar.className = 'upd'; bar.hidden = true; document.body.append(bar);
   setTimeout(async () => {
-    let u; try { u = await (await fetch('/api/update/check')).json(); } catch { return; }
+    let u; try { u = await apiGet('/api/update/check'); } catch { return; }
     if (!u.available || !u.can_update) return;
     const paint = (html) => { bar.innerHTML = html; bar.hidden = false; };
     const ask = () => paint(`<span>Вышла версия <b>${esc(u.version)}</b> (у вас ${esc(u.current)}). Настройки, Библиотека и модели останутся.</span><button class="btn pri" data-a="go" type="button">Обновить</button><button class="btn" data-a="later" type="button">Позже</button>`);
@@ -7376,7 +7337,7 @@ fetch('/api/version').then(r => r.json()).then(v => { $('#appVer').textContent =
     bar.onclick = async e => {
       const a = e.target.closest('[data-a]')?.dataset.a; if (!a) return;
       if (a === 'later') { bar.hidden = true; return; }
-      if (QUEUE.some(j => j.state === 'queued' || j.state === 'running')) { toast('Идёт генерация. Дождитесь её конца и нажмите «Обновить» снова'); return; }
+      if (window.h3State.active().length) { toast('Идёт генерация. Дождитесь её конца и нажмите «Обновить» снова'); return; }
       paint('<span>Скачиваем обновление… Не закрывайте программу.</span>');
       try {
         await postJSON('/api/update/install', {});
@@ -7477,7 +7438,7 @@ $('#cwBody').addEventListener('click', async e => {
     return;
   }
   if (e.target.closest('#cwStop')) {
-    if (CW.run) { $('#cwStatus').textContent = 'Останавливаем…'; fetch('/api/interrupt', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt_id: CW.run.id }) }); }
+    if (CW.run) { $('#cwStatus').textContent = 'Останавливаем…'; apiPost('/api/interrupt', { prompt_id: CW.run.id }).catch(() => {}); }
     return;
   }
   if (!e.target.closest('#cwGo')) return;
@@ -7493,9 +7454,7 @@ $('#cwBody').addEventListener('click', async e => {
   Object.entries(CW.files).forEach(([k, f]) => f && fd.append('f:' + k, f));
   $('#cwGo').disabled = true; status.textContent = 'Отправляем задание в ComfyUI…';
   try {
-    const r = await fetch('/api/generate/custom', { method: 'POST', body: fd }), txt = await r.text();
-    let res; try { res = JSON.parse(txt); } catch { res = { error: txt }; }
-    if (!r.ok) throw new Error(res.error || txt || r.statusText);
+    const res = await apiSend('/api/generate/custom', { method: 'POST', body: fd, timeout: 180000 });
     const prompt = (W.find(w => w.role === 'prompt') || {}).key;
     qAdd(res.prompt_id, 'custom', prompt ? String(CW.vals[prompt]) : CW.rep.name);
     if (CW.run) { clearInterval(CW.run.tick); offPrompt(CW.run.id); }  // the older job goes on in the queue
@@ -7525,15 +7484,13 @@ $('#cwBody').addEventListener('click', async e => {
 $('#cwSel').onchange = e => e.target.value && cwOpen(e.target.value);
 $('#cwDel').onclick = async () => {
   if (!CW.id || !confirm('Удалить этот workflow из списка? Файлы на диске не трогаем.')) return;
-  await fetch('/api/wf/' + CW.id, { method: 'DELETE' }); cwList();
+  await apiSend('/api/wf/' + CW.id, { method: 'DELETE' }).catch(() => {}); cwList();
 };
 $('#cwFile').onchange = async e => {
   const f = e.target.files[0]; e.target.value = ''; if (!f) return;
   try {
     const graph = JSON.parse(await f.text());
-    const r = await fetch('/api/wf/add', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: f.name.replace(/\.json$/i, ''), graph }) });
-    if (!r.ok) throw new Error(await r.text());
-    cwList((await r.json()).id);
+    const j = await apiPost('/api/wf/add', { name: f.name.replace(/\.json$/i, ''), graph });
   } catch (err) { toast(err instanceof SyntaxError ? 'Это не файл workflow (.json)' : err.message); }
 };
 $('.nav[data-view="custom"]').addEventListener('click', () => cwList(CW.id));
@@ -7542,7 +7499,7 @@ $('.nav[data-view="custom"]').addEventListener('click', () => cwList(CW.id));
 const CL = { files: [], items: [] };
 async function loadCL() {
   try {
-    const r = await (await fetch('/api/loras/custom')).json();
+    const r = await apiGet('/api/loras/custom');
     if (!r.files) return;
     CL.files = r.files; CL.items = r.items; $('#clCard').hidden = false; renderCL();
   } catch {}
@@ -7581,9 +7538,9 @@ $('.nav[data-view="models"]').addEventListener('click', loadCL);
 $('#setCustom').onclick = () => $('#navCustom').click();
 $('#cwBack').onclick = () => $('.nav[data-view="models"]').click();
 $('#navCustom').addEventListener('click', () => { $$('.nav').forEach(x => x.classList.toggle('active', x.dataset.view === 'models')); });
-if (API) {
+if (API) afterModules(() => {
   connectEvents(); loadStatus(); loadCloud(); pollSystem();
-  fetch('/api/status').then(r => r.json()).then(s => {
+  apiGet('/api/status').then(s => {
     firstRun(!s.configured || !localStorage.getItem('h3-seen-settings'));
     if (!s.configured) { setNavLocked(true); goTo('models'); return; }
     setTimeout(() => {   // back to the page where the user was last time
@@ -7592,8 +7549,8 @@ if (API) {
       if (n && !n.hidden && !n.disabled && v !== 'models') goTo(v); else if (!v) goTo('presets');   // a first start opens the start page
     }, 700);
   });
-  fetch('/api/library').then(r => r.json()).then(items => { items.forEach(it => LIB.push(normItem(it))); renderLib(); });
-} else
+  apiGet('/api/library').then(items => { items.forEach(it => LIB.push(normItem(it))); renderLib(); });
+}); else
 // demo items so the library isn't empty in the mockup
 [
   ['video', 'Футболист бежит на камеру в замедленной съёмке, пасмурный день, мягкий свет', '16:9', '720p', 5, 'Изображение → видео', 2],
@@ -7923,7 +7880,7 @@ $('#setReset').onclick = () => {
   }
   async function ffStatus() {
     let s = null;
-    try { s = await (await fetch('/api/ffmpeg/status')).json(); } catch {}
+    try { s = await apiGet('/api/ffmpeg/status'); } catch {}
     FF.status = s;
     if (s && s.error) FF.error = s.error;   // the reason stays visible after a refresh, not only in a toast
     const box = $('.ff-state', root);
@@ -7956,7 +7913,7 @@ $('#setReset').onclick = () => {
     clearInterval(ffPoll);
     ffPoll = setInterval(async () => {
       let s = null;
-      try { s = await (await fetch('/api/ffmpeg/status')).json(); } catch { return; }
+      try { s = await apiGet('/api/ffmpeg/status'); } catch { return; }
       if (s && s.downloading) {
         const b = $('.ff-state', root);
         if (b && FF.eng === 'ff' && s.progress) b.textContent = `Скачиваем FFmpeg: ${s.progress.pct}% — ${s.progress.text || ''}`;
@@ -7971,13 +7928,12 @@ $('#setReset').onclick = () => {
       e.target.disabled = true;
       FF.error = '';
       $('.ff-state', root).textContent = 'Начинаем скачивание…';
-      fetch('/api/ffmpeg/download', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
-        .then(r => { if (!r.ok) r.text().then(t => window.onFFDownload({ done: true, error: t || ('ошибка ' + r.status) })); })
-        .catch(err => window.onFFDownload({ done: true, error: String(err) }));
+      apiPost('/api/ffmpeg/download', {})
+        .catch(err => window.onFFDownload({ done: true, error: err.message || String(err) }));
       setTimeout(ffPollStart, 1500);
       return;
     }
-    if (e.target.closest('.ff-open')) fetch('/api/ffmpeg/open-folder', { method: 'POST' });
+    if (e.target.closest('.ff-open')) apiPost('/api/ffmpeg/open-folder', {}).catch(() => {});
   });
   $$('.mt-eng-tabs [data-eng]', root).forEach(b => b.onclick = () => {
     FF.eng = b.dataset.eng;
@@ -8012,10 +7968,7 @@ $('#setReset').onclick = () => {
     });
     let res;
     try {
-      const r = await fetch('/api/ffmpeg/montage', { method: 'POST', body: fd });
-      const txt = await r.text();
-      try { res = JSON.parse(txt); } catch { res = { error: txt }; }
-      if (!r.ok) throw new Error(res.error || r.statusText);
+      res = await apiSend('/api/ffmpeg/montage', { method: 'POST', body: fd, timeout: 180000 });
     } catch (err) {
       FF.busy = false; $('.mt-go', root).disabled = false;
       st.textContent = 'Сборка не удалась: ' + err.message; return;
@@ -8047,9 +8000,7 @@ $('#setReset').onclick = () => {
     try {
       const fd = new FormData(); fd.append('ids', JSON.stringify(ids)); fd.append('durs', JSON.stringify(durs)); fd.append('preview', '1');
       ids.filter(id => id.startsWith('up:')).forEach(id => { const u = get(id), k = id.slice(3); fd.append('res_' + k, u.res || ''); fd.append('len_' + k, String(u.len || 0)); fd.append('file_' + k, u.file, u.file.name); });
-      const r = await fetch('/api/montage', { method: 'POST', body: fd });
-      const txt = await r.text(); let res; try { res = JSON.parse(txt); } catch { res = { error: txt }; }
-      if (!r.ok) throw new Error(res.error || r.statusText);
+      const res = await apiSend('/api/montage', { method: 'POST', body: fd, timeout: 180000 });
       qAdd(res.prompt_id, 'montage', `${ids.length} клипов`);
       st.textContent = 'Склеиваем…';
       onPrompt(res.prompt_id, ev => {
@@ -8079,12 +8030,12 @@ $('#setReset').onclick = () => {
   }));
   async function chain(eng) {   // eng: 'relay' | 'seed' (enlarge each clip) | 'none' (only the grain)
     const st = $('.mt-status', root);
-    if (MT.upBusy) { MT.cancel = true; st.textContent = 'Останавливаем…'; if (MT.curPrompt) fetch('/api/interrupt', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt_id: MT.curPrompt }) }); return; }
+    if (MT.upBusy) { MT.cancel = true; st.textContent = 'Останавливаем…'; if (MT.curPrompt) apiPost('/api/interrupt', { prompt_id: MT.curPrompt }).catch(() => {}); return; }
     if (MT.busy) return;
     if (MT.ids.length < 2) { st.textContent = 'Добавьте хотя бы два клипа'; return; }
     const doUp = eng !== 'none', grain = +$('.mt-grain', root).value;
     if (doUp) {
-      let stt = {}; try { stt = await (await fetch('/api/status')).json(); } catch {}
+      let stt = {}; try { stt = await apiGet('/api/status'); } catch {}
       const haveRelay = (stt.modes || []).includes('relayvsr') && !(stt.models || []).some(m => m.role.startsWith('relayvsr') && !m.have);
       const haveSeed = (stt.modes || []).includes('upscale') && !(stt.models || []).some(m => m.role.startsWith('seedvr') && !m.have);
       if (eng === 'relay' ? !haveRelay : !haveSeed) { st.textContent = `Нужна модель ${eng === 'relay' ? 'RelayVSR' : 'SeedVR2'}: её можно скачать кнопкой «Увеличить» у любого видео в Библиотеке.`; return; }
@@ -8098,12 +8049,10 @@ $('#setReset').onclick = () => {
       let r;
       if (srcFile) {
         const fd = new FormData(); Object.entries(extra).forEach(([a, b]) => fd.append(a, b)); fd.append('res', srcFile.res || ''); fd.append('len', srcFile.len || 0); fd.append('file', srcFile.file, srcFile.file.name);
-        const resp = await fetch(url + (url === '/api/upscale' ? '_file' : ''), { method: 'POST', body: fd }), txt = await resp.text(); let j; try { j = JSON.parse(txt); } catch { j = { error: txt }; }
-        if (!resp.ok) throw new Error(j.error || txt || resp.statusText); r = j;
+        r = await apiSend(url + (url === '/api/upscale' ? '_file' : ''), { method: 'POST', body: fd, timeout: 180000 });
       } else if (url === '/api/grain') {
         const fd = new FormData(); fd.append('id', id); fd.append('strength', extra.strength);
-        const resp = await fetch(url, { method: 'POST', body: fd }), txt = await resp.text(); let j; try { j = JSON.parse(txt); } catch { j = { error: txt }; }
-        if (!resp.ok) throw new Error(j.error || txt || resp.statusText); r = j;
+        r = await apiSend(url, { method: 'POST', body: fd, timeout: 180000 });
       } else r = await postJSON(url, { id, ...extra });
       qAdd(r.prompt_id, label === 'grain' ? 'montage' : 'upscale', (get(ids[k]).prompt || '') || (label === 'grain' ? 'Зерно плёнки' : 'Увеличение')); MT.curPrompt = r.prompt_id;
       return waitItem(r);
@@ -8185,16 +8134,16 @@ $('#setReset').onclick = () => {
   async function load() {
     const box = $('.lr-mine', root);
     try {
-      const reg = await fetch('/api/loras/registry').then(r => r.json());
+      const reg = await apiGet('/api/loras/registry');
       LR.items = reg.items || []; LR.conflicts = reg.conflicts || []; LR.dir = reg.dir || '';
     } catch { LR.items = []; LR.conflicts = []; }
     try {
-      const tok = await fetch('/api/loras/tokens').then(r => r.json());
+      const tok = await apiGet('/api/loras/tokens');
       $('.lr-tok-civ', root).placeholder = tok.civitai ? 'токен сохранён (введите новый, чтобы заменить)' : 'вставьте токен';
       $('.lr-tok-hf', root).placeholder = tok.hf ? 'токен сохранён (введите новый, чтобы заменить)' : 'вставьте токен';
     } catch {}
     try {
-      const c = await fetch('/api/loras/custom').then(r => r.json());
+      const c = await apiGet('/api/loras/custom');
       LR.custom = c.items || [];
     } catch {
       LR.custom = LR.items.filter(it => it.mine).map(it => ({ file: it.file, strength: it.recommended_weight || 0.8, on: true }));
@@ -8243,9 +8192,8 @@ $('#setReset').onclick = () => {
 
   async function saveCustom() {
     try {
-      const r = await fetch('/api/loras/custom', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items: LR.custom }) });
-      if (!r.ok) throw new Error((await r.text()) || r.statusText);
-      const cf = await fetch('/api/loras/conflicts').then(r => r.json());
+      await apiPost('/api/loras/custom', { items: LR.custom });
+      const cf = await apiGet('/api/loras/conflicts');
       LR.conflicts = cf.conflicts || []; renderConflicts();
     } catch (e) { toast('Не удалось сохранить список LoRA: ' + e.message); }
   }
@@ -8263,10 +8211,9 @@ $('#setReset').onclick = () => {
         const msg = $('.lr-m-msg', item);
         msg.textContent = 'Сохраняем…';
         try {
-          const r = await fetch('/api/loras/meta', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
+          await apiPost('/api/loras/meta', {
             file: f, name: $('.lr-m-name', item).value, triggers: $('.lr-m-trig', item).value,
-            recommended_weight: +$('.lr-m-rec', item).value || 0.8 }) });
-          if (!r.ok) throw new Error((await r.text()) || r.statusText);
+            recommended_weight: +$('.lr-m-rec', item).value || 0.8 });
           msg.textContent = 'Сохранено';
           await load();
         } catch (err) { msg.textContent = 'Не удалось: ' + err.message; }
@@ -8275,13 +8222,12 @@ $('#setReset').onclick = () => {
       return;
     }
     if (e.target.closest('.lr-find')) { find(); return; }
-    if (e.target.closest('.lr-folder')) { fetch('/api/loras/open-folder', { method: 'POST' }).then(r => r.json()).then(j => { if (j.error) toast(j.error); }).catch(() => {}); return; }
+    if (e.target.closest('.lr-folder')) { apiPost('/api/loras/open-folder', {}).then(j => { if (j.error) toast(j.error); }).catch(() => {}); return; }
     if (e.target.closest('.lr-tok-save')) {
       const msg = $('.lr-tok-msg', root);
       const body = { civitai: $('.lr-tok-civ', root).value.trim(), hf: $('.lr-tok-hf', root).value.trim() };
       try {
-        const r = await fetch('/api/loras/tokens', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-        if (!r.ok) throw new Error(r.statusText);
+        await apiPost('/api/loras/tokens', body);
         msg.textContent = 'Токены сохранены';
         $('.lr-tok-civ', root).value = ''; $('.lr-tok-hf', root).value = '';
       } catch (err) { msg.textContent = 'Не удалось: ' + err.message; }
@@ -8316,7 +8262,7 @@ $('#setReset').onclick = () => {
     box.innerHTML = '<div class="hint">Ищем…</div>';
     const url = LR.src === 'civitai' ? `/api/civitai/search?q=${encodeURIComponent(q)}` : `/api/hf/search?q=${encodeURIComponent(q)}`;
     let data;
-    try { data = await fetch(url).then(r => r.json()); }
+    try { data = await apiGet(url); }
     catch { box.innerHTML = '<div class="hint">Нет связи с каталогом: проверьте интернет.</div>'; return; }
     const items = data.items || [];
     if (!items.length) {
@@ -8344,10 +8290,7 @@ $('#setReset').onclick = () => {
     const msg = $('.lr-dl', root);
     msg.textContent = 'Скачиваем…';
     try {
-      const r = await fetch('/api/loras/download', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: v.downloadUrl, filename: v.filename }) });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.error || r.statusText);
+      const j = await apiPost('/api/loras/download', { url: v.downloadUrl, filename: v.filename });
       LR.dl = j.name;
       msg.textContent = `Скачиваем ${j.name}: 0%`;
     } catch (e) {
@@ -8459,7 +8402,7 @@ requestAnimationFrame(() => document.documentElement.classList.add('booted'));
   const refresh = async box => {
     const { mode, role } = box.dataset;
     try {
-      const r = await (await fetch(`/api/models/compat?role=${role}&mode=${mode}`)).json();
+      const r = await apiGet(`/api/models/compat?role=${role}&mode=${mode}`);
       $('.mp-cur', box).textContent = (r.name || '').split(/[\\/]/).pop() || 'не найдена';
       const src = $('.mp-src', box); src.textContent = r.picked ? 'СВОЯ МОДЕЛЬ' : 'встроенная'; src.className = 'mp-src ' + (r.picked ? 'own' : 'std');
       box.classList.toggle('own', !!r.picked);
@@ -8484,7 +8427,7 @@ requestAnimationFrame(() => document.documentElement.classList.add('booted'));
     refresh(box);
     $('.mp-change', box).onclick = async () => {
       try {
-        const r = await (await fetch('/api/models/files?role=' + role)).json();
+        const r = await apiGet('/api/models/files?role=' + role);
         if (!r.files?.length) { toast(`ComfyUI не видит файлов в папке ${r.folder}`); return; }
         sel.innerHTML = r.files.map(f => `<option>${esc(f)}</option>`).join(''); pm.hidden = false;
       } catch { toast('ComfyUI не отвечает'); }
