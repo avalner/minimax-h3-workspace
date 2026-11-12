@@ -32,7 +32,6 @@ import subprocess
 import sys
 import time
 import urllib.error
-import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -282,6 +281,36 @@ async def run_page(base: str, browser: str, shots: Path):
                     " text: document.querySelector('#qList').textContent}; })()")
                 check("finished rows can be cleared and the empty message comes back",
                       cleared and cleared["rows"] == 0 and "Очередь пуста" in cleared["text"], str(cleared))
+
+                # Mode ownership: a section mounts once, leaving it does not add another handler or
+                # timer, and closing the window gives every scope back.
+                first_pass = await cdp.evaluate("window.h3Modes.stats()")
+                for view in views:
+                    await cdp.evaluate(
+                        f"(() => {{ const b = document.querySelector('.nav[data-view=\"{view}\"]');"
+                        f" if (b) b.click(); }})()")
+                    await asyncio.sleep(0.03)
+                second_pass = await cdp.evaluate("window.h3Modes.stats()")
+                check("every visited section is mounted once",
+                      len(first_pass["mounted"]) == len(set(first_pass["mounted"]))
+                      and len(first_pass["mounted"]) >= len(views),
+                      f"{first_pass['mounted']} / views {views}")
+                check("a second round of visits adds no listener, timer or scope",
+                      second_pass["scopes"] == first_pass["scopes"]
+                      and second_pass["listeners"] <= first_pass["listeners"]
+                      and second_pass["intervals"] <= first_pass["intervals"]
+                      and second_pass["urls"] <= first_pass["urls"],
+                      f"{first_pass} -> {second_pass}")
+                check("the active section is the mode the registry knows about",
+                      second_pass["current"] == views[-1] if views else True,
+                      f"{second_pass['current']} vs {views[-1] if views else '-'}")
+
+                disposed = await cdp.evaluate(
+                    "(() => { window.h3Modes.disposeAll(); return window.h3Modes.stats(); })()")
+                check("closing the window releases every mode scope",
+                      disposed and disposed["scopes"] == 0 and disposed["listeners"] == 0
+                      and disposed["intervals"] == 0 and disposed["mounted"] == [],
+                      str(disposed))
 
                 errors = cdp.exceptions()
                 check("no uncaught exception or console error in the window", not errors,

@@ -126,15 +126,21 @@ def main():
 
         status, body = get(base + "/")
         check("the window itself is served", status == 200 and b"<" in body and len(body) > 10000, str(len(body)))
-        check("the page loads the css and the js modules, and has no inline style left",
-              b"/ui/css/app.css" in body and b"/ui/js/api.js" in body and b"/ui/js/events.js" in body
+        check("the page loads its stylesheets and js modules, and has no inline style left",
+              all(name in body for name in (b"/ui/css/base.css", b"/ui/css/widgets.css",
+                                            b"/ui/css/sections.css", b"/ui/js/api.js",
+                                            b"/ui/js/events.js", b"/ui/js/state.js",
+                                            b"/ui/js/components.js", b"/ui/js/modes.js"))
               and b"<style" not in body[:6000], body[:200].decode("utf-8", "replace"))
 
         # the window's own files: the content type is part of the contract — a module script served as
         # text/plain is refused by the browser and the window opens blank (Windows registry, .js)
-        status, ctype, css = head(base + "/ui/css/app.css")
-        check("the stylesheet is a file served as text/css", status == 200 and ctype.startswith("text/css") and b":root" in css,
-              f"{status} {ctype} {len(css)}")
+        for sheet, marker in ((b"/ui/css/base.css", b":root"), (b"/ui/css/widgets.css", b"dropzones"),
+                              (b"/ui/css/sections.css", b"Library")):
+            status, ctype, css = head(base + sheet.decode())
+            check(f"the stylesheet {sheet.decode()} is served as text/css",
+                  status == 200 and ctype.startswith("text/css") and marker in css,
+                  f"{status} {ctype} {len(css)}")
         status, ctype, js = head(base + "/ui/js/api.js")
         check("the HTTP module is served as JavaScript", status == 200 and "javascript" in ctype and b"export" in js,
               f"{status} {ctype} {len(js)}")

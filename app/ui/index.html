@@ -12,7 +12,12 @@ try { const t = localStorage.getItem('h3-theme'); if (t) document.documentElemen
 // the window stays empty until the app has opened the section the user was in: no flash of the video page
 setTimeout(() => document.documentElement.classList.add('booted'), 1500);
 </script>
-<link rel="stylesheet" href="/ui/css/app.css">
+<!-- Three stylesheets, loaded in this order: the window and its journal, the shared widgets, the
+     sections. Each one is a contiguous piece of the old single stylesheet, so the cascade is the
+     same as before; a rule moved between the files changes it. -->
+<link rel="stylesheet" href="/ui/css/base.css">
+<link rel="stylesheet" href="/ui/css/widgets.css">
+<link rel="stylesheet" href="/ui/css/sections.css">
 <!-- modules: the HTTP rules (statuses, the server's error text, a timeout that aborts) and the
      event connection (one socket, reconnect with backoff). The page delegates to both. -->
 <script type="module" src="/ui/js/api.js"></script>
@@ -910,6 +915,13 @@ equirements.txt</code><br>
      script on purpose: the first preview panels are built while the page is parsed and ask for a
      job record right away, so a deferred ES module would arrive too late. -->
 <script src="/ui/js/state.js"></script>
+<!-- The shared widgets of every mode: one preview panel, one parameters card, the media slots,
+     the size/seed controls and the LoRA switches. -->
+<script src="/ui/js/components.js"></script>
+<!-- What a section owns while it is open (listeners, timers, object URLs) and what it gives back
+     when the user opens another one. The mode modules register themselves here. -->
+<script src="/ui/js/lifecycle.js"></script>
+<script src="/ui/js/modes.js"></script>
 
 <script>
 const $ = (s, r = document) => r.querySelector(s);
@@ -1150,6 +1162,7 @@ $$('.nav[data-view]').forEach(b => b.onclick = () => {
   if (b.dataset.view !== 'custom') { try { localStorage.setItem('h3-last-view', b.dataset.view); } catch {} }   // the program opens on the page where the user was last
   $$('.nav').forEach(n => n.classList.toggle('active', n === b || (b.classList.contains('sub') && n.dataset.view === 'presets')));   // a section opened from the start page keeps it lit
   $$('.view').forEach(v => v.classList.toggle('active', v.id === 'view-' + b.dataset.view));
+  window.h3Modes?.activate(b.dataset.view);   // the section that was open gives back what it started
 });
 // a link to one section (#montage, #loras, #library…): useful for bookmarks, shortcuts and the test scripts
 const openSection = () => {
@@ -1203,680 +1216,35 @@ setTimeout(openSection, 0);
   addEventListener('resize', place);
 })();
 
-/* ---------- resolution / duration math (from the workflows) ---------- */
-const ASPECTS = [
-  { id: '16:9', w: 16, h: 9, name: 'Горизонт' },
-  { id: '9:16', w: 9, h: 16, name: 'Вертикаль' },
-  { id: '1:1', w: 1, h: 1, name: 'Квадрат' },
-  { id: '4:3', w: 4, h: 3, name: '4:3' },
-  { id: '3:4', w: 3, h: 4, name: '3:4' },
-  { id: '21:9', w: 21, h: 9, name: 'Кино 21:9' },
-];
-// the sizes of the original workflow's table (16:9 base). The buttons show the eight most used ones as plain sizes;
-// the rest stay known (saved settings and old library items use them) but are not offered
-const QUALITY_ALL = [
-  { id: '0.2', px: 608 * 352, res: '608×352' },
-  { id: '0.3', px: 736 * 416, res: '736×416', sub: 'самый быстрый', show: 1 },
-  { id: '480p', px: 864 * 480, res: '864×480', sub: 'быстро', show: 1 },
-  { id: '0.5', px: 960 * 544, res: '960×544', sub: 'под ×2 = 1920', show: 1 },
-  { id: '0.6', px: 1056 * 608, res: '1056×608', show: 1 },
-  { id: '0.7', px: 1152 * 640, res: '1152×640' },
-  { id: '0.8', px: 1216 * 672, res: '1216×672', show: 1 },
-  { id: '720p', px: 1280 * 736, res: '1280×736', sub: 'баланс', show: 1 },
-  { id: 'HD+', px: 1376 * 768, res: '1376×768', sub: 'чётче', show: 1 },
-  { id: '1.2', px: 1504 * 832, res: '1504×832', show: 1 },
-  { id: '1.5', px: 1664 * 928, res: '1664×928' },
-  { id: '1.8', px: 1824 * 1024, res: '1824×1024' },
-  { id: '1080p', px: 1920 * 1088, res: '1920×1088', sub: 'максимум, долго', show: 1 },
-];
-const QUALITY = QUALITY_ALL.filter(q => q.show);
-const qLabel = q => q.res;
-const r32 = v => Math.max(32, Math.round(v / 32) * 32);
-function resFor(aspect, q) {
-  const a = ASPECTS.find(x => x.id === aspect), p = QUALITY_ALL.find(x => x.id === q).px;
-  return [r32(Math.sqrt(p * a.w / a.h)), r32(Math.sqrt(p * a.h / a.w))];
-}
-// frame count formula from the workflow: 24 fps, length = 17k + 5
-function frames(sec) { let f = Math.max(5, Math.round(sec * 24)); return f + (5 - f % 17 + 17) % 17; }
-
-/* ---------- shared params / preview builders ---------- */
-function paramsCard(el, st, opts) {
-  el.innerHTML = `
-    <div class="card-h"><h3><span class="n">${opts.n}</span>Параметры</h3></div>
-    <div class="row">
-      <div class="row-l">Формат</div>
-      <div class="chips">${ASPECTS.map(a => {
-        const k = 18 / Math.max(a.w, a.h);
-        return `<button class="chip" data-a="${a.id}"><i class="ar" style="width:${a.w * k}px;height:${a.h * k}px"></i>${a.name}${a.name !== a.id ? ` <small>${a.id}</small>` : ''}</button>`;
-      }).join('')}</div>
-    </div>
-    <div class="row">
-      <div class="row-l">Качество <span class="resv"></span></div>
-      <div class="seg seg-q">${QUALITY.map(q => `<button data-q="${q.id}">${qLabel(q)}<small>${q.sub || '&nbsp;'}</small></button>`).join('')}</div>
-      <div class="hint">Чем меньше размер, тем быстрее расчёт; чем больше, тем чётче изображение. Размеры в кнопках для формата 16:9, для других форматов рядом с «Качество» показан точный размер.</div>
-    </div>
-    <div class="row">
-      <div class="row-l">Свой размер <small class="hint">(необязательно)</small></div>
-      <div class="path on" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-        <input class="cw-w" inputmode="numeric" placeholder="ширина" style="width:90px"> <span>×</span>
-        <input class="cw-h" inputmode="numeric" placeholder="высота" style="width:90px">
-        <button class="btn cw-reset" type="button" hidden style="padding:6px 12px;font-size:12.5px">Сбросить</button>
-      </div>
-      <div class="hint cw-hint">Впишите нужные числа: программа сама округлит их до значений, которые понимает модель (кратно 32). Пусто — размер по формату и качеству выше.</div>
-    </div>
-    ${opts.extraRow || ''}
-    ${opts.duration ? `
-    <div class="row">
-      <div class="row-l">Длительность <span class="durv"></span></div>
-      <input type="range" min="3" max="25" step="1" class="dur">
-      <div class="ticks"><span>3 с</span><span>8</span><span>14</span><span>19</span><span>25 с</span></div>
-    </div>` : ''}
-    <div class="note warn vwarn" hidden>
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3 2 21h20L12 3Z"/><path d="M12 10v5M12 18h0"/></svg>
-      <span>1080p на длинном ролике может не поместиться в видеопамять. Если генерация упадёт — выберите 720p или сократите длительность.</span>
-    </div>
-    <details style="margin-top:16px">
-      <summary>Дополнительно</summary>
-      <div class="row" style="margin-top:14px">
-        <div class="row-l">Seed — «номер варианта»</div>
-        <div class="seg seed-seg" style="grid-template-columns:1fr 1fr">
-          <button data-sf="0">Случайный<small>каждый раз новое видео</small></button>
-          <button data-sf="1">Фиксированный<small>тот же вариант снова</small></button>
-        </div>
-        <div class="path on seed-row" hidden>
-          <input class="seed-in" inputmode="numeric" spellcheck="false" placeholder="число, например 123456789">
-          <button class="btn seed-new" type="button">🎲 Новый</button>
-          <button class="btn seed-copy" type="button">Копировать</button>
-        </div>
-        <div class="hint seed-hint"></div>
-      </div>
-    </details>`;
-  const upd = () => {
-    $$('.chip', el).forEach(c => c.classList.toggle('on', c.dataset.a === st.aspect));
-    $$('.seg button[data-q]', el).forEach(c => c.classList.toggle('on', c.dataset.q === st.q));
-    $$('.seg button[data-r]', el).forEach(c => c.classList.toggle('on', c.dataset.r === st.refSize));
-    const [w, h] = st.cw && st.ch ? [st.cw, st.ch] : resFor(st.aspect, st.q);
-    $('.resv', el).textContent = `${w}×${h}` + (st.cw && st.ch ? ' · свой' : '');
-    $('.cw-reset', el).hidden = !(st.cw || st.ch);
-    $$('.seg button[data-q]', el).forEach(c => c.style.opacity = st.cw && st.ch ? .45 : '');
-    if (opts.duration) {
-      const d = $('.dur', el); d.value = st.dur;
-      d.style.setProperty('--p', ((st.dur - 3) / 22 * 100) + '%');
-      $('.durv', el).textContent = `${st.dur} с · ${frames(st.dur)} кадров` + (st.dur > 15 ? ' · дольше 15 с модель держит качество хуже' : '');
-    }
-    $('.vwarn', el).hidden = !(st.q === '1080p' && st.len() > 8);
-    $$('.seed-seg button', el).forEach(b => b.classList.toggle('on', (b.dataset.sf === '1') === !!st.seedFixed));
-    $('.seed-row', el).hidden = !st.seedFixed;
-    if ($('.seed-in', el) !== document.activeElement) $('.seed-in', el).value = st.seed || '';
-    $('.seed-hint', el).textContent = st.seedFixed
-      ? 'Одинаковый seed + одинаковые настройки и промпт = одинаковое видео. Удобно менять что-то одно и сравнивать. Понравившийся seed можно взять из библиотеки или сразу после генерации.'
-      : 'Каждый раз получается новый вариант. Seed понравившегося клипа сохраняется в нём — потом его можно зафиксировать.';
-    opts.onChange();
-  };
-  st._upd = upd;  // lets the library and the preview panel switch this mode to a given seed
-  el.addEventListener('click', e => {
-    if (((st.locked && st.locked() && e.target.closest('.chip[data-a]')) || ((st.lockedQ ? st.lockedQ() : st.locked && st.locked()) && e.target.closest('.seg button[data-q]')))) { toast('Формат и качество нельзя менять, пока в проекте есть готовые сцены: все сцены должны быть одного размера. Чтобы сменить, нажмите «Начать заново».'); return; }
-    const c = e.target.closest('.chip[data-a]'); if (c) { const ch = st.aspect !== c.dataset.a; st.aspect = c.dataset.a; st.userAspect = true; upd(); if (ch) st.onSizeChange?.('aspect'); }
-    const q = e.target.closest('.seg button[data-q]'); if (q) { const ch = st.q !== q.dataset.q; st.q = q.dataset.q; upd(); if (ch) st.onSizeChange?.('q'); }
-    const r = e.target.closest('.seg button[data-r]'); if (r) { st.refSize = r.dataset.r; upd(); }
-    const sf = e.target.closest('.seed-seg button'); if (sf) { st.seedFixed = sf.dataset.sf === '1'; if (st.seedFixed && !st.seed) st.seed = newSeed(); upd(); }
-    if (e.target.closest('.seed-new')) { st.seed = newSeed(); upd(); }
-    if (e.target.closest('.seed-copy')) { navigator.clipboard?.writeText(String(st.seed || '')); toast('Seed скопирован: ' + st.seed); }
-  });
-  const cwApply = () => {
-    const iw = $('.cw-w', el), ih = $('.cw-h', el), hint = $('.cw-hint', el);
-    if (st.lockedQ ? st.lockedQ() : st.locked && st.locked()) { iw.value = st.cw || ''; ih.value = st.ch || ''; toast('Размер нельзя менять, пока в проекте есть готовые сцены. Нажмите «Начать заново».'); return; }
-    const a = parseInt(iw.value, 10), b = parseInt(ih.value, 10);
-    if (a >= 64 && b >= 64) {
-      st.cw = Math.min(2048, Math.max(64, Math.round(a / 32) * 32)); st.ch = Math.min(2048, Math.max(64, Math.round(b / 32) * 32));
-      iw.value = st.cw; ih.value = st.ch;
-      hint.textContent = `Размер будет ${st.cw}×${st.ch}` + (st.cw !== a || st.ch !== b ? ` (округлено с ${a}×${b})` : '') + (st.cw * st.ch > 1920 * 1088 ? '. Это больше 1080p: может не хватить видеопамяти.' : '');
-    } else { st.cw = st.ch = 0; hint.textContent = 'Впишите оба числа (от 64 и больше): программа округлит их до кратных 32. Пусто — размер по формату и качеству.'; }
-    upd(); st.onSizeChange?.('q');
-  };
-  $('.cw-w', el).onchange = $('.cw-h', el).onchange = cwApply;
-  $('.cw-reset', el).onclick = () => { $('.cw-w', el).value = $('.cw-h', el).value = ''; st.cw = st.ch = 0; cwApply(); };
-  $('.seed-in', el).oninput = e => { st.seed = e.target.value.replace(/\D/g, '').slice(0, 18); e.target.value = st.seed; };
-  if (opts.duration) $('.dur', el).oninput = e => { st.dur = +e.target.value; upd(); };
-  return upd;
-}
-const SZ_ROW = `<div class="row sz-row"><div class="row-l">Свой размер <span class="hint">(необязательно)</span></div>
-  <div class="path on" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button class="btn sz-p" data-p="0" type="button" title="Обычный размер (около 1 МП): быстро, как эскиз" style="padding:6px 12px;font-size:12.5px">Эскиз</button><button class="btn sz-p" data-p="2k" type="button" title="Сразу 2К: по длинной стороне 2048" style="padding:6px 12px;font-size:12.5px">2К</button><input class="sz-w" inputmode="numeric" placeholder="ширина" style="width:90px"> <span>×</span> <input class="sz-h" inputmode="numeric" placeholder="высота" style="width:90px"> <button class="btn sz-reset" type="button" hidden style="padding:6px 12px;font-size:12.5px">Сбросить</button></div>
-  <div class="hint sz-hint">Размер подстраивается под шаг модели, кратно 32: например, 1920×1080 станет 1920×1088. Пусто — размер по формату выше.</div></div>`;
-function szWire(el, st, onChange, getBase) {
-  const iw = $('.sz-w', el), ih = $('.sz-h', el), hint = $('.sz-hint', el), rs = $('.sz-reset', el);
-  const def = hint.textContent;
-  const apply = () => {
-    const a = parseInt(iw.value, 10), b = parseInt(ih.value, 10);
-    if (a >= 64 && b >= 64) {
-      let k = a * b > 2200000 ? Math.sqrt(2200000 / (a * b)) : 1;
-      const r = v => Math.min(2048, Math.max(256, Math.round(v * k / 32) * 32));
-      st.cw = r(a); st.ch = r(b); iw.value = st.cw; ih.value = st.ch;
-      hint.textContent = `Будет ${st.cw}×${st.ch}` + (st.cw !== a || st.ch !== b ? ` (округлено с ${a}×${b}, шаг 32)` : '') + (st.cw * st.ch > 1500000 ? '. Это больше 1,5 МП: дольше и больше видеопамяти.' : '');
-    } else { st.cw = st.ch = 0; hint.textContent = def; }
-    rs.hidden = !(st.cw || st.ch);
-    onChange();
-  };
-  iw.onchange = ih.onchange = apply;
-  $$('.sz-p', el).forEach(b => b.onclick = () => {
-    if (b.dataset.p === '0') { iw.value = ih.value = ''; apply(); return; }
-    const [bw, bh] = (getBase && getBase()) || [1376, 768], k = 2048 / Math.max(bw, bh);
-    iw.value = Math.round(bw * k / 32) * 32; ih.value = Math.round(bh * k / 32) * 32; apply();
-    if (st.engine === 'krea') toast('Krea 2 лучше всего работает около 1 МП: для неё надёжнее эскиз и потом «Увеличить до 2К» в Библиотеке');
-  });
-  rs.onclick = () => { iw.value = ih.value = ''; apply(); };
-}
-function sizeForm(st, fd) { if (st.cw && st.ch) { fd.append('width', st.cw); fd.append('height', st.ch); } }
-const newSeed = () => String(Math.floor(Math.random() * 2 ** 50));
-// the seed goes to the server only when the user fixed it; otherwise the server draws a new one
-function seedForm(st, fd) { if (st.seedFixed && st.seed) fd.append('seed', st.seed); }
-// make a mode use this exact seed (from the library or from a finished video)
-function useSeed(st, seed, go) {
-  st.seedFixed = true; st.seed = String(seed); st._upd?.();
-  if (go) goTo(go);
-  toast(`Seed ${seed} зафиксирован в этом режиме`);
-}
-
-/* ---------- live preview rendering (demo: imitates denoising toward a target) ---------- */
-const offCv = document.createElement('canvas'), noiseCv = document.createElement('canvas');
-noiseCv.width = 160; noiseCv.height = 100;
-function drawCover(c, src, w, h, z = 1, sx = 0) {
-  const iw = src.naturalWidth || src.width, ih = src.naturalHeight || src.height;
-  const s = Math.max(w / iw, h / ih) * z, dw = iw * s, dh = ih * s;
-  c.drawImage(src, (w - dw) / 2 + sx * w, (h - dh) / 2, dw, dh);
-}
-function makeScene(seed = Math.random()) {
-  const c = document.createElement('canvas'); c.width = 320; c.height = 200;
-  const x = c.getContext('2d'); let r = seed * 9301;
-  const rnd = () => (r = (r * 9301 + 49297) % 233280) / 233280;
-  x.fillStyle = `hsl(${340 + rnd() * 30},40%,8%)`; x.fillRect(0, 0, 320, 200);
-  for (let i = 0; i < 6; i++) {
-    const g = x.createRadialGradient(rnd() * 320, rnd() * 200, 0, rnd() * 320, rnd() * 200, 60 + rnd() * 140);
-    const hue = [350, 10, 25, 220, 280][Math.floor(rnd() * 5)];
-    g.addColorStop(0, `hsla(${hue},${60 + rnd() * 30}%,${40 + rnd() * 25}%,.9)`); g.addColorStop(1, 'transparent');
-    x.fillStyle = g; x.fillRect(0, 0, 320, 200);
-  }
-  return c;
-}
-function renderLive(ctx, W, H, src, p, t) {
-  const sw = Math.max(4, Math.round(4 + p * p * 110));
-  offCv.width = sw; offCv.height = Math.max(3, Math.round(sw * H / W));
-  const o = offCv.getContext('2d');
-  drawCover(o, src, offCv.width, offCv.height, 1.06 + Math.sin(t / 1300) * 0.02, Math.sin(t / 900) * 0.02);
-  ctx.imageSmoothingEnabled = true; ctx.drawImage(offCv, 0, 0, W, H);
-  const a = (1 - p) * 0.85;
-  if (a > 0.02) {
-    const n = noiseCv.getContext('2d'), d = n.createImageData(160, 100);
-    for (let i = 0; i < d.data.length; i += 4) { const v = Math.random() * 255; d.data[i] = v; d.data[i + 1] = v * .7; d.data[i + 2] = v * .8; d.data[i + 3] = 255; }
-    n.putImageData(d, 0, 0);
-    ctx.globalAlpha = a; ctx.imageSmoothingEnabled = false; ctx.drawImage(noiseCv, 0, 0, W, H); ctx.globalAlpha = 1;
-  }
-}
-const fmtTime = s => { s = Math.round(s); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
-
-/* A finished clip plays with sound. Browsers (and WebView2) sometimes refuse an unmuted autoplay:
-   then the clip starts muted and a «Включить звук» chip appears over it — one click puts the sound back. */
-function playWithSound(v) {
-  v.muted = false;
-  try { v.volume = 1; } catch (_) {}
-  const p = v.play();
-  if (p && p.catch) p.catch(() => {
-    v.muted = true;
-    const q = v.play(); if (q && q.catch) q.catch(() => {});
-    soundChip(v);
-  });
-}
-function soundChip(v) {
-  const host = v.closest('.frame, .cw-frame') || v.parentElement;
-  if (!host) return;
-  let b = host.querySelector('.snd');
-  if (!b) {
-    b = document.createElement('button');
-    b.type = 'button'; b.className = 'snd'; b.textContent = '🔊 Включить звук';
-    host.append(b);
-  }
-  b.hidden = false;
-  b.onclick = e => {
-    e.stopPropagation(); e.preventDefault();
-    b.hidden = true; v.muted = false;
-    try { v.volume = 1; } catch (_) {}
-    const p = v.play(); if (p && p.catch) p.catch(() => {});
-  };
-  if (!v.dataset.sndHook) {   // the sound turned on by hand in the player: the chip is no longer needed
-    v.dataset.sndHook = '1';
-    v.addEventListener('volumechange', () => { if (!v.muted) hideSoundChip(host); });
-  }
-}
-function hideSoundChip(host) { host?.querySelector?.('.snd')?.remove(); }
-
-function previewPanel(el, st, opts) {
-  el.innerHTML = `
-    <div class="screen"><div class="frame">
-      <div class="res"></div>
-      <canvas class="live" hidden></canvas>
-      <img class="live-img" alt="" hidden>
-      <video class="live-vid" autoplay loop muted playsinline hidden style="width:100%;height:100%;object-fit:contain"></video>
-      <video class="result" controls loop playsinline hidden></video>
-      <div class="wait" hidden></div>
-      <div class="live-hud" hidden><span class="live-dot"></span><span class="hud-t">Предпросмотр</span><span class="hud-s"></span></div>
-      <div class="bar"></div>
-    </div></div>
-    <div class="summary">
-      <div class="sum"><small>Разрешение</small><b class="s-res"></b></div>
-      <div class="sum"><small>Длина</small><b class="s-len"></b></div>
-      <div class="sum"><small>Кадров</small><b class="s-fr"></b></div>
-      <div class="sum"><small>${opts.extraLabel}</small><b class="s-ex"></b></div>
-    </div>
-    <div class="pbox" hidden>
-      <div class="pbox-top"><span class="pbox-l"></span><b class="pbox-p">0%</b></div>
-      <div class="pbox-bar"><i></i></div>
-      <div class="pbox-badges"></div>
-      <div class="pbox-chip ok"><span class="pbox-dot"></span><span class="pbox-t"></span></div>
-    </div>
-    <button class="go"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l2.4 6.6L21 11l-6.6 2.4L12 20l-2.4-6.6L3 11l6.6-2.4z"/></svg>Сгенерировать</button>
-    <button class="stop" hidden><i></i>Остановить генерацию</button>
-    <div class="cloud-line" hidden>☁ Генерация пойдёт в облако <b>RunningHub</b> (переключить — в разделе «Модели»)</div>
-    <div class="status"></div>
-    <div class="cw-hh vh-hh" hidden>Прошлые клипы — нажмите, чтобы открыть</div>
-    <div class="cw-hist vh-hist"></div>`;
-  const frame = $('.frame', el), go = $('.go', el), stopB = $('.stop', el), status = $('.status', el);
-  const live = $('.live', el), hud = $('.live-hud', el), bar = $('.bar', el);
-  const liveImg = $('.live-img', el), result = $('.result', el), wait = $('.wait', el), liveVid = $('.live-vid', el);
-  const vhHh = $('.vh-hh', el), vhHist = $('.vh-hist', el);
-  const STEP_MS = 420;
-  let run = null, shown = null;   // shown: the clip in the player — a draft of this section or a Library one
-  const pbox = $('.pbox', el), pboxBar = $('.pbox-bar i', el), pboxChip = $('.pbox-chip', el);
-
-  /* the big bar + a colour chip: green = alive, yellow = quiet for a while, red = probably stuck / connection lost */
-  function health(p, stepLine, badges) {
-    pbox.hidden = false;
-    $('.pbox-l', el).textContent = stepLine;
-    $('.pbox-badges', el).innerHTML = (badges || []).map(b => `<span${b.eta ? ' class="eta"' : ''}>${esc(b.t)}</span>`).join('');
-    $('.pbox-p', el).textContent = Math.round(p * 100) + '%';
-    pboxBar.style.width = (p * 100) + '%';
-    const now = performance.now(), idle = (now - (run.lastEv || run.t0)) / 1000;
-    const sampling = run.stage && run.stage.startsWith('sample');
-    const per = run.step >= 2 && run.step1T ? (run.stepT - run.step1T) / (run.step - 1) / 1000 : 0;
-    const warnAt = sampling ? Math.max(90, per * 3) : run.stage === 'queued' ? 1e9 : 300;
-    const badAt = sampling ? Math.max(240, per * 6) : run.stage === 'queued' ? 1e9 : 600;
-    let lvl = 'ok', txt = 'Всё идёт, программа получает данные от ComfyUI';
-    if (run.stopping) {
-      const s = Math.round((now - run.stopping) / 1000);
-      lvl = s > 15 ? 'warn' : 'ok'; txt = `Останавливаем… ${s} с` + (s > 15 ? ' · ComfyUI не отвечает на отмену, программа перезапустит движок' : '');
-    } else if (!ENGINE_ON) { lvl = 'bad'; txt = 'Обрыв связи: ComfyUI не отвечает или закрылся. Дождитесь возврата или перезапустите движок'; }
-    else if (run.stage === 'queued') txt = 'В очереди: ждёт, пока освободится ComfyUI';
-    else if (idle > badAt) { lvl = 'bad'; txt = `Нет ответа уже ${fmtTime(idle)}. Похоже, зависло. Нажмите «Остановить генерацию» и запустите снова (можно с меньшим размером)`; }
-    else if (idle > warnAt) { lvl = 'warn'; txt = `Тишина ${fmtTime(idle)}. ${sampling ? 'Шаг идёт долго, на слабой карте это бывает' : 'Возможно, грузится большая модель'}. Если станет красным, то зависло`; }
-    else if (sampling && run.step) txt = `Всё идёт · последний шаг был ${fmtTime(idle)} назад`;
-    pboxChip.className = 'pbox-chip ' + lvl; pbox.classList.toggle('warn', lvl === 'warn'); pbox.classList.toggle('bad', lvl === 'bad');
-    $('.pbox-t', el).textContent = txt;
-  }
-
-  function resetFrame() {
-    pbox.hidden = true;
-    [live, hud, liveImg, liveVid, result, wait].forEach(x => x.hidden = true);
-    result.pause(); result.removeAttribute('src');
-    hideSoundChip(frame);
-    $('.res', frame).hidden = false; frame.classList.remove('done');
-  }
-
-  /* ----- a finished clip: a draft («Добавить в библиотеку») or a Library video with its own buttons ----- */
-  // the buttons fit the clip: a draft waits for the Library button, its result can still be saved, enlarged or redone
-  function resultActions(it, took, fresh) {
-    const draft = !!it.preview && !byId(it.id);
-    const head = draft
-      ? (took ? `Готово за ${took} — черновик, в Библиотеку не добавлен.` : 'Черновик, в Библиотеку не добавлен.')
-      : (took ? `Готово за ${took} — видео в Библиотеке.` : 'Видео в Библиотеке.');
-    status.innerHTML = `${head} Seed: <b style="font-family:var(--mono)">${esc(String(it.seed ?? '—'))}</b> `;
-    if (draft) status.insertAdjacentHTML('beforeend', '<button class="btn pri" id="vKeepBtn" type="button" style="padding:4px 12px;font-size:12px">Добавить в библиотеку</button> ');
-    if (it.seed != null) status.insertAdjacentHTML('beforeend', '<button class="btn" id="keepSeed" type="button" style="padding:4px 10px;font-size:12px">Зафиксировать</button> ');
-    status.insertAdjacentHTML('beforeend', ' <button class="btn pri" id="upBtn" type="button" style="padding:4px 12px;font-size:12px" title="Увеличить разрешение и добавить чёткости (SeedVR2)">Увеличить видео</button>');
-    $('#upBtn', el).onclick = () => openUpscale(byId(it.id) || normItem(it));
-    $('#keepSeed', el)?.addEventListener('click', () => useSeed(st, it.seed));
-    $('#vKeepBtn', el)?.addEventListener('click', async () => {
-      const b = $('#vKeepBtn', el); b.disabled = true;
-      const kept = await keepDraftItem(it);
-      if (!kept) { b.disabled = false; return; }
-      shown = kept; result.dataset.dragid = kept.id; resultActions(kept, took, fresh); refreshHist();
-    });
-    // beginner flow: try another variant, or redo this very one (same seed) in a better size
-    if (!fresh) return;
-    status.insertAdjacentHTML('beforeend', ' <button class="btn" id="otherBtn" type="button" style="padding:4px 12px;font-size:12px" title="Новый вариант с другим seed, настройки те же">Другой вариант</button>');
-    $('#otherBtn', el).addEventListener('click', () => { st.seedFixed = false; st._upd?.(); go.onclick(); });
-    const curQ = QUALITY_ALL.find(x => x.id === st.q), goodQ = QUALITY_ALL.find(x => x.id === '720p');
-    if (it.seed != null && curQ && !(st.cw && st.ch) && curQ.px < goodQ.px) {
-      status.insertAdjacentHTML('beforeend', ' <button class="btn" id="goodBtn" type="button" style="padding:4px 12px;font-size:12px" title="Тот же вариант (seed сохранится), размер 1280×736. Результат будет похож, но не пиксель в пиксель">В хорошем качестве</button>');
-      $('#goodBtn', el).addEventListener('click', () => { st.seedFixed = true; st.seed = String(it.seed); st.q = '720p'; st._upd?.(); go.onclick(); });
-    }
-  }
-  // the clips of this section that are not in the Library yet: they would otherwise be lost when the next one is made
-  function refreshHist() {
-    if (opts.history === false) { vhHh.hidden = true; vhHist.innerHTML = ''; return; }
-    const mode = opts.meta && opts.meta().mode;
-    const mine = [...DRAFTS.filter(x => x.kind !== 'image' && x.mode === mode && !x.missing && x.url),
-                  ...LIB.filter(x => x.kind !== 'image' && x.mode === mode && !x.missing && x.url)]
-      .filter((x, i, a) => a.findIndex(y => y.id === x.id) === i)
-      .sort((a, b) => b.date - a.date).slice(0, 12);
-    vhHh.hidden = !mine.length;
-    vhHist.innerHTML = mine.map(x => `<button draggable="true" class="cw-th${x.preview ? ' draft' : ''}${shown && shown.id === x.id ? ' on' : ''}" data-id="${x.id}" type="button" title="${esc((x.preview ? 'Черновик, не в Библиотеке · ' : '') + (x.prompt || x.sub || 'клип') + ' · ' + fmtDate(x.date))}"><video src="${x.url}#t=0.5" preload="metadata" muted playsinline></video></button>`).join('');
-  }
-  DRAFT_HOOKS.push(refreshHist);
-  vhHist.onclick = e => {
-    const b = e.target.closest('.cw-th'); const it = b && (byId(b.dataset.id) || draftById(b.dataset.id));
-    if (!it || run) return;
-    shown = it;
-    [liveImg, liveVid, wait].forEach(x => x.hidden = true);
-    $('.res', frame).hidden = true;
-    result.src = it.url; result.dataset.dragid = it.id; result.draggable = true; result.hidden = false;
-    playWithSound(result);
-    frame.classList.add('done'); $('.hud-t', el).textContent = 'Готово'; $('.hud-s', el).textContent = '';
-    resultActions(it, '', false); refreshHist();
-  };
-
-  /* ----- real generation through the local server ----- */
-  const STAGE = {
-    queued: ['В очереди ComfyUI…', 0.02, 'в очереди'],
-    load: ['Загружаем модели в видеопамять… (первый запуск дольше)', 0.05, 'загрузка моделей'],
-    encode: ['Кодируем промпт и кадры…', 0.12, 'кодирование'],
-    sample: ['Генерация кадров', 0.15, ''],
-    upscale: ['Увеличиваем разрешение для второго прохода…', 0.67, 'апскейл'],
-    cloud_queued: ['В очереди на RunningHub…', 0.05, 'облако: очередь'],
-    cloud_run: ['Генерация в облаке RunningHub… (превью в облаке не передаётся)', 0.4, 'облако'],
-    sample2: ['Проход 2 · детализация', 0.70, ''],
-    decode: ['Собираем видео и звук…', 0.92, 'сборка видео'],
-    save: ['Сохраняем файл…', 0.98, 'сохранение'],
-  };
-  const goText = () => opts.goLabel ? opts.goLabel() : 'Сгенерировать';
-  const setGo = busy => { go.lastChild.textContent = busy ? 'Поставить в очередь ещё одно' : goText(); };
-  async function realStart() {
-    const meta = opts.meta();
-    go.disabled = true; if (!run) status.textContent = 'Отправляем задание в ComfyUI…';
-    let res;
-    try {
-      const fd = opts.real.form();
-      if (!fd.has('preview')) fd.append('preview', '1');   // the Library waits for «Добавить в библиотеку»
-      res = await apiSend(opts.real.url, { method: 'POST', body: fd, timeout: 180000 });
-    } catch (e) { go.disabled = false; if (run) toast('Ошибка: ' + e.message); else status.textContent = 'Ошибка: ' + e.message; return; }
-    go.disabled = false;
-    if (run) {  // the previous job keeps going in the queue; this panel now follows the new one
-      clearInterval(run.tick); offPrompt(run.id);
-      if (window.h3State.has(run.id)) window.h3State.update(run.id, { detached: true });
-      run = null;
-    }
-    qAdd(res.prompt_id, meta.mode, meta.prompt);
-    resetFrame();
-    run = { real: true, id: res.prompt_id, t0: performance.now(), lastEv: performance.now(), stage: 'queued' };
-    const tgt = opts.target();
-    if (tgt) { liveImg.src = tgt.src; liveImg.classList.add('dim'); liveImg.hidden = false; }
-    go.hidden = false; setGo(true); stopB.hidden = false; hud.hidden = false; wait.hidden = false; $('.res', frame).hidden = true;
-    $('.hud-t', el).textContent = 'Предпросмотр';
-    showStage();
-    run.tick = setInterval(showStage, 1000);
-    previewHandlers.set(el, blob => {
-      if (run) run.lastEv = performance.now();
-      if (!run || run.stage === 'queued' || run.anim) return;   // the animated preview (KJNodes) wins over the single frame
-      URL.revokeObjectURL(liveImg.dataset.url || '');
-      liveImg.dataset.url = liveImg.src = URL.createObjectURL(blob);
-      liveImg.classList.remove('dim'); liveImg.hidden = false; wait.hidden = true;
-    });
-    onPrompt(run.id, ev => {
-      if (!run || run.id !== ev.prompt_id) return;
-      run.lastEv = performance.now();
-      if (ev.type === 'preview_anim') {
-        run.anim = true; wait.hidden = true; liveImg.classList.remove('dim');
-        if (ev.mime.startsWith('video/')) { liveVid.src = `data:${ev.mime};base64,${ev.image}`; liveVid.hidden = false; liveImg.hidden = true; liveVid.play().catch(() => {}); }
-        else { liveImg.src = `data:${ev.mime};base64,${ev.image}`; liveImg.hidden = false; liveVid.hidden = true; }
-        return;
-      }
-      if (ev.type === 'stage') {
-        const sampling = ev.stage.startsWith('sample');
-        if (sampling && run.stage !== ev.stage) { run.sampleT0 = performance.now(); run.step1T = null; }
-        run.stage = ev.stage; run.step = ev.step; run.max = ev.max;
-        if (ev.scene) { if (run.scene !== ev.scene) { run.sampleT0 = performance.now(); run.step1T = null; } run.scene = ev.scene; run.nscenes = ev.scenes; }
-        if (sampling && ev.step) run.stepT = performance.now();
-        if (sampling && ev.step === 1) run.step1T = run.stepT;   // the first step includes loading, it is not typical
-        showStage();
-      } else if (ev.type === 'done') realFinish('done', ev.item);
-      else if (ev.type === 'error') realFinish('error', ev.message);
-      else if (ev.type === 'interrupted') realFinish('stopped');
-    });
-  }
-  function showStage() {
-    if (!run) return;
-    const [txt, base, short] = STAGE[run.stage];
-    const two = opts.twoPass, sampling = run.stage.startsWith('sample') && run.max;
-    let p = base, line = txt, hudTxt = short;
-    if (sampling) {
-      const frac = (run.step || 0) / run.max;
-      p = run.stage === 'sample2' ? 0.70 + 0.20 * frac : 0.15 + (two ? 0.50 : 0.75) * frac;
-      const pass = two ? `проход ${run.stage === 'sample2' ? 2 : 1}/2 · ` : '';
-      line = `${two && run.stage === 'sample' ? 'Проход 1 · генерация кадров' : txt} · шаг ${run.step || 0} из ${run.max}`;
-      hudTxt = `${pass}шаг ${run.step || 0}/${run.max}`;
-      if (run.scene) { line = `Сцена ${run.scene} из ${run.nscenes} · ` + line; hudTxt = `сцена ${run.scene}/${run.nscenes} · ${hudTxt}`;
-        p = 0.15 + 0.75 * ((run.scene - 1 + frac) / run.nscenes); }
-      if (run.step >= 2 && run.step1T) {
-        const per = (run.stepT - run.step1T) / (run.step - 1);
-        const left = (run.max - run.step) + (run.scene ? (run.nscenes - run.scene) * run.max : 0), extra = run.scene ? 10 * (run.nscenes - run.scene + 1) : 10;
-        if (run.scene) {
-          line += ` · эта сцена ещё ~${fmtTime((run.max - run.step) * per / 1000 + 10)}`;
-          if (run.nscenes > run.scene) line += ` · весь ролик ~${fmtTime(left * per / 1000 + extra)}`;
-        } else line += ` · ${two ? 'до конца прохода' : 'осталось'} ~${fmtTime(left * per / 1000 + extra)}`;
-      } else if (run.step >= 1) line += ' · время считаем, нужен ещё шаг';
-    }
-    bar.style.width = (p * 100) + '%';
-    const badges = [], single = opts.singleScene && opts.singleScene();   // one scene only: do not count the whole video
-    if (run.scene) badges.push({ t: single ? `Сцена ${run.scene}` : `Сцена ${run.scene} из ${run.nscenes}` });
-    if (sampling) {
-      badges.push({ t: `Шаг ${run.step || 0} из ${run.max}` });
-      if (run.step >= 2 && run.step1T) {
-        const per = (run.stepT - run.step1T) / (run.step - 1) / 1000, thisLeft = (run.max - run.step) * per + 10;
-        badges.push({ t: `Осталось ~${fmtTime(thisLeft)}`, eta: true });
-        if (!single && run.scene && run.nscenes > run.scene) badges.push({ t: `Весь ролик ~${fmtTime(thisLeft + (run.nscenes - run.scene) * (run.max * per + 10))}`, eta: true });
-      } else badges.push({ t: 'Считаем время…', eta: true });
-    }
-    badges.push({ t: `Прошло ${fmtTime((performance.now() - run.t0) / 1000)}` });
-    health(p, sampling ? (two && run.stage === 'sample' ? 'Проход 1 · генерация кадров' : txt) : txt.replace(/…$/, ''), badges);
-    $('.hud-s', el).textContent = hudTxt;
-    wait.textContent = liveImg.hidden || liveImg.classList.contains('dim') ? txt : '';
-    status.textContent = run.stopping ? 'Останавливаем…' : '';   // the big box above shows the same, no second small line
-  }
-  function realFinish(kind, data) {
-    clearInterval(run.tick); offPrompt(run.id); previewHandlers.delete(el);
-    go.hidden = false; setGo(false); stopB.hidden = true; bar.style.width = 0; pbox.hidden = true;
-    const took = fmtTime((performance.now() - run.t0) / 1000);
-    run = null;
-    if (kind === 'done') {
-      if (!data) { resetFrame(); status.textContent = 'Готово, но программа не получила файл: проверьте «Очередь»'; return; }
-      shown = normItem(data);
-      [liveImg, liveVid, wait].forEach(x => x.hidden = true);
-      $('.res', frame).hidden = true;
-      result.src = shown.url; result.dataset.dragid = shown.id; result.draggable = true; result.hidden = false; playWithSound(result);
-      frame.classList.add('done'); $('.hud-t', el).textContent = 'Готово'; $('.hud-s', el).textContent = took;
-      resultActions(shown, took, true);
-      refreshHist();
-    } else {
-      resetFrame();
-      status.textContent = kind === 'error' ? 'Ошибка ComfyUI: ' + data : 'Генерация остановлена. Поправьте промпт или настройки и запустите снова';
-    }
-  }
-
-  go.onclick = () => {
-    const err = opts.validate(); if (err) { status.textContent = err; return; }
-    if (API) {
-      if (!opts.real) { status.textContent = 'Этот режим ещё не подключён к ComfyUI — пока работает «Image-to-Video»'; return; }
-      return realStart();
-    }
-    const [w, h] = resFor(st.aspect, st.q);
-    live.width = 480; live.height = Math.round(480 * h / w);
-    const passes = opts.passes();
-    run = { passes, total: passes.reduce((a, b) => a + b, 0), step: 0, last: performance.now(), t0: performance.now(), src: opts.target() || makeScene() };
-    go.hidden = true; stopB.hidden = false; live.hidden = false; hud.hidden = false; $('.res', frame).hidden = true;
-    frame.classList.remove('done'); $('.hud-t', el).textContent = 'Предпросмотр';
-    run.timer = setInterval(() => { run.step++; run.last = performance.now(); if (run.step >= run.total) finish(true); }, STEP_MS);
-    const draw = now => {
-      if (!run) return;
-      const p = Math.min(1, (run.step + Math.min(1, (now - run.last) / STEP_MS)) / run.total);
-      renderLive(live.getContext('2d'), live.width, live.height, run.src, p, now);
-      bar.style.width = (p * 100) + '%';
-      let s = run.step, pass = 0; while (pass < run.passes.length - 1 && s >= run.passes[pass]) s -= run.passes[pass++];
-      const passTxt = run.passes.length > 1 ? `проход ${pass + 1}/${run.passes.length} · ` : '';
-      $('.hud-s', el).textContent = `${passTxt}шаг ${Math.min(s + 1, run.passes[pass])}/${run.passes[pass]}`;
-      const el2 = (now - run.t0) / 1000;
-      status.textContent = `Генерация · ${Math.round(p * 100)}%` + (p > 0.05 ? ` · осталось ~${fmtTime(el2 / p * (1 - p))}` : '');
-      run.raf = requestAnimationFrame(draw);
-    };
-    run.raf = requestAnimationFrame(draw);
-  };
-  stopB.onclick = () => {
-    if (!run?.real) return finish(false);
-    status.textContent = 'Останавливаем…'; run.stopping = performance.now(); showStage();
-    apiPost('/api/interrupt', { prompt_id: run.id }).catch(() => {});
-  };
-
-  function finish(ok) {
-    clearInterval(run.timer); cancelAnimationFrame(run.raf);
-    go.hidden = false; stopB.hidden = true; bar.style.width = 0;
-    if (ok) {
-      renderLive(live.getContext('2d'), live.width, live.height, run.src, 1, performance.now());
-      frame.classList.add('done'); $('.hud-t', el).textContent = 'Готово'; $('.hud-s', el).textContent = '';
-      const [w, h] = resFor(st.aspect, st.q);
-      opts.onDone({ ...opts.meta(), res: `${w}×${h}`, aspect: st.aspect, q: st.q, len: st.len(), thumb: live.toDataURL('image/jpeg', .85) });
-      status.textContent = 'Готово — видео сохранено в библиотеку';
-    } else {
-      live.hidden = true; hud.hidden = true; $('.res', frame).hidden = false;
-      status.textContent = 'Генерация остановлена. Поправьте промпт или настройки и запустите снова';
-    }
-    run = null;
-  }
-
-  queueMicrotask(refreshHist);   // LIB is declared later in the script: the history is filled once everything is ready
-  return () => {
-    if (!run && $('.res', frame).hidden) resetFrame();
-    const effQ = st.effQ ? st.effQ() : st.q, [w, h] = resFor(st.aspect, effQ);
-    if (!run) go.lastChild.textContent = goText();
-    frame.style.aspectRatio = `${w}/${h}`;
-    frame.style.width = w >= h ? '100%' : `${Math.round(100 * w / h * 0.95)}%`;
-    $('.res', frame).innerHTML = `<b>${w} × ${h}</b>${st.aspect} · ${effQ !== st.q ? 'черновик' : st.q}`;
-    $('.s-res', el).textContent = `${w}×${h}`;
-    const L = st.len();
-    $('.s-len', el).textContent = L ? `${L.toFixed(1).replace('.0', '')} с` : '—';
-    $('.s-fr', el).textContent = L ? frames(L) : '—';
-    $('.s-ex', el).textContent = opts.extra();
-  };
-}
-
-/* ---------- dropzones ---------- */
-const REF_HINT = {
-  max: 'Модель внимательно разглядывает ваши изображения в полном размере, поэтому лицо и одежда похожи сильнее всего. Но работает в 2–3 раза дольше. Берите для готового видео.',
-  match: 'Модель смотрит на изображения в уменьшенном виде: быстрее, но сходство с лицом чуть хуже. Берите для проб, пока подбираете промпт.',
-};
-/* optional LoRAs: the same on/off switch and strength slider in every mode */
-const LORA_DEFS = {
-  realism: { name: 'Реализм людей', hint: 'Для живых людей: естественная кожа и лицо. Если лицо выглядит «пластиково» — включите.', min: 0, max: 1, step: .05, v: .5, on: false },
-  motion: { name: 'Исправление движения', hint: 'Если движение рвётся, дёргается или «плывёт» — включите.', min: 0, max: 1, step: .05, v: .5, on: false },
-  dmad: { name: 'DMAD', hint: 'Усиливает динамику и чёткость движения. Как в исходном экшн-workflow: 0.8.', min: 0, max: 1.2, step: .05, v: .8, on: true },
-  speed: { name: 'Speed Slider', hint: 'Скорость движения: 3–4 — быстро и резко; ближе к 0 — спокойнее; со знаком минус — замедление.', min: -8, max: 8, step: .5, v: 4, on: true },
-};
-function mountLoras(box, st, keys) {
-  st.loras = st.loras || {};
-  keys.forEach(k => { st.loras[k] = st.loras[k] || { on: LORA_DEFS[k].on, v: LORA_DEFS[k].v }; });
-  box.innerHTML = keys.length ? `<div class="row"><div class="row-l">Дополнительные LoRA <span class="hint" style="font-family:inherit">включите нужные и задайте силу влияния</span></div>`
-    + keys.map(k => { const d = LORA_DEFS[k]; return `<div class="lora" data-k="${k}"><div class="lora-h"><button class="chip lora-t" type="button">${d.name}</button><span class="lora-v"></span></div>`
-      + `<input type="range" class="lora-r" min="${d.min}" max="${d.max}" step="${d.step}"><div class="hint">${d.hint}</div></div>`; }).join('') + '</div>' : '';
-  const paint = () => $$('.lora', box).forEach(el => {
-    const s = st.loras[el.dataset.k], r = $('.lora-r', el);
-    $('.lora-t', el).classList.toggle('on', s.on);
-    r.value = s.v; r.disabled = !s.on; r.style.opacity = s.on ? 1 : .35;
-    r.style.setProperty('--p', ((s.v - r.min) / (r.max - r.min) * 100) + '%');
-    $('.lora-v', el).textContent = s.on ? `сила ${(+s.v).toFixed(2).replace(/\.?0+$/, '')}` : 'выключена';
-  });
-  box.onclick = e => { const el = e.target.closest('.lora'); if (!el || !e.target.closest('.lora-t')) return; const s = st.loras[el.dataset.k]; s.on = !s.on; paint(); };
-  box.oninput = e => { const el = e.target.closest('.lora'); if (!el) return; st.loras[el.dataset.k].v = +e.target.value; paint(); };
-  st._paintLoras = paint;
-  paint();
-}
-function loraForm(st, fd) { Object.entries(st.loras || {}).forEach(([k, s]) => fd.append('lora_' + k, s.on ? s.v : 'off')); }
-
-// reference slots take the shape of the picture: 16:9 wide, 9:16 tall, square square
-function fitSlot(r, img) {
-  const go = () => {
-    const ratio = Math.min(16 / 9, Math.max(9 / 16, img.naturalWidth / img.naturalHeight));
-    r.style.aspectRatio = ratio.toFixed(4); r.classList.toggle('wide', ratio > 1.2);
-  };
-  img.complete && img.naturalWidth ? go() : img.addEventListener('load', go, { once: true });
-}
-function resetSlot(r) { r.style.aspectRatio = ''; r.classList.remove('wide'); }
-
-// pick the format closest to a picture's proportions once it has loaded
-function fitAspect(st, img, upd, force) {
-  if ((st.userAspect && !force) || (st.locked && st.locked())) return;
-  const apply = () => {
-    const r = img.naturalWidth / img.naturalHeight; if (!r) return;
-    const best = ASPECTS.reduce((a, b) => Math.abs(Math.log(b.w / b.h / r)) < Math.abs(Math.log(a.w / a.h / r)) ? b : a);
-    if (best.id === st.aspect) return;
-    st.aspect = best.id; upd();
-    toast(`Формат подстроен под изображение: ${best.name}${best.name !== best.id ? ' ' + best.id : ''}`);
-  };
-  img.complete && img.naturalWidth ? apply() : img.addEventListener('load', apply, { once: true });
-}
-
-function wireDrop(zone, onFile) {
-  const input = $('input', zone);
-  const set = file => {
-    if (!file || !file.type.startsWith('image/')) return;
-    zone._file = file;
-    let img = $('img', zone); if (!img) { img = document.createElement('img'); zone.prepend(img); }
-    img.src = URL.createObjectURL(file);
-    zone.classList.add('filled'); $('.ph', zone).hidden = true;
-    const tag = $('.tag', zone); if (tag) tag.hidden = false;
-    onFile(true, img);
-  };
-  input.onchange = () => set(input.files[0]);
-  zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('over'); });
-  zone.addEventListener('dragleave', () => zone.classList.remove('over'));
-  zone.addEventListener('drop', e => { e.preventDefault(); zone.classList.remove('over'); set(e.dataTransfer.files[0]); });
-  const x = $('.x', zone);
-  if (x) x.onclick = e => { e.preventDefault(); e.stopPropagation(); clear(); };
-  function clear() {
-    zone._file = null;
-    $('img', zone)?.remove(); zone.classList.remove('filled'); $('.ph', zone).hidden = false;
-    const tag = $('.tag', zone); if (tag) tag.hidden = true; input.value = ''; onFile(false);
-  }
-  return { clear };
-}
-
-/* picture slots: drag one picture onto another slot to swap them; clearAll clicks every slot's ✕ */
-function slotSet(z, f, src) {
-  z._file = f || null;
-  let im = $('img', z);
-  if (src) { if (!im) { im = document.createElement('img'); z.prepend(im); } im.src = src; }
-  else if (im) im.remove();
-  z.classList.toggle('filled', !!f);
-  const ph = $('.plus, .ph', z); if (ph) ph.hidden = !!f;
-  const tg = $('.tag', z); if (tg) tg.hidden = !f;
-}
-function wireSlotSwap(zones, onSwap) {
-  let from = null;
-  zones.forEach(z => {
-    z.addEventListener('dragstart', e => {
-      if (!z._file) { e.preventDefault(); return; }
-      from = z;
-      try { e.dataTransfer.setData('text/plain', 'slot'); e.dataTransfer.effectAllowed = 'move'; } catch {}
-    });
-    z.addEventListener('dragend', () => { from = null; });
-    z.addEventListener('dragover', e => { if (from && from !== z) { e.preventDefault(); try { e.dataTransfer.dropEffect = 'move'; } catch {} } });
-    z.addEventListener('drop', e => {
-      e.preventDefault(); e.stopPropagation();
-      if (!from || from === z) return;
-      const a = from, b = z;
-      const fa = a._file, sa = $('img', a)?.src, fb = b._file, sb = $('img', b)?.src;
-      slotSet(a, fb, sb); slotSet(b, fa, sa);
-      from = null;
-      if (onSwap) onSwap();
-    });
-  });
-}
-const clearSlots = zones => zones.forEach(z => { const x = $('.x', z); if (x) x.click(); });
+/* ---------- shared widgets (see /ui/js/components.js) ---------- */
+// One preview panel, one parameters card, one set of media slots and LoRA switches for every mode.
+// The page lends the widgets the Library, drafts, the queue and the subscriptions; the widgets own
+// their markup and their handlers. Loaded before this script, so the first panel can be built here.
+const H3C = window.h3Components;
+const { ASPECTS, QUALITY_ALL, QUALITY, qLabel, r32, resFor, frames, paramsCard, SZ_ROW, szWire,
+        sizeForm, newSeed, seedForm, useSeed, drawCover, makeScene, renderLive, fmtTime,
+        playWithSound, soundChip, hideSoundChip, previewPanel, REF_HINT, LORA_DEFS, mountLoras,
+        loraForm, fitSlot, resetSlot, fitAspect, wireDrop, slotSet, wireSlotSwap, clearSlots } = H3C;
+H3C.configure({
+  toast: (...a) => toast(...a),                       // these are declared later in the page: thunks,
+  fmtDate: (...a) => fmtDate(...a),                   // so the widgets may exist before them
+  engineOnline: () => ENGINE_ON,
+  online: () => API,
+  byId: id => byId(id),
+  draftById: id => draftById(id),
+  drafts: () => DRAFTS,
+  library: () => LIB,
+  addDraftHook: fn => DRAFT_HOOKS.push(fn),
+  removeDraftHook: fn => { const i = DRAFT_HOOKS.indexOf(fn); if (i >= 0) DRAFT_HOOKS.splice(i, 1); },
+  keepDraft: it => keepDraftItem(it),
+  openUpscale: it => openUpscale(it),
+  addJob: (id, mode, prompt) => qAdd(id, mode, prompt),
+  onPrompt: (id, fn) => onPrompt(id, fn),
+  offPrompt: id => offPrompt(id),
+  previewHandlers,
+  goTo: v => goTo(v),
+  postJSON: (url, body) => postJSON(url, body),
+});
 
 /* ---------- VIDEO view ---------- */
 const V = { aspect: '16:9', q: '720p', dur: 5, first: false, last: false, unet: 'fast', len: () => V.dur };
@@ -3553,6 +2921,7 @@ function goTo(view) {
   if (n) { n.click(); return; }
   $$('.nav').forEach(x => x.classList.remove('active'));   // a page that has no button of its own (a preset)
   $$('.view').forEach(v => v.classList.toggle('active', v.id === 'view-' + view));
+  window.h3Modes?.activate(view);
   if (view === 'swap') swapCheck();
 }
 
@@ -4167,7 +3536,8 @@ function makeRefMode(cfg) {
       const ids = cards.map(c => (c._dn[q] || {}).id).filter(id => id && byId(id) && !byId(id).missing);
       if (ids.length < 2) { toast(ids.length ? 'Готова только одна сцена: сохранить её можно из Библиотеки. Для ролика нужно хотя бы две готовые сцены.' : 'Пока нет готовых сцен'); return; }
       if (ids.length < cards.length) toast(`Готово ${ids.length} из ${cards.length} сцен: в Монтаж отправлены только готовые`);
-      window.montageLoad(ids); goTo('montage');
+      goTo('montage');                       // the section is built on the first visit
+      window.montageLoad(ids);               // then it takes the scenes
     };
     $('.tl-all', root).onclick = () => {   // the finished fragments one after another
       const urls = $$('.sc', root).map(c => (c._dn[root._q] || {}).url).filter(Boolean);
@@ -7538,6 +6908,38 @@ $('.nav[data-view="models"]').addEventListener('click', loadCL);
 $('#setCustom').onclick = () => $('#navCustom').click();
 $('#cwBack').onclick = () => $('.nav[data-view="models"]').click();
 $('#navCustom').addEventListener('click', () => { $$('.nav').forEach(x => x.classList.toggle('active', x.dataset.view === 'models')); });
+/* ---------- what every section gives back when the user opens another one ---------- */
+// The mode modules (montage, pictures, ...) register themselves with a real mount; the sections
+// that are wired once while this script is parsed only need their resources released. Leaving
+// pauses playback and saves the long project; pagehide also revokes picture object URLs, so a
+// hundred visits cannot leave a frame loop, a playing clip or a blob URL behind.
+function leaveView(id) {
+  window.h3Lifecycle.pauseMedia($('#view-' + id));
+}
+function disposeView(id) {
+  const view = $('#view-' + id); if (!view) return;
+  window.h3Lifecycle.pauseMedia(view);
+  $$('img', view).forEach(img => {
+    if (img.src.startsWith('blob:')) { try { URL.revokeObjectURL(img.src); } catch {} }
+  });
+}
+window.h3Modes.register('video', {
+  leave: () => { vPrev.pause(); leaveView('video'); },
+  dispose: () => { vPrev.dispose(); disposeView('video'); },
+});
+window.h3Modes.register('lipsync', {
+  leave: () => { stop(); lPrev.pause(); leaveView('lipsync'); },
+  dispose: () => { stop(); lPrev.dispose(); disposeView('lipsync'); },
+});
+window.h3Modes.register('long', {
+  leave: () => { RM.long?.root?._save?.(); leaveView('long'); },   // the project is remembered on disk
+  dispose: () => disposeView('long'),
+});
+['refs', 'actor', 'swap', 'action', 'krea', 'qwen', 'inpaint', 'custom', 'library', 'queue',
+ 'presets', 'models', 'loras', 'settings', 'agent', 'upfile'].forEach(id => {
+  window.h3Modes.register(id, { leave: () => leaveView(id), dispose: () => disposeView(id) });
+});
+
 if (API) afterModules(() => {
   connectEvents(); loadStatus(); loadCloud(); pollSystem();
   apiGet('/api/status').then(s => {
@@ -7621,486 +7023,6 @@ $('#setReset').onclick = () => {
   toast('Оформление вернулось к исходному');
 };
 
-/* ---------- MONTAGE: join library clips in a chosen order (ComfyUI does the work, no ffmpeg) ---------- */
-(function mountMontage() {
-  const root = $('#view-montage'), MT = { ids: [], cuts: [], drag: null, busy: false, up: {}, n: 0, px: 26, res: false };
-  try { MT.px = +localStorage.getItem('h3-mt-px') || 26; } catch {}
-  const wOf = d => Math.max(Math.round(MT.px * 2.85), Math.round(d * MT.px));   // block width: the clip length at the chosen scale (short clips keep room for buttons)
-   // cuts[i]: seconds the clip is trimmed to (null: whole clip)
-  const get = id => id.startsWith('up:') ? MT.up[id.slice(3)] : (byId(id) || draftById(id));   // a Library clip, a draft, or a file from the computer
-  root.innerHTML = `
-    <div class="head"><div><h1>Монтаж</h1><p>Склейте клипы из Библиотеки в один ролик: добавьте их по порядку, при необходимости поменяйте местами и нажмите «Склеить»</p></div></div>
-    <div class="grid"><div class="col">
-      <div class="card"><div class="card-h"><h3><span class="n">1</span>Клипы из Библиотеки и черновики</h3><span class="hint">нажмите на клип, чтобы добавить</span><button type="button" class="btn mini mt-pc" title="Добавить видео со своего компьютера">+ С компьютера</button><input type="file" class="mt-file" accept="video/*" multiple hidden></div><div class="mt-lib"></div><div class="hint mt-hid" style="margin-top:8px"></div></div>
-      <div class="card"><div class="card-h"><h3><span class="n">2</span>Порядок склейки</h3><span class="counter mt-total"></span><span class="mt-zoom"><button type="button" class="btn mini" data-z="-1" title="Мельче">−</button><button type="button" class="btn mini" data-z="0" title="Уместить всю ленту по ширине">По ширине</button><button type="button" class="btn mini" data-z="1" title="Крупнее">+</button></span></div>
-        <div class="mt-strip"></div>
-        <div class="mt-vh" title="Потяните вниз или вверх, чтобы клипы стали крупнее или мельче. Двойной щелчок: как было"><i></i></div>
-        <div class="hint mt-hint" style="margin-top:8px">Нажмите на клип в ленте, чтобы посмотреть с этого места (справа). Ширина блока равна длине клипа. Порядок меняется перетаскиванием или стрелками. Потяните правый край блока, чтобы сделать клип короче (или вернуть длину). Клипы разного размера приводятся к размеру первого.</div></div>
-    </div><div class="preview">
-      <div class="screen"><div class="frame" style="aspect-ratio:16/9;width:100%"><div class="res mt-empty"><b>Монтаж</b>добавьте клипы: здесь можно будет посмотреть, как они идут подряд, а потом появится готовый ролик</div><video class="result mt-pv" playsinline hidden></video><video class="result mt-res" controls loop playsinline hidden></video></div></div>
-      <div class="mt-bar" hidden><button type="button" class="btn mt-play" title="Играть / пауза (пробел)">▶</button><input type="range" class="mt-seek" min="0" max="0" value="0" title="Перемотка"><span class="mt-time">0:00 / 0:00</span></div>
-      <div class="mt-tabs" hidden><button type="button" class="btn mini on" data-pv="seq">Предпросмотр</button><button type="button" class="btn mini" data-pv="res">Готовый ролик</button></div>
-      <div class="mt-eng">
-        <div class="mt-eng-tabs"><button type="button" class="btn mini on" data-eng="comfy">ComfyUI</button><button type="button" class="btn mini" data-eng="ff" title="Собрать тем же FFmpeg: переходы, формат, титры и музыка за секунды, видеокарта не нужна">FFmpeg (быстро)</button></div>
-        <div class="mt-ff" hidden>
-          <div class="hint ff-state" style="margin-bottom:10px"></div>
-          <div class="ff-grid">
-            <label class="fld"><span>Переход</span><select class="ff-transition"><option value="none">без перехода</option><option value="fade" selected>растворение</option><option value="dissolve">наплыв</option><option value="wipeleft">шторка влево</option><option value="wiperight">шторка вправо</option><option value="slideup">скольжение вверх</option><option value="circleopen">круг</option></select></label>
-            <label class="fld"><span>Длина перехода: <b class="ff-tdv">0.4</b> с</span><input type="range" class="ff-trans-dur" min="0.1" max="1.5" step="0.1" value="0.4"></label>
-            <label class="fld"><span>Формат</span><select class="ff-aspect"><option value="original" selected>как первый клип</option><option value="16:9">16:9</option><option value="9:16">9:16 вертикальный</option><option value="1:1">1:1</option><option value="21:9">21:9</option></select></label>
-            <label class="fld"><span>Как вписать в формат</span><select class="ff-fit"><option value="blur" selected>размытый фон</option><option value="crop">обрезать по краям</option><option value="pad">чёрные поля</option></select></label>
-            <label class="fld"><span>Скорость</span><select class="ff-speed"><option value="1" selected>1×</option><option value="0.5">0.5×</option><option value="0.75">0.75×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="2">2×</option></select></label>
-            <label class="fld"><span>Цвет</span><select class="ff-filter"><option value="none" selected>как есть</option><option value="warm">тёплый</option><option value="cold">холодный</option><option value="bw">чёрно-белый</option><option value="vintage">винтаж</option><option value="vignette">виньетка</option></select></label>
-            <label class="fld"><span>Надпись</span><input class="ff-title" maxlength="200" placeholder="необязательно"></label>
-            <label class="fld"><span>Где надпись</span><select class="ff-title-pos"><option value="bottom" selected>внизу</option><option value="center">по центру</option><option value="top">вверху</option></select></label>
-            <label class="fld"><span>Музыка</span><input type="file" class="ff-music" accept="audio/*"></label>
-            <label class="fld"><span>Музыка: <b class="ff-mv">35</b>%</span><input type="range" class="ff-mvol" min="0" max="100" step="5" value="35"></label>
-            <label class="fld"><span>Звук клипов: <b class="ff-vv">100</b>%</span><input type="range" class="ff-vvol" min="0" max="100" step="5" value="100"></label>
-          </div>
-          <div class="hint">Сборка идёт на процессоре и видеокарту не занимает: длинная лента собирается за секунды, а переходы и титры накладывает сам FFmpeg.</div>
-        </div>
-      </div>
-      <button class="go mt-go"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l2.4 6.6L21 11l-6.6 2.4L12 20l-2.4-6.6L3 11l6.6-2.4z"/></svg><span class="mt-go-t">Склеить</span></button>
-      <div class="mt-upbox"><select class="mt-upeng" title="Чем увеличивать каждый клип"><option value="relay">Быстро (RelayVSR, в 2 раза)</option><option value="seed">Качественно (SeedVR2, в 2 раза, долго)</option></select><button type="button" class="btn mt-upgo" title="Каждый клип увеличивается отдельно (быстро, память не переполняется), потом увеличенные склеиваются. Исходные клипы остаются.">Увеличить каждый клип и склеить</button></div>
-      <div class="mt-sets">
-        <label class="mt-s-detail"><span><b>Детали: <i class="mt-dv">70</i>%</b> меньше — мягче, без пересвета лиц; больше — чётче</span><input type="range" class="mt-detail" min="0" max="100" step="5" value="70"></label>
-        <label class="mt-s-sharp" hidden><span><b>Чёткость: <i class="mt-sv">100</i>%</b> меньше — мягче; 100 — как есть</span><input type="range" class="mt-sharp" min="0" max="100" step="5" value="100"></label>
-        <label><span><b>Зерно плёнки: <i class="mt-gv">0</i>%</b> 0 — выключено. Накладывается на каждый клип отдельно, потом клипы склеиваются</span><input type="range" class="mt-grain" min="0" max="100" step="5" value="0"></label>
-      </div>
-      <div class="mt-pipe" hidden></div>
-      <div class="status mt-status"></div>
-    </div></div>`;
-  const hidden = () => { try { return JSON.parse(localStorage.getItem('h3-mt-hide') || '[]'); } catch { return []; } };
-  const hideSet = a => { try { localStorage.setItem('h3-mt-hide', JSON.stringify(a)); } catch {} };
-  const fullOf = i => get(MT.ids[i]).len || 5, durOf = i => MT.cuts[i] != null ? MT.cuts[i] : fullOf(i);
-  const lenTxt = it => it.len ? it.len.toFixed(1).replace('.0', '') + ' с' : '';
-  DRAFT_HOOKS.push(() => { try { render(); } catch {} });   // a new draft appears in the clip list above at once
-  function render() {
-    const keep = MT.ids.map(id => !!get(id) && !get(id).missing); MT.cuts = MT.cuts.filter((_, i) => keep[i]); MT.ids = MT.ids.filter((_, i) => keep[i]);
-    const hid = hidden();
-    const seen = new Set(), all = [...DRAFTS.filter(it => it.kind !== 'image' && !it.missing && it.url),
-                                 ...LIB.filter(it => it.kind !== 'image' && !it.missing && it.url)]
-      .filter(it => !seen.has(it.id) && seen.add(it.id));
-    const vids = all.filter(it => !hid.includes(it.id)), nh = all.length - vids.length;
-    $('.mt-hid', root).innerHTML = nh ? `Убрано из списка: ${nh} · <button type="button" class="a-change" data-showall>Вернуть все</button>` : '';
-    $('.mt-lib', root).innerHTML = vids.length ? vids.map(it => `<button type="button" class="mt-card" data-id="${it.id}" title="${esc(it.prompt || '')}"><video src="${it.url}#t=0.5" preload="metadata" muted playsinline></video><span class="mt-plus">+</span><span class="mt-x" data-hide="${it.id}" role="button" title="Убрать из этого списка (в Библиотеке клип останется)">✕</span><span class="mt-len">${lenTxt(it)}</span><small>${esc(it.prompt || MODE_NAME[it.mode] || '')}${it.preview ? ' · черновик' : ''}</small></button>`).join('')
-      : '<div class="hint">Видео пока нет: сгенерируйте клипы в любом видеоразделе — готовые появятся здесь.</div>';
-    $('.mt-strip', root).innerHTML = MT.ids.length ? MT.ids.map((id, i) => { const it = get(id), d = durOf(i); return `<div class="mt-item" draggable="true" data-i="${i}" style="width:${wOf(d)}px"><video src="${it.url}#t=0.5" preload="metadata" muted playsinline></video><span class="mt-n">${i + 1}</span>${window.mtPipeDone && window.mtPipeDone(id) ? '<span class="mt-ok" title="Клип обработан">✓</span>' : ''}<span class="mt-len">${d.toFixed(1).replace('.0', '')} с${MT.cuts[i] != null ? ' ✂' : ''}</span><div class="mt-b"><button type="button" data-mv="-1" title="Влево">◀</button><button type="button" data-rm title="Убрать">✕</button><button type="button" data-mv="1" title="Вправо">▶</button></div><i class="mt-rh" title="Потяните, чтобы сделать клип короче или длиннее (длиннее оригинала нельзя)"></i></div>`; }).join('')
-      : '<div class="hint">Пока пусто: нажмите на клипы сверху.</div>';
-    const total = MT.ids.reduce((a, id, i) => a + durOf(i), 0);
-    $('.mt-total', root).textContent = MT.ids.length ? `${MT.ids.length} клипов · ≈ ${Math.round(total)} с` : '';
-    if (MT.ids.length) $('.mt-strip', root).insertAdjacentHTML('beforeend', '<i class="mt-ph"></i>');
-    syncPlayer();
-    if (window.mtSaveState) { window.mtSaveState(); window.mtPipePaint(); }
-  }
-
-  /* preview player: the clips in the chosen order play one after another; the slider, a click on a clip and the playhead seek in the whole montage */
-  const P = { g: 0, i: 0, playing: false, raf: 0, drag: false, mode: 'seq', loading: false, tok: 0 };
-  const pv = $('.mt-pv', root), bar = $('.mt-bar', root), seek = $('.mt-seek', root), playBtn = $('.mt-play', root), timeEl = $('.mt-time', root);
-  const mmss = s => { s = Math.max(0, s); return Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0'); };
-  const totalLen = () => MT.ids.reduce((a, _, i) => a + durOf(i), 0);
-  const startOf = i => { let a = 0; for (let j = 0; j < i; j++) a += durOf(j); return a; };
-  function locate(g) { let a = 0; const n = MT.ids.length; for (let i = 0; i < n; i++) { const d = durOf(i); if (g < a + d - 1e-6 || i === n - 1) return { i, off: Math.min(d, Math.max(0, g - a)) }; a += d; } return { i: 0, off: 0 }; }
-  function loadAt(i, off, play) {
-    const id = MT.ids[i], it = get(id); if (!it) return;
-    const tok = ++P.tok, go = () => { if (tok !== P.tok) return; P.loading = false; try { pv.currentTime = off; } catch {} if (play) pv.play().catch(() => {}); };
-    if (pv.dataset.id !== id) { P.loading = true; pv.dataset.id = id; pv.src = it.url; pv.addEventListener('loadedmetadata', go, { once: true }); pv.load(); } else go();
-  }
-  function seekTo(g, play) {
-    if (!MT.ids.length) return;
-    g = Math.min(Math.max(0, g), totalLen()); const L = locate(g); P.g = g; P.i = L.i; loadAt(L.i, L.off, play); updateUI();
-  }
-  function updateUI() {
-    const tot = totalLen(); if (!P.drag) seek.value = Math.round(P.g * 10);
-    timeEl.textContent = mmss(P.g) + ' / ' + mmss(tot);
-    const strip = $('.mt-strip', root), ph = $('.mt-ph', strip), items = $$('.mt-item', strip); if (!ph || !items.length) return;
-    items.forEach((x, k) => x.classList.toggle('cur', k === P.i));
-    const el = items[P.i]; if (!el) return;
-    const x = el.offsetLeft + Math.min(1, Math.max(0, (P.g - startOf(P.i)) / durOf(P.i))) * el.offsetWidth; ph.style.left = x + 'px';
-    if (P.playing && (x < strip.scrollLeft + 20 || x > strip.scrollLeft + strip.clientWidth - 20)) strip.scrollLeft = Math.max(0, x - 60);
-  }
-  function setPlaying(on) { P.playing = on; playBtn.textContent = on ? '⏸' : '▶'; clearInterval(P.raf); if (on) P.raf = setInterval(tick, 40); else pv.pause(); }
-  function tick() {
-    if (!P.playing) return;
-    if (!P.loading) {
-      const d = durOf(P.i), t = pv.currentTime;
-      if (!pv.seeking && (t >= d - 0.04 || pv.ended)) {
-        if (P.i < MT.ids.length - 1) { P.i++; P.g = startOf(P.i); loadAt(P.i, 0, true); }
-        else { setPlaying(false); P.g = totalLen(); updateUI(); return; }
-      } else P.g = startOf(P.i) + t;
-      updateUI();
-    }
-  }
-  function togglePlay() {
-    if (!MT.ids.length || P.mode !== 'seq') return;
-    if (P.playing) { setPlaying(false); return; }
-    seekTo(P.g >= totalLen() - 0.05 ? 0 : P.g, true); setPlaying(true);
-  }
-  function showMode(m) {
-    P.mode = m; const n = MT.ids.length, seq = m === 'seq' && n > 0, res = m === 'res' && MT.res;
-    if (!seq) setPlaying(false);
-    pv.hidden = !seq; bar.hidden = !seq; $('.mt-res', root).hidden = !res; $('.mt-empty', root).hidden = seq || res;
-    if (!res) hideSoundChip($('.mt-res', root)?.parentElement);
-    const tabs = $('.mt-tabs', root); tabs.hidden = !MT.res; $$('[data-pv]', tabs).forEach(b => b.classList.toggle('on', b.dataset.pv === m));
-    if (m === 'seq' && !$('.mt-res', root).paused) $('.mt-res', root).pause();
-  }
-  function syncPlayer() {
-    const n = MT.ids.length, tot = totalLen(); seek.max = Math.round(tot * 10);
-    if (!n) { setPlaying(false); pv.removeAttribute('src'); delete pv.dataset.id; P.g = 0; P.i = 0; if (P.mode === 'seq') P.mode = MT.res ? 'res' : 'seq'; }
-    else { setPlaying(false); seekTo(Math.min(P.g, tot), false); }
-    showMode(P.mode); updateUI();
-  }
-  playBtn.onclick = togglePlay;
-  seek.oninput = () => { P.drag = true; seekTo(seek.value / 10, P.playing); };
-  seek.onchange = () => { P.drag = false; };
-  addEventListener('keydown', e => {
-    if (e.code !== 'Space' || root.offsetParent === null || e.target.closest('input,textarea,select,button,[contenteditable]')) return;
-    e.preventDefault(); togglePlay();
-  });
-  function fitPx() {
-    const W = $('.mt-strip', root).clientWidth - 8, n = MT.ids.length; if (!n) return 26;
-    for (let px = 90; px > 8; px--) { const w = MT.ids.reduce((a, _, i) => a + Math.max(Math.round(px * 2.85), Math.round(durOf(i) * px)), 0) + 8 * (n - 1); if (w <= W) return px; }
-    return 8;
-  }
-  const setPx = v => { MT.px = Math.min(90, Math.max(8, Math.round(v))); try { localStorage.setItem('h3-mt-px', MT.px); } catch {} render(); };
-  window.montageLoad = ids => { MT.ids = ids.slice(); MT.cuts = ids.map(() => null); render(); const st = $('.mt-status', root); st.textContent = 'Сцены из Видеостудии уже стоят по порядку. Нажмите «Склеить»: готовый ролик появится справа — его можно сохранить или добавить в Библиотеку.'; };
-  $('.mt-pc', root).onclick = () => $('.mt-file', root).click();
-  $('.mt-file', root).onchange = async e => {
-    const files = [...e.target.files]; e.target.value = '';
-    for (const f of files) {
-      const url = URL.createObjectURL(f);
-      const meta = await new Promise(res => { const v = document.createElement('video'); v.preload = 'metadata'; v.muted = true; v.onloadedmetadata = () => res({ len: v.duration || 0, res: v.videoWidth ? `${v.videoWidth}×${v.videoHeight}` : '' }); v.onerror = () => res(null); v.src = url; });
-      if (!meta) { toast('Не удалось открыть файл «' + f.name + '». Нужно видео (mp4, mov, webm).'); URL.revokeObjectURL(url); continue; }
-      const k = 'k' + (++MT.n); MT.up[k] = { id: 'up:' + k, file: f, url, len: meta.len, res: meta.res, prompt: f.name };
-      MT.ids.push('up:' + k); MT.cuts.push(null);
-    }
-    render();
-  };
-  const move = (i, j) => { if (j < 0 || j >= MT.ids.length) return; const [x] = MT.ids.splice(i, 1), [c] = MT.cuts.splice(i, 1); MT.ids.splice(j, 0, x); MT.cuts.splice(j, 0, c); render(); };
-  root.addEventListener('click', e => {
-    if (e.target.closest('[data-showall]')) { hideSet([]); render(); return; }
-    const zb = e.target.closest('[data-z]'); if (zb) { const k = +zb.dataset.z; setPx(k > 0 ? MT.px * 1.25 : k < 0 ? MT.px * 0.8 : fitPx()); return; }
-    const tb = e.target.closest('[data-pv]'); if (tb) { showMode(tb.dataset.pv); return; }
-    const x = e.target.closest('[data-hide]'); if (x) { e.stopPropagation(); const id = x.dataset.hide; hideSet([...hidden(), id]); const k2 = MT.ids.map(v => v !== id); MT.cuts = MT.cuts.filter((_, i) => k2[i]); MT.ids = MT.ids.filter((_, i) => k2[i]); render(); return; }
-    const c = e.target.closest('.mt-card'); if (c) { MT.ids.push(c.dataset.id); MT.cuts.push(null); render(); return; }
-    const it = e.target.closest('.mt-item'); if (!it) return; const i = +it.dataset.i;
-    if (e.target.closest('[data-rm]')) { MT.ids.splice(i, 1); MT.cuts.splice(i, 1); render(); return; }
-    const mv = e.target.closest('[data-mv]'); if (mv) { move(i, i + +mv.dataset.mv); return; }
-    if (e.target.closest('.mt-rh') || P.mode !== 'seq') { if (P.mode !== 'seq') showMode('seq'); else return; }
-    const r = it.getBoundingClientRect(); seekTo(startOf(i) + Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)) * durOf(i), P.playing);   // a click on a clip: watch from that place
-  });
-  root.addEventListener('pointerdown', e => {
-    const h = e.target.closest('.mt-rh'); if (!h) return;
-    e.preventDefault(); e.stopPropagation();
-    const el = h.closest('.mt-item'), i = +el.dataset.i, x0 = e.clientX, d0 = durOf(i), full = fullOf(i);
-    el.draggable = false; try { h.setPointerCapture(e.pointerId); } catch {}
-    const move2 = ev => { const d = Math.min(full, Math.max(0.5, Math.round((d0 + (ev.clientX - x0) / MT.px) * 10) / 10)); MT.cuts[i] = d; el.style.width = wOf(d) + 'px'; $('.mt-len', el).textContent = d.toFixed(1).replace('.0', '') + ' с ✂'; };
-    const up = () => { h.removeEventListener('pointermove', move2); h.removeEventListener('pointerup', up); if (MT.cuts[i] != null && MT.cuts[i] >= full - 0.05) MT.cuts[i] = null; render(); };
-    h.addEventListener('pointermove', move2); h.addEventListener('pointerup', up);
-  });
-  root.addEventListener('dragstart', e => { const it = e.target.closest('.mt-item'); if (!it) return; MT.drag = +it.dataset.i; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', 'mt'); });
-  root.addEventListener('dragover', e => { const it = e.target.closest('.mt-item'); if (it && MT.drag != null) { e.preventDefault(); $$('.mt-item', root).forEach(x => x.classList.toggle('over', x === it)); } });
-  root.addEventListener('drop', e => { const it = e.target.closest('.mt-item'); if (!it || MT.drag == null) return; e.preventDefault(); const from = MT.drag; MT.drag = null; move(from, +it.dataset.i); });
-  root.addEventListener('dragend', () => { MT.drag = null; $$('.mt-item', root).forEach(x => x.classList.remove('over')); });
-
-  let PEND = null; try { PEND = JSON.parse(localStorage.getItem('h3-mt-state') || 'null'); } catch {}
-  function applyPend() {   // the order of clips from the last time, as soon as the Library is loaded
-    if (!PEND || !LIB.length) return; const p = PEND; PEND = null;
-    if (MT.ids.length || !Array.isArray(p.ids)) return;
-    const ok = p.ids.map(id => !!byId(id)); MT.ids = p.ids.filter((_, i) => ok[i]); MT.cuts = (p.cuts || []).filter((_, i) => ok[i]); render();
-  }
-  const durList = () => MT.ids.map((_, i) => MT.cuts[i] != null && MT.cuts[i] < fullOf(i) - 0.05 ? MT.cuts[i] : null);
-  const orderKey = () => JSON.stringify([MT.ids, durList()]);   // what the joined video was made from: another order or trim makes it out of date
-
-  /* the state of the work (which clips are enlarged, grained, joined) is kept, so it survives closing the program: the finished parts lie in the Library */
-  let PIPE = { sig: '', doUp: false, grain: 0, steps: {}, joined: null };
-  try { const s = JSON.parse(localStorage.getItem('h3-mt-pipe') || 'null'); if (s && s.steps) PIPE = s; } catch {}
-  const pipeSave = () => { try { localStorage.setItem('h3-mt-pipe', JSON.stringify(PIPE)); } catch {} pipePaint(); };
-  window.mtSaveState = () => { if (PEND) return; try { const k = MT.ids.map(id => !id.startsWith('up:')); localStorage.setItem('h3-mt-state', JSON.stringify({ ids: MT.ids.filter((_, i) => k[i]), cuts: MT.cuts.filter((_, i) => k[i]) })); } catch {} };
-  window.mtPipeDone = id => { const s = PIPE.steps[id]; return !!(s && (PIPE.grain > 0 ? s.gr : PIPE.doUp ? s.up : false)); };
-  function pipePaint() {
-    const box = $('.mt-pipe', root), n = MT.ids.length, line = (t, ok) => `<div class="${ok ? 'ok' : ''}">${ok ? '✓ ' : '• '}${t}</div>`;
-    let h = '';
-    const have = id => PIPE.steps[id] || {};
-    if (PIPE.doUp && n) { const c = MT.ids.filter(id => have(id).up).length; h += line(`Увеличение: ${c} из ${n} клипов${c === n ? ' — завершено' : ''}`, c === n); }
-    if (PIPE.grain > 0 && n) { const c = MT.ids.filter(id => have(id).gr).length; h += line(`Зерно: ${c} из ${n} клипов${c === n ? ' — завершено' : ''}`, c === n); }
-    const j = PIPE.joined && (byId(PIPE.joined.id) || draftById(PIPE.joined.id)) ? PIPE.joined : null;
-    if (MT.joining) h += line('Склейка: идёт…', false);
-    else if (j && j.key === orderKey()) h += line('Склейка завершена, ролик можно сохранять', true);
-    else if (j) h += line('Склейка устарела: порядок или обрезка изменились, склейте заново', false);
-    else if (h) h += line('Склейка: ещё не сделана', false);
-    box.innerHTML = h; box.hidden = !h;
-  }
-  window.mtPipePaint = pipePaint;
-  function showDone(item, play = true) {
-    const st = $('.mt-status', root), v = $('.mt-res', root);
-    v.src = item.url; MT.res = true; showMode('res');
-    if (play) playWithSound(v);
-    else {   // a reel from the last run waits on its first frame: the sound must not start by itself after a restart
-      v.preload = 'metadata';
-      v.addEventListener('loadedmetadata', () => { try { v.currentTime = .04; } catch {} }, { once: true });
-    }
-    const draft = !!item.preview && !byId(item.id);
-    st.innerHTML = (draft ? 'Склейка завершена: черновик, в Библиотеку не добавлен. ' : 'Склейка завершена: ролик лежит в Библиотеке. ')
-      + (draft ? '<button class="btn pri" id="mtAddLib" type="button" style="padding:4px 12px;font-size:12px">Добавить в библиотеку</button> ' : '')
-      + '<button class="btn pri" id="mtSave" type="button" style="padding:4px 12px;font-size:12px" title="Сохранить готовый ролик целиком на компьютер">Сохранить на компьютер</button> '
-      + '<button class="btn" id="mtUp" type="button" style="padding:4px 12px;font-size:12px" title="Увеличить разрешение (долго)">Увеличить</button>';
-    $('#mtSave', root).onclick = () => saveItems([byId(item.id) || normItem(item)]);
-    $('#mtUp', root).onclick = () => openUpscale(byId(item.id) || normItem(item));
-    $('#mtAddLib', root)?.addEventListener('click', async () => {
-      const b = $('#mtAddLib', root); b.disabled = true;
-      const kept = await keepDraftItem(item);
-      if (!kept) { b.disabled = false; return; }
-      if (PIPE.joined) PIPE.joined = { ...PIPE.joined, id: kept.id };
-      pipeSave();
-      showDone(kept, false);
-    });
-  }
-  window.mtRestoreResult = () => {   // after a restart: show the joined video again if it is still in the Library
-    const j = PIPE.joined, it = j && byId(j.id); if (!it || MT.res || it.missing) return;
-    showDone(it, false);   // shown, but paused: only a join finished right now plays by itself
-  };
-
-  $('.mt-go', root).onclick = () => {
-    if (FF.eng === 'ff') { ffJoin(MT.ids.slice(), durList()); return; }
-    if (+$('.mt-grain', root).value > 0) chain('none'); else joinNow(MT.ids.slice(), durList());
-  };
-
-  /* ---------- the same reel assembled by the portable FFmpeg: seconds, no video card ---------- */
-  const FF = { eng: 'comfy', status: null, busy: false, error: '' };
-  try { FF.eng = localStorage.getItem('h3-mt-eng') || 'comfy'; } catch {}
-  const ffBox = $('.mt-ff', root);
-  function ffPaint() {
-    $$('.mt-eng-tabs [data-eng]', root).forEach(b => b.classList.toggle('on', b.dataset.eng === FF.eng));
-    ffBox.hidden = FF.eng !== 'ff';
-    $('.mt-upbox', root).hidden = FF.eng === 'ff';
-    $('.mt-sets', root).hidden = FF.eng === 'ff';
-    $('.mt-go-t', root).textContent = FF.eng === 'ff' ? 'Собрать (FFmpeg)' : 'Склеить';
-    $('.mt-go', root).disabled = FF.eng === 'ff' && !(FF.status && FF.status.installed);
-  }
-  async function ffStatus() {
-    let s = null;
-    try { s = await apiGet('/api/ffmpeg/status'); } catch {}
-    FF.status = s;
-    if (s && s.error) FF.error = s.error;   // the reason stays visible after a refresh, not only in a toast
-    const box = $('.ff-state', root);
-    if (!box) return;
-    if (s && s.downloading && s.progress) {
-      box.textContent = `Скачиваем FFmpeg: ${s.progress.pct}% — ${s.progress.text || ''}`;
-    } else if (s && s.installed) {
-      box.innerHTML = `FFmpeg ${esc(s.version || '')} готов. <button type="button" class="btn mini ff-open">Показать папку</button> <button type="button" class="btn mini ff-inst" data-again="1">Обновить</button>`;
-      box.classList.add('on');
-    } else {
-      box.innerHTML = 'FFmpeg не установлен: он нужен только для этой быстрой сборки. <button type="button" class="btn mini pri ff-inst">Установить (~100 МБ)</button>'
-        + (FF.error ? `<div class="ff-err">Не удалось установить: ${esc(FF.error)}</div>` : '');
-      box.classList.remove('on');
-    }
-    ffPaint();
-  }
-  window.onFFDownload = m => {
-    const box = $('.ff-state', root);
-    if (!box) return;
-    if (m.done) {
-      FF.error = m.error || '';   // a failed install keeps its reason on screen, not only in a toast
-      ffStatus();
-      if (m.error) toast('FFmpeg: ' + m.error);
-      return;
-    }
-    if (FF.eng === 'ff') box.textContent = `Скачиваем FFmpeg: ${m.pct}% — ${m.text || ''}`;
-  };
-  let ffPoll = 0;
-  function ffPollStart() {   // if the websocket message is late or lost, the panel still updates itself
-    clearInterval(ffPoll);
-    ffPoll = setInterval(async () => {
-      let s = null;
-      try { s = await apiGet('/api/ffmpeg/status'); } catch { return; }
-      if (s && s.downloading) {
-        const b = $('.ff-state', root);
-        if (b && FF.eng === 'ff' && s.progress) b.textContent = `Скачиваем FFmpeg: ${s.progress.pct}% — ${s.progress.text || ''}`;
-        return;
-      }
-      clearInterval(ffPoll);
-      ffStatus();
-    }, 2500);
-  }
-  root.addEventListener('click', e => {
-    if (e.target.closest('.ff-inst')) {
-      e.target.disabled = true;
-      FF.error = '';
-      $('.ff-state', root).textContent = 'Начинаем скачивание…';
-      apiPost('/api/ffmpeg/download', {})
-        .catch(err => window.onFFDownload({ done: true, error: err.message || String(err) }));
-      setTimeout(ffPollStart, 1500);
-      return;
-    }
-    if (e.target.closest('.ff-open')) apiPost('/api/ffmpeg/open-folder', {}).catch(() => {});
-  });
-  $$('.mt-eng-tabs [data-eng]', root).forEach(b => b.onclick = () => {
-    FF.eng = b.dataset.eng;
-    try { localStorage.setItem('h3-mt-eng', FF.eng); } catch {}
-    ffPaint();
-    if (FF.eng === 'ff') ffStatus();
-  });
-  [['.ff-trans-dur', '.ff-tdv'], ['.ff-mvol', '.ff-mv'], ['.ff-vvol', '.ff-vv']].forEach(([a, b]) => {
-    $(a, root).oninput = () => { $(b, root).textContent = $(a, root).value; };
-  });
-  async function ffJoin(ids, durs) {
-    const st = $('.mt-status', root);
-    if (FF.busy) return;
-    if (!ids.length) { st.textContent = 'Добавьте хотя бы один клип'; return; }
-    if (!(FF.status && FF.status.installed)) { st.textContent = 'Сначала установите FFmpeg: кнопка в блоке «FFmpeg».'; return; }
-    FF.busy = true; $('.mt-go', root).disabled = true; st.textContent = 'Готовим клипы…';
-    const fd = new FormData();
-    fd.append('ids', JSON.stringify(ids));
-    fd.append('durs', JSON.stringify(durs || []));
-    fd.append('preview', '1');
-    const put = (key, sel) => { const el = $(sel, root); if (el && el.value !== '') fd.append(key, el.value); };
-    put('transition', '.ff-transition'); put('transition_dur', '.ff-trans-dur'); put('aspect', '.ff-aspect');
-    put('fit_mode', '.ff-fit'); put('speed', '.ff-speed'); put('filter', '.ff-filter');
-    put('title', '.ff-title'); put('title_pos', '.ff-title-pos');
-    fd.append('music_vol', String((+$('.ff-mvol', root).value || 0) / 100));
-    fd.append('video_vol', String((+$('.ff-vvol', root).value || 0) / 100));
-    const music = $('.ff-music', root).files[0];
-    if (music) fd.append('music', music, music.name);
-    ids.filter(id => id.startsWith('up:')).forEach(id => {
-      const u = get(id), k = id.slice(3);
-      fd.append('res_' + k, u.res || ''); fd.append('len_' + k, String(u.len || 0)); fd.append('file_' + k, u.file, u.file.name);
-    });
-    let res;
-    try {
-      res = await apiSend('/api/ffmpeg/montage', { method: 'POST', body: fd, timeout: 180000 });
-    } catch (err) {
-      FF.busy = false; $('.mt-go', root).disabled = false;
-      st.textContent = 'Сборка не удалась: ' + err.message; return;
-    }
-    qAdd(res.prompt_id, 'montage', 'FFmpeg · ' + ids.length + ' клипов');
-    st.textContent = 'Собираем FFmpeg…';
-    onPrompt(res.prompt_id, ev => {
-      if (ev.prompt_id !== res.prompt_id) return;
-      if (ev.type === 'stage') { st.textContent = `Сборка FFmpeg: ${ev.step || 1}%`; return; }
-      if (ev.type === 'done') {
-        offPrompt(res.prompt_id); FF.busy = false; $('.mt-go', root).disabled = false;
-        st.textContent = 'Сборка завершена: ролик ждёт «Добавить в библиотеку».';
-        showDone(normItem(ev.item));
-      } else if (ev.type === 'error') {
-        offPrompt(res.prompt_id); FF.busy = false; $('.mt-go', root).disabled = false;
-        st.textContent = 'Сборка не удалась: ' + ev.message;
-      }
-    });
-  }
-  ffPaint();
-  ffStatus();
-  async function joinNow(ids, durs) {
-    const st = $('.mt-status', root);
-    if (MT.busy && !MT.chaining) return;
-    if (ids.length < 2) { st.textContent = 'Добавьте хотя бы два клипа'; return; }
-    const key = orderKey();
-    MT.busy = true; MT.joining = true; $('.mt-go', root).disabled = true; st.textContent = 'Отправляем клипы в ComfyUI…'; pipePaint();
-    const fail = msg => { MT.busy = false; MT.joining = false; MT.chaining = false; $('.mt-go', root).disabled = false; st.textContent = msg; pipePaint(); };
-    try {
-      const fd = new FormData(); fd.append('ids', JSON.stringify(ids)); fd.append('durs', JSON.stringify(durs)); fd.append('preview', '1');
-      ids.filter(id => id.startsWith('up:')).forEach(id => { const u = get(id), k = id.slice(3); fd.append('res_' + k, u.res || ''); fd.append('len_' + k, String(u.len || 0)); fd.append('file_' + k, u.file, u.file.name); });
-      const res = await apiSend('/api/montage', { method: 'POST', body: fd, timeout: 180000 });
-      qAdd(res.prompt_id, 'montage', `${ids.length} клипов`);
-      st.textContent = 'Склеиваем…';
-      onPrompt(res.prompt_id, ev => {
-        if (ev.prompt_id !== res.prompt_id) return;
-        if (ev.type === 'done') {
-          offPrompt(res.prompt_id); MT.busy = false; MT.joining = false; MT.chaining = false; $('.mt-go', root).disabled = false;
-          PIPE.joined = { id: ev.item.id, key }; pipeSave();
-          showDone(byId(ev.item.id) || normItem(ev.item));
-        } else if (ev.type === 'error') fail('Склейка не удалась: ' + ev.message);
-        else if (ev.type === 'interrupted') fail('Склейка остановлена');
-      });
-    } catch (err) { fail('Склейка не удалась: ' + err.message); }
-  }
-
-  /* «Увеличить каждый клип и склеить» / зерно: the clips are done one by one (each is short, so memory is enough), then the finished ones are joined.
-     What is finished is remembered, so after an error or a restart the work goes on from the first clip that is not done. */
-  const upBtn = $('.mt-upgo', root), upTxt = upBtn.textContent;
-  const setsPaint = () => { const relay = $('.mt-upeng', root).value === 'relay'; $('.mt-s-detail', root).hidden = !relay; $('.mt-s-sharp', root).hidden = relay; };   // the detail slider belongs to RelayVSR, the sharpness one to SeedVR2
-  $('.mt-upeng', root).onchange = setsPaint; setsPaint();
-  [['.mt-detail', '.mt-dv'], ['.mt-sharp', '.mt-sv'], ['.mt-grain', '.mt-gv']].forEach(([a, b]) => { $(a, root).oninput = () => { $(b, root).textContent = $(a, root).value; }; });
-  upBtn.onclick = () => chain($('.mt-upeng', root).value);
-  const waitItem = r => new Promise((res, rej) => onPrompt(r.prompt_id, ev => {
-    if (ev.prompt_id !== r.prompt_id) return;
-    if (ev.type === 'done') { offPrompt(r.prompt_id); res(ev.item); }
-    else if (ev.type === 'error') { offPrompt(r.prompt_id); rej(new Error('ошибка ComfyUI: ' + ev.message)); }
-    else if (ev.type === 'interrupted') { offPrompt(r.prompt_id); rej(new Error('остановлено')); }
-  }));
-  async function chain(eng) {   // eng: 'relay' | 'seed' (enlarge each clip) | 'none' (only the grain)
-    const st = $('.mt-status', root);
-    if (MT.upBusy) { MT.cancel = true; st.textContent = 'Останавливаем…'; if (MT.curPrompt) apiPost('/api/interrupt', { prompt_id: MT.curPrompt }).catch(() => {}); return; }
-    if (MT.busy) return;
-    if (MT.ids.length < 2) { st.textContent = 'Добавьте хотя бы два клипа'; return; }
-    const doUp = eng !== 'none', grain = +$('.mt-grain', root).value;
-    if (doUp) {
-      let stt = {}; try { stt = await apiGet('/api/status'); } catch {}
-      const haveRelay = (stt.modes || []).includes('relayvsr') && !(stt.models || []).some(m => m.role.startsWith('relayvsr') && !m.have);
-      const haveSeed = (stt.modes || []).includes('upscale') && !(stt.models || []).some(m => m.role.startsWith('seedvr') && !m.have);
-      if (eng === 'relay' ? !haveRelay : !haveSeed) { st.textContent = `Нужна модель ${eng === 'relay' ? 'RelayVSR' : 'SeedVR2'}: её можно скачать кнопкой «Увеличить» у любого видео в Библиотеке.`; return; }
-    }
-    const opt = { scale: '2', method: '', engine: eng === 'relay' ? 'relay' : '', detail: +$('.mt-detail', root).value / 100, sharp: +$('.mt-sharp', root).value / 100 };
-    const sig = [doUp ? eng : '-', doUp ? (eng === 'relay' ? opt.detail : opt.sharp) : '-', grain].join('|');
-    if (PIPE.sig !== sig) PIPE = { sig, doUp, grain, steps: {}, joined: null };   // other settings: the clips are done again
-    const ids = MT.ids.slice(), durs = durList(), out = [], todo = ids.filter(id => !(PIPE.steps[id] && (!doUp || PIPE.steps[id].up) && (!grain || PIPE.steps[id].gr))).length;
-    MT.upBusy = true; MT.busy = true; MT.chaining = true; MT.cancel = false; $('.mt-go', root).disabled = true; upBtn.textContent = 'Остановить'; pipeSave();
-    const job = async (url, id, srcFile, extra, label, k) => {   // one job on ComfyUI; returns the finished Library item
-      let r;
-      if (srcFile) {
-        const fd = new FormData(); Object.entries(extra).forEach(([a, b]) => fd.append(a, b)); fd.append('res', srcFile.res || ''); fd.append('len', srcFile.len || 0); fd.append('file', srcFile.file, srcFile.file.name);
-        r = await apiSend(url + (url === '/api/upscale' ? '_file' : ''), { method: 'POST', body: fd, timeout: 180000 });
-      } else if (url === '/api/grain') {
-        const fd = new FormData(); fd.append('id', id); fd.append('strength', extra.strength);
-        r = await apiSend(url, { method: 'POST', body: fd, timeout: 180000 });
-      } else r = await postJSON(url, { id, ...extra });
-      qAdd(r.prompt_id, label === 'grain' ? 'montage' : 'upscale', (get(ids[k]).prompt || '') || (label === 'grain' ? 'Зерно плёнки' : 'Увеличение')); MT.curPrompt = r.prompt_id;
-      return waitItem(r);
-    };
-    try {
-      for (let k = 0; k < ids.length; k++) {
-        if (MT.cancel) throw new Error('остановлено');
-        const src = ids[k], step = PIPE.steps[src] || (PIPE.steps[src] = { up: null, gr: null }), u = src.startsWith('up:') ? get(src) : null;
-        let cur = src;
-        if (doUp) {
-          if (!step.up) { st.textContent = `Клип ${k + 1} из ${ids.length}: увеличиваем…`; step.up = (await job('/api/upscale', src, u, opt, 'up', k)).id; pipeSave(); }
-          cur = step.up;
-        }
-        if (grain > 0) {
-          if (!step.gr) { st.textContent = `Клип ${k + 1} из ${ids.length}: накладываем зерно…`; step.gr = (await job('/api/grain', cur, doUp ? null : u, { strength: grain }, 'grain', k)).id; pipeSave(); }
-          cur = step.gr;
-        }
-        out.push(cur);
-      }
-    } catch (err) {
-      MT.upBusy = false; MT.busy = false; MT.chaining = false; MT.curPrompt = null; $('.mt-go', root).disabled = false; upBtn.textContent = upTxt; pipePaint();
-      const left = ids.filter(id => !(PIPE.steps[id] && (!doUp || PIPE.steps[id].up) && (!grain || PIPE.steps[id].gr))).length;
-      st.textContent = `Обработка прервана: ${err.message}. Готово ${ids.length - left} из ${ids.length} клипов, они сохранены. Нажмите кнопку ещё раз: работа продолжится с первого неготового клипа.`;
-      return;
-    }
-    MT.upBusy = false; MT.curPrompt = null; upBtn.textContent = upTxt;
-    st.textContent = `${doUp ? 'Увеличение' : 'Зерно'} завершено для всех ${ids.length} клипов. Склеиваем…`;
-    await joinNow(out, durs);
-  }
-  IMG_PANELS.push(() => { applyPend(); pipePaint(); window.mtRestoreResult(); });
-  pipePaint();
-  /* a handle under the strip: drag down or up and the clips grow or shrink (the same scale as «−» «+»); the divider before the preview moves left and right */
-  (() => {
-    const h = $('.mt-vh', root); let y0 = 0, px0 = 0, on = false;
-    h.addEventListener('pointerdown', e => { e.preventDefault(); h.setPointerCapture(e.pointerId); on = true; y0 = e.clientY; px0 = MT.px; });
-    h.addEventListener('pointermove', e => {
-      if (!on) return;
-      MT.px = Math.min(90, Math.max(8, px0 + (e.clientY - y0) * 0.35));
-      $$('.mt-item', root).forEach((el, i) => { el.style.width = wOf(durOf(i)) + 'px'; });
-      updateUI();
-    });
-    h.addEventListener('pointerup', e => { if (!on) return; on = false; try { h.releasePointerCapture(e.pointerId); } catch {} setPx(MT.px); });
-    h.addEventListener('dblclick', () => setPx(26));
-  })();
-  if (window.gridResize) window.gridResize($('.grid', root));
-  IMG_PANELS.push(render);
-  render();
-})();
 /* ---------- LoRA: what a file means, which combinations fight, and the catalog ---------- */
 (() => {
   const root = $('#view-loras');
@@ -8460,5 +7382,7 @@ requestAnimationFrame(() => document.documentElement.classList.add('booted'));
   $$('.view').forEach(watch);
 })();
 </script>
+<!-- mode modules: each builds its own section on the first visit and gives its resources back -->
+<script src="/ui/js/modes/montage.js"></script>
 </body>
 </html>

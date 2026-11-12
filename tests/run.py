@@ -40,7 +40,7 @@ GROUPS = {
     "graphs": ("Графы генерации не изменились (без ComfyUI)", [TESTS / "video_fused_graph_test.py"], False, False),
     "watchdog": ("Сторож видеокарты, решения по чтениям (без видеокарты)", [TESTS / "gpu_watchdog_test.py"], False, False),
     "api": ("API агента на поддельном ComfyUI (свой временный сервер)", [TESTS / "agent_api_smoke.py"], True, False),
-    "ui-state": ("Состояние заданий: state.js под Node (без браузера)", [TESTS / "ui_state_smoke.py"], False, True),
+    "ui-state": ("Состояние заданий и владение ресурсами режимов: state.js/lifecycle.js под Node", [TESTS / "ui_state_smoke.py"], False, True),
     "ui": ("Окно в браузере: разделы открываются, модули на месте (нужен Chrome/Edge)", [TESTS / "ui_smoke.py"], True, False),
     "mcp": ("MCP-сервер через stdio (нужен node и запущенное приложение)", [TESTS / "mcp_stdio_smoke.py"], False, True),
 }
