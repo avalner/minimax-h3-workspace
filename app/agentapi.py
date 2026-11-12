@@ -40,8 +40,9 @@ import aiohttp
 from aiohttp import web
 
 import workflows as wf
-from domain.errors import InvalidSpec
-from domain.jobs import InputRef, JobSpec, ResultPolicy
+from backends.base import BackendUnavailable, SubmitRejected
+from domain.errors import InvalidSpec, JobConflict
+from domain.jobs import InputRef, JobSpec, JobState, ResultPolicy, public_state
 from storage.atomic import atomic_write_json
 from version import APP_VERSION
 
@@ -200,7 +201,6 @@ class AgentAPI:
         self.token = secrets.token_urlsafe(32)
         self.instance = uuid.uuid4().hex[:12]
         self.published = None
-        self.idempotent = {}  # idempotency_key -> prompt_id (a retried request must not render twice)
 
     # ---------- enable / publish ----------
 
@@ -471,12 +471,6 @@ class AgentAPI:
             return body.get(key, params.get(key, default))
 
         key = str(body.get("idempotency_key") or "").strip()[:120]
-        if key and key in self.idempotent:
-            view = self.job_view(self.idempotent[key])
-            if view:  # the same request again: answer with the job that is already running, do not render twice
-                return web.json_response({"job": view["job"], "state": view["state"], "deduplicated": True,
-                                          "origin": view.get("origin"), "results": view.get("results") or []})
-            self.idempotent.pop(key, None)
 
         mode = str(body.get("mode") or "video").strip().lower()
         if mode != "video":
@@ -531,10 +525,11 @@ class AgentAPI:
             refs = []
             if first_name:
                 refs.append(InputRef(role="Первый кадр" + (" · зациклено" if loop else ""), kind="image",
-                                     comfy=first_name, asset=first["asset"] if first else None))
+                                     comfy=first_name, asset=first["asset"] if first else None,
+                                     key="first_frame"))
             if last_name and last_name != first_name:
                 refs.append(InputRef(role="Последний кадр", kind="image", comfy=last_name,
-                                     asset=last["asset"] if last else None))
+                                     asset=last["asset"] if last else None, key="last_frame"))
             # the same description the window builds: the duration is clamped and checked in one place
             spec = JobSpec.video(prompt=prompt, aspect=aspect, quality=quality, seconds=get("seconds", 5),
                                  seed=seed, width=width, height=height, models=dict(app.model_names),
@@ -542,45 +537,46 @@ class AgentAPI:
                                  result_policy=ResultPolicy.LIBRARY, source="agent",
                                  sub=self._job_subtitle(first_name, last_name, loop),
                                  max_seconds=self.max_seconds)
-            graph, stages = wf.video_graph(app.model_names, spec.prompt, spec.width, spec.height, spec.seconds,
-                                           spec.seed, first_name, last_name, app.custom_loras("video"), None)
             inputs = []   # the files the job is made from: the details window in the queue shows them
             if first_name:
                 inputs.append(self._job_input("Первый кадр" + (" · зациклено" if loop else ""), "image", first_name))
             if last_name and last_name != first_name:
                 inputs.append(self._job_input("Последний кадр", "image", last_name))
-            response = await app.queue(graph, stages, {
-                "mode": "video", "sub": spec.sub,
-                "prompt": spec.prompt, "aspect": spec.aspect, "q": spec.quality, "len": spec.seconds,
-                "res": f"{spec.width}×{spec.height}", "seed": spec.seed, "inputs": inputs,
-                "origin": {"kind": "agent", "client": str(body.get("client") or "")[:40] or None,
-                           "idempotency_key": key or None}}, spec=spec)
+            meta = {"mode": "video", "sub": spec.sub,
+                    "prompt": spec.prompt, "aspect": spec.aspect, "q": spec.quality, "len": spec.seconds,
+                    "res": f"{spec.width}×{spec.height}", "seed": spec.seed, "inputs": inputs,
+                    "origin": {"kind": "agent", "client": str(body.get("client") or "")[:40] or None,
+                               "idempotency_key": key or None}}
+            record, deduplicated = await app.start_video_job(spec, meta=meta, key=key or None)
         except InvalidSpec as e:
             raise AgentError(400, "INVALID_PARAM", e.message, e.hint)
+        except SubmitRejected as e:
+            raise AgentError(400, "GENERATION_REFUSED", str(e))
+        except BackendUnavailable as e:
+            raise AgentError(503, "COMFY_OFFLINE", str(e),
+                             "Задание записано как неопределённое: проверьте очередь ComfyUI, прежде чем повторять — "
+                             "оно могло уйти. Повтор с тем же idempotency_key не отправит его дважды.")
+        except JobConflict as e:
+            raise AgentError(409, e.code, e.message, e.hint)
         except web.HTTPException as e:
             raise AgentError(e.status if 400 <= e.status < 500 else 502, "GENERATION_REFUSED", e.text or e.reason)
         except (aiohttp.ClientError, asyncio.TimeoutError, ConnectionError) as e:
             raise AgentError(503, "COMFY_OFFLINE", f"ComfyUI не отвечает: {type(e).__name__}",
                              "Поднимите ComfyUI или дождитесь, пока приложение его запустит, и повторите с тем же idempotency_key.")
-        try:
-            payload = json.loads(response.text)
-        except ValueError:
-            payload = {}
-        if response.status != 200:
-            raise AgentError(400, "GENERATION_REFUSED", payload.get("error") or "ComfyUI не принял задание")
-        job_id = payload["prompt_id"]
-        if key:
-            self._remember_key(key, job_id)
-        # the window's queue row shows a short title, not the whole H3 prompt with its sections
-        await app.broadcast({"type": "external_job", "prompt_id": job_id, "mode": "video",
-                             "prompt": self._short_title(prompt)})
+        job_id = record.prompt_id
+        if not deduplicated:
+            # the window's queue row shows a short title, not the whole H3 prompt with its sections
+            await app.broadcast({"type": "external_job", "prompt_id": job_id, "mode": "video",
+                                 "prompt": self._short_title(prompt)})
         return web.json_response({
-            "job": job_id, "state": "queued", "deduplicated": False, "seed": spec.seed, "seconds": spec.seconds,
+            "job": job_id, "state": public_state(record.state), "deduplicated": deduplicated,
+            "seed": spec.seed, "seconds": spec.seconds,
             "aspect": spec.aspect, "quality": spec.quality, "res": f"{spec.width}×{spec.height}",
             "inputs": {"first_frame": {"asset": first["asset"], "comfy": first_name} if first else None,
                        "last_frame": {"asset": last["asset"], "comfy": last_name} if (last and not loop) else None},
             "origin": {"kind": "agent", "idempotency_key": key or None},
-        }, status=202)
+            "uncertain": record.state is JobState.UNCERTAIN,
+        }, status=200 if deduplicated else 202)   # a duplicate creates nothing, and says so
 
     @staticmethod
     def _job_subtitle(first, last, loop):
@@ -605,11 +601,6 @@ class AgentAPI:
                 nxt = next((x for x in lines[i + 1:] if x), "")
                 return (nxt or "Видео")[:140]
         return " ".join(str(prompt).split())[:140]
-
-    def _remember_key(self, key, job_id):
-        self.idempotent[key] = job_id
-        while len(self.idempotent) > 200:
-            self.idempotent.pop(next(iter(self.idempotent)))
 
     async def _ref_to_asset(self, ref, field):
         """{"asset": id} / {"path": "…"} / "id" / "C:\\…" -> asset meta. Raises AgentError."""

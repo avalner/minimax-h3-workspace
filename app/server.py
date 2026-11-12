@@ -50,14 +50,18 @@ import report
 import speech
 import updater
 import watchdog
+from backends.base import BackendError, BackendUnavailable, SubmitRejected
+from backends.comfy import ComfyBackend
 from domain.errors import InvalidSpec, InvalidTransition, JobConflict
 from domain.jobs import (MAX_SECONDS, InputRef, JobRecord, JobSpec, JobState, ResultPolicy, new_job_id,
                          public_state)
 from domain.media import MediaKind, MediaRecord, MediaState
+from services.jobs import JobService
 from storage.atomic import atomic_write_json, atomic_write_text
 from storage.database import Database
 from storage.migrations import migrate
-from storage.repositories import JobRepository, LibraryRepository, MediaRepository, ResultRepository
+from storage.repositories import (IdempotencyRepository, JobRepository, LibraryRepository, MediaRepository,
+                                  ResultRepository)
 from version import APP_VERSION
 
 
@@ -529,6 +533,11 @@ class App:
         self.ffmpeg_dl = None    # the running portable-FFmpeg download: {"cancel": Event, "pct": 0, "text": "", "done": False}
         self.ffmpeg_jobs = {}    # prompt_id -> {"cancel": Event, "task": Task, "dest": Path}
         self.lora_dl = None      # the running LoRA download from Civitai / Hugging Face
+        # one submission path for the jobs that have a spec: the service owns the durable submit, the
+        # idempotency keys and the state rules; the backend talks to the engine (built last: it reads
+        # the engine address, which may point at a process the app manages)
+        self.idempotency = IdempotencyRepository(self.db)
+        self.service = JobService(self.jobs_repo, self.build_backend(), keys=self.idempotency)
 
     def llm_root(self):
         if self.config.get("llm_dir"):
@@ -1110,6 +1119,36 @@ class App:
         if self.rh():
             return "cloud:runninghub"
         return "comfy:" + self.comfy
+
+    def build_backend(self):
+        """The engine behind the job service: small callables, not the whole App."""
+        return ComfyBackend(client=self.comfy_client, url=self.comfy, client_id=CLIENT_ID,
+                            models=lambda: self.model_names, loras=lambda mode: self.custom_loras(mode))
+
+    async def comfy_client(self, method, path, **kwargs):
+        """The backend's HTTP: an engine that does not answer is not a job that failed."""
+        try:
+            return await self.comfy_json(method, path, **kwargs)
+        except (aiohttp.ClientError, asyncio.TimeoutError, ConnectionError, OSError) as e:
+            raise BackendUnavailable(f"ComfyUI не отвечает: {type(e).__name__}") from e
+
+    def attach_job(self, record, *, meta, last_output=False, titles=None, preview=False,
+                   graph=None, stages=None, scenes=None):
+        """Put a submitted job into the live queue and the database.
+
+        The record is the truth; this dict is what the window, the engine events and the agent view
+        have always used. One place builds it, whether the job came through the service or not.
+        """
+        pid = record.prompt_id or record.backend_job_id
+        if not pid:
+            raise InvalidTransition("У задания нет идентификатора: показывать в очереди нечего")
+        job = {"prompt_id": pid, "state": public_state(record.state),
+               "stages": stages if stages is not None else (record.legacy or {}).get("stages") or {},
+               "stage": None, "meta": meta, "last_output": last_output, "titles": titles or {},
+               "graph": graph if graph is not None else record.graph, "scenes": scenes,
+               "t0": record.created_at, "preview": preview, "record": record}
+        self.jobs[pid] = job
+        return job
 
     def new_record(self, spec, prompt_id, backend_job_id=None):
         """The typed record of a new job: our id, the engine's id, the public id and the request.
@@ -2016,6 +2055,14 @@ class App:
         meta = job.get("meta") or {}
         mode, prompt = meta.get("mode"), (meta.get("prompt") or "")[:80]
         pid = job.get("prompt_id")
+        record = job.get("record")
+        if record is not None and record.backend_id and record.backend_id != self.backend_identity():
+            # the settings now point at another engine: this job belongs to the one that had it, and
+            # sending it to a different server would generate a different clip behind the user's back
+            self.note_error(f"Задание {pid} ждёт прежний движок ({record.backend_id}), а сейчас выбран другой")
+            out.append({"prompt_id": pid, "mode": mode, "prompt": prompt, "state": "kept",
+                        "reason": "задание принадлежит другому движку"})
+            return False
         live = ("running" if pid in running else "queued" if pid in pending else None) if pid else None
         if live:  # ComfyUI still has it (or is running it): watch it instead of sending it twice
             if pid not in self.jobs:
@@ -2384,17 +2431,14 @@ class App:
         seed = int(form["seed"]) if form.get("seed", "").isdigit() else random.randrange(2 ** 50)
         return form, files, prompt, aspect, quality, seed
 
-    async def queue(self, graph, stages, meta, last_output=False, titles=None, preview=False, spec=None):
-        scenes = stages.pop("__scenes__", None)   # which sampler is which scene (long video), for the progress text
-        rh = self.rh()
-        if rh:
-            return await self.queue_cloud(rh, graph, stages, meta, preview, spec=spec)
+    async def prepare_engine(self, mode_key):
+        """Before a job goes to the engine: the agent's model out of VRAM, the previous job's models freed.
+
+        Not between pictures of the same mode: the same big models would just be loaded from disk again.
+        """
         await self.stop_llm()  # the agent's model and H3 do not fit in VRAM together
-        mode_key = (meta or {}).get("mode", "")
         same = mode_key == getattr(self, "last_mode", None) and mode_key in ("krea", "kreareal", "qwen", "flux")
         self.last_mode = mode_key
-        # nothing is running or waiting: drop the previous job's models and cache so each job starts clean.
-        # Not between pictures of the same mode: the same big models would just be loaded from disk again.
         if not self.jobs and not same:
             try:
                 await self.comfy_json("POST", "/free", json={"unload_models": True, "free_memory": True})
@@ -2407,17 +2451,41 @@ class App:
                         "(браузер, Adobe, игры). Закройте их, иначе генерация может идти медленнее.")})
             except Exception:
                 pass
+        return same
+
+    async def queue(self, graph, stages, meta, last_output=False, titles=None, preview=False, spec=None):
+        """The submission of the modes that still build their graph in the handler.
+
+        Video goes through the job service (see `start_video_job`); the rest of the modes keep this
+        path until stage 4 brings each of them over.
+        """
+        scenes = stages.pop("__scenes__", None)   # which sampler is which scene (long video), for the progress text
+        rh = self.rh()
+        if rh:
+            return await self.queue_cloud(rh, graph, stages, meta, preview, spec=spec)
+        await self.prepare_engine((meta or {}).get("mode", ""))
         status, res = await self.comfy_json("POST", "/prompt", json={
             "prompt": graph, "client_id": CLIENT_ID,
             "extra_data": {"preview_method": "auto"}})
         if status != 200:
             return web.json_response({"error": comfy_error_text(res)}, status=400)
         pid = res["prompt_id"]
-        self.jobs[pid] = {"prompt_id": pid, "state": "queued", "stages": stages, "stage": None, "meta": meta, "last_output": last_output, "titles": titles or {},
-                          "graph": graph, "scenes": scenes, "t0": datetime.now().timestamp(), "preview": preview,
-                          "record": self.new_record(spec, pid)}
-        self.set_job_state(self.jobs[pid], JobState.QUEUED)   # created → submitting → queued, in the record
+        self.attach_job(self.new_record(spec, pid), meta=meta, last_output=last_output, titles=titles,
+                        preview=preview, graph=graph, stages=stages, scenes=scenes)
         return web.json_response({"prompt_id": pid, "seed": meta["seed"], "queue_number": res.get("number")})
+
+    async def start_video_job(self, spec, *, meta, last_output=False, titles=None, preview=False, key=None):
+        """The one submission path of a video job: window and agent, with or without an idempotency key.
+
+        Returns (record, deduplicated). The engine's answer is turned into a service error, never into
+        an HTTP response, so both entrances map it their own way.
+        """
+        await self.prepare_engine(spec.mode)
+        record, deduplicated = await self.service.submit_idempotent(
+            spec, backend_id=self.backend_identity(), key=key)
+        if not deduplicated:
+            self.attach_job(record, meta=meta, last_output=last_output, titles=titles, preview=preview)
+        return record, deduplicated
 
     async def need_models(self, mode):
         if self.rh():  # models live on RunningHub
@@ -2869,9 +2937,10 @@ class App:
             sub += " · быстрый черновик"
         refs = []
         if first:
-            refs.append(InputRef(role="Первый кадр" + (" · зациклено" if loop else ""), kind="image", comfy=first))
+            refs.append(InputRef(role="Первый кадр" + (" · зациклено" if loop else ""), kind="image",
+                                 comfy=first, key="first_frame"))
         if last and last != first:
-            refs.append(InputRef(role="Последний кадр", kind="image", comfy=last))
+            refs.append(InputRef(role="Последний кадр", kind="image", comfy=last, key="last_frame"))
         try:
             # the request is described once, here, and the same description is what the agent API builds:
             # the duration is clamped and checked in JobSpec, not in each entrance
@@ -2883,17 +2952,25 @@ class App:
                                  source="ui", sub=sub)
         except InvalidSpec as e:
             raise web.HTTPBadRequest(text=e.message)
-        graph, stages = wf.video_graph(self.model_names, spec.prompt, spec.width, spec.height, spec.seconds, spec.seed,
-                                       first, last, self.custom_loras("video"), fast, fused)
         inputs = []
         if first:
             inputs.append(media_input("Первый кадр" + (" · зациклено" if loop else ""), "image", comfy=first))
         if last and last != first:
             inputs.append(media_input("Последний кадр", "image", comfy=last))
-        return await self.queue(graph, stages, {
-            "mode": "video", "sub": spec.sub, "prompt": spec.prompt, "aspect": spec.aspect, "q": spec.quality,
-            "len": spec.seconds, "res": f"{spec.width}×{spec.height}", "seed": spec.seed, "inputs": inputs},
-            preview=preview, spec=spec)
+        meta = {"mode": "video", "sub": spec.sub, "prompt": spec.prompt, "aspect": spec.aspect, "q": spec.quality,
+                "len": spec.seconds, "res": f"{spec.width}×{spec.height}", "seed": spec.seed, "inputs": inputs}
+        try:
+            record, _ = await self.start_video_job(spec, meta=meta, preview=preview)
+        except SubmitRejected as e:
+            raise web.HTTPBadRequest(text=str(e))
+        except BackendUnavailable as e:
+            raise web.HTTPServiceUnavailable(text=(
+                f"{e}. Задание записано как неопределённое: проверьте очередь ComfyUI, прежде чем повторять — "
+                "оно могло уйти."))
+        except JobConflict as e:
+            raise web.HTTPConflict(text=e.message)
+        return web.json_response({"prompt_id": record.prompt_id, "seed": spec.seed,
+                                  "queue_number": (record.legacy or {}).get("number")})
 
     async def h_generate_lipsync(self, req):
         await self.need_models("lipsync")
@@ -4129,23 +4206,56 @@ class App:
         return web.json_response({"error": "Отделение голоса заняло слишком много времени"}, status=504)
 
     async def h_interrupt(self, req):
-        await self.cancel_job((await req.json()).get("prompt_id"))
+        body = await req.json()
+        pid = body.get("prompt_id")
+        if pid:
+            await self.cancel_job(pid)
+        else:
+            await self.stop_current()   # «остановить текущее» — отдельная явная операция, не побочный эффект
         return web.json_response({"ok": True})
 
     async def cancel_job(self, pid):
-        """Stop one job: a cloud task, a waiting one, or the running one (ComfyUI has one running prompt at a time)."""
-        job = self.jobs.get(pid)
+        """Stop one job: a cloud task, a waiting one, or the running one (ComfyUI has one running prompt at a time).
+
+        An id this program does not know is not a reason to interrupt whatever the engine happens to be
+        running: the window's «stop the current thing» is its own operation (`stop_current`).
+        """
+        job = self.jobs.get(pid) if pid else None
         if job and job.get("finalizing"):
             # the generation is already over and its result is being written: interrupting the engine
             # now would throw away a clip that exists on disk
             await self.broadcast({"type": "notice", "text": "Генерация уже закончилась: результат сохраняется."})
             return
-        if job is not None and job.get("record") is not None:
+        if not job:
+            await self.broadcast({"type": "notice", "text": "Этого задания уже нет в очереди: останавливать нечего."})
+            return
+        record = job.get("record")
+        if record is not None:
             try:
-                job["record"].request_cancel(now=datetime.now().timestamp())   # a request; the state waits for the engine
-            except JobConflict:
-                pass   # terminal or finalizing: nothing to ask for any more
-        if job and job.get("task"):  # cloud task
+                accepted = await self.service.request_cancel(record)
+            except JobConflict as e:
+                await self.broadcast({"type": "notice", "text": e.message})
+                return
+            except BackendUnavailable:
+                self.note_error(f"Отмена задания {pid} записана, но не подтверждена: ComfyUI не отвечает")
+                await self.broadcast({"type": "notice", "text": (
+                    "ComfyUI не отвечает: отмена записана, но не подтверждена. Задание останется в очереди.")})
+                return
+            except BackendError as e:
+                await self.broadcast({"type": "notice", "text": f"Остановить не получилось: {e}"})
+                return
+            if record.state is JobState.CANCELED:   # a queued job is removed at once
+                self.keep_meta(job)
+                self.jobs.pop(pid, None)
+                await self.broadcast({"type": "interrupted", "prompt_id": pid})
+            elif accepted:
+                # running: the engine accepted the request, the outcome comes from its event or the watch
+                task = asyncio.create_task(self.interrupt_watch(pid))
+                self._bg.add(task)
+                task.add_done_callback(self._bg.discard)
+            return
+        # cloud tasks and jobs of an older run have no record: their own paths stay as they were
+        if job.get("task"):
             self.try_set_job_state(job, JobState.CANCELED)
             self.keep_meta(job)
             self.jobs.pop(pid, None)
@@ -4156,19 +4266,21 @@ class App:
                 except cloud.CloudError:
                     pass
             await self.broadcast({"type": "interrupted", "prompt_id": pid})
-        elif job and job["state"] == "queued":
+        elif job["state"] == "queued":
             await self.comfy_json("POST", "/queue", json={"delete": [pid]})
             self.try_set_job_state(job, JobState.CANCELED)
             self.keep_meta(job)
             self.jobs.pop(pid, None)
             await self.broadcast({"type": "interrupted", "prompt_id": pid})
-        elif job:
+        else:
             await self.comfy_json("POST", "/interrupt", json={"prompt_id": pid})
             task = asyncio.create_task(self.interrupt_watch(pid))
             self._bg.add(task)
             task.add_done_callback(self._bg.discard)
-        else:  # unknown id: the window's «Stop» means "stop whatever is running now"
-            await self.comfy_json("POST", "/interrupt", json={})
+
+    async def stop_current(self):
+        """The window's «Остановить»: stop whatever the engine is running right now, by explicit request."""
+        await self.comfy_json("POST", "/interrupt", json={})
 
     async def interrupt_watch(self, pid, wait=15):
         """ComfyUI sometimes ignores «Cancel» (stuck on a heavy step). If the job is still there after `wait`

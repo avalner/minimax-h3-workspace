@@ -106,7 +106,8 @@ class WiringTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(record.error, "движок упал")
 
     async def test_cancel_is_a_request_until_the_engine_confirms(self):
-        record = JobRecord(job_id="j7", state=JobState.RUNNING, prompt_id="p7")
+        record = JobRecord(job_id="j7", state=JobState.RUNNING, prompt_id="p7", backend="comfy",
+                           backend_id="comfy:test", backend_job_id="p7")
         job = support.job("p7", state="running", record=record)
         self.app.jobs["p7"] = job
 
@@ -135,6 +136,48 @@ class WiringTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(body["state"], "queued")
         self.assertEqual(body["phase"], "queued")
         self.assertFalse(body["finalizing"])
+
+    async def test_an_unknown_id_does_not_stop_whatever_is_running(self):
+        calls = []
+
+        async def comfy(method, path, **kwargs):
+            calls.append(path)
+            return 200, {}
+
+        self.app.comfy_json = comfy
+        await self.app.cancel_job("nope")
+        self.assertEqual(calls, [], "отмена неизвестного id не должна трогать движок")
+        self.assertTrue(any("останавливать нечего" in (e.get("text") or "") for e in self.events))
+
+    async def test_stop_the_current_thing_is_its_own_operation(self):
+        calls = []
+
+        async def comfy(method, path, **kwargs):
+            calls.append((path, kwargs))
+            return 200, {}
+
+        self.app.comfy_json = comfy
+        await self.app.h_interrupt(support.Req({}))   # the window sends no id: «остановить текущее»
+        self.assertEqual(calls, [("/interrupt", {"json": {}})])
+
+    async def test_a_known_job_is_stopped_by_its_own_id(self):
+        record = JobRecord(job_id="j9", state=JobState.RUNNING, prompt_id="p9", backend="comfy",
+                           backend_id="comfy:test", backend_job_id="p9")
+        self.app.jobs["p9"] = support.job("p9", state="running", record=record)
+        calls = []
+
+        async def comfy(method, path, **kwargs):
+            calls.append((path, kwargs))
+            return 200, {}
+
+        async def no_watch(pid):
+            return None
+
+        self.app.comfy_json = comfy
+        self.app.interrupt_watch = no_watch
+        await self.app.h_interrupt(support.Req({"prompt_id": "p9"}))
+        self.assertEqual(calls[0], ("/interrupt", {"json": {"prompt_id": "p9"}}),
+                         "должно прерываться только это задание")
 
 
 class _Match:

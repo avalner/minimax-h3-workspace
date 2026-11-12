@@ -132,15 +132,17 @@ class InputRef:
     comfy: str | None = None    # a name inside ComfyUI's input folder
     asset: str | None = None    # an asset of the agent API
     url: str | None = None      # a ready address
+    key: str = ""               # what the file is for a machine: "first_frame", "last_frame", ...
 
     def to_dict(self) -> dict:
         return {k: v for k, v in (("role", self.role), ("kind", self.kind), ("comfy", self.comfy),
-                                  ("asset", self.asset), ("url", self.url)) if v}
+                                  ("asset", self.asset), ("url", self.url), ("key", self.key)) if v}
 
     @classmethod
     def from_dict(cls, data: Mapping) -> "InputRef":
         return cls(role=str(data.get("role") or ""), kind=str(data.get("kind") or "file"),
-                   comfy=data.get("comfy"), asset=data.get("asset"), url=data.get("url"))
+                   comfy=data.get("comfy"), asset=data.get("asset"), url=data.get("url"),
+                   key=str(data.get("key") or ""))
 
 
 @dataclass(frozen=True)

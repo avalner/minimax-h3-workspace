@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import secrets
 import subprocess
 import sys
 import time
@@ -28,7 +29,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 TESTS = ROOT / "tests"
-TEMP = ROOT / "_test" / "tmp" / f"run-{os.getpid()}"
+# a fresh folder per run, and a random part in the name: a reused process id must not inherit the
+# database and the state of an earlier run (a check would then pass or fail for the wrong reason)
+TEMP = ROOT / "_test" / "tmp" / f"run-{os.getpid()}-{secrets.token_hex(3)}"
 
 # name -> (title, files, needs_aiohttp, needs_node)
 GROUPS = {

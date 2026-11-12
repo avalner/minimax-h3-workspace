@@ -31,7 +31,8 @@ class QueueResumeTest(unittest.IsolatedAsyncioTestCase):
         """Leave in the database the records an earlier run (or the import) would have left."""
         for record in saved:
             self.app.jobs_repo.save(JobRecord(
-                job_id="j-" + record["pid"], prompt_id=record["pid"], backend="comfy", backend_id="comfy:test",
+                job_id="j-" + record["pid"], prompt_id=record["pid"], backend="comfy",
+                backend_id=self.app.backend_identity(),    # the same engine the settings point at now
                 backend_job_id=record["pid"], state=JobState.QUEUED, created_at=time.time(),
                 updated_at=time.time(), graph=record["graph"],
                 legacy={"stages": record.get("stages") or {}, "meta": record.get("meta") or {},
@@ -200,6 +201,24 @@ class QueueResumeTest(unittest.IsolatedAsyncioTestCase):
         body = json.loads((await self.app.h_queue_resume(None)).text)
         self.assertEqual(body["kept"], 1)
         self.assertEqual(self.waiting(), ["old1"])
+
+    async def test_a_job_of_another_engine_is_not_sent_to_this_one(self):
+        record = JobRecord(job_id="j-old", prompt_id="old1", backend="comfy",
+                           backend_id="comfy:http://192.168.1.5:8188",   # a rented server, not this one
+                           backend_job_id="old1", state=JobState.QUEUED, created_at=time.time(),
+                           updated_at=time.time(), graph={"1": {}},
+                           legacy={"stages": {}, "meta": {"mode": "video", "prompt": "x"}})
+        self.app.jobs_repo.save(record)
+        self.app.pending_resume = self.app.load_resume_queue()
+        self.only_get_queue()
+
+        async def no_submit(*args, **kwargs):
+            raise AssertionError("задание отправлено не на тот движок")
+
+        self.app.queue = no_submit
+        body = json.loads((await self.app.h_queue_resume(None)).text)
+        self.assertEqual(body["kept"], 1)
+        self.assertEqual(self.waiting(), ["old1"], "задание должно ждать свой движок, а не уходить на другой")
 
     async def test_discarding_forgets_the_records(self):
         self.seed(support.saved("old1"), support.saved("old2"))
