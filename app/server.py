@@ -2416,12 +2416,19 @@ class App:
         prompt = form.get("prompt", "").strip()
         if not prompt:
             raise web.HTTPBadRequest(text="Напишите, что должно быть в закрашенном месте")
-        try:
-            x, y = int(form.get("x", "0")), int(form.get("y", "0"))
-        except ValueError:
-            x, y = 0, 0
+        def whole(key):
+            """A whole number out of the form. The browser can send "123.4" (mouse coordinates are fractional):
+            it must be rounded, never dropped — a dropped offset used to paste the crop at the corner."""
+            try:
+                return int(round(float(form.get(key) or 0)))
+            except (TypeError, ValueError):
+                return 0
+        x, y = whole("x"), whole("y")
+        w, h = whole("crop_w"), whole("crop_h")   # the crop's own size: the result comes back to it, and it caps the model's scale
+        size = (w, h) if w > 0 and h > 0 else None
         mp = wf.QWEN_MP.get(form.get("size", "1"), 1.0)
-        graph, stages = wf.qwen_inpaint_graph(self.model_names, prompt, image, form["_crop"], form["_mask"], x, y, mp, seed)
+        graph, stages = wf.qwen_inpaint_graph(self.model_names, prompt, image, form["_crop"], form["_mask"],
+                                              x, y, mp, seed, size)
         return await self.queue(graph, stages, {
             "mode": "qwen", "sub": "Инпейнт", "prompt": prompt, "aspect": "",
             "q": "", "len": 0.0, "res": "", "seed": seed})

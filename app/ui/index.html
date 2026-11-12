@@ -472,12 +472,20 @@ textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft
 .ta-wrap{position:relative}
 .ta-x{position:absolute;top:8px;right:8px;z-index:2;padding:2px 9px;font-size:12px;line-height:1.6;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--muted);cursor:pointer}
 .ta-x:hover{color:var(--accent);border-color:var(--accent)}
-.ip-stage{position:relative;border-radius:12px;overflow:hidden;border:1px solid var(--line);margin-top:10px;background:repeating-conic-gradient(var(--bg-2) 0 25%,var(--surface-2) 0 50%) 0 0/18px 18px}
+/* the drawing canvas: its size is the user's to set, so the stage scrolls instead of stretching the picture */
+.ip-stage{position:relative;border-radius:12px;overflow:auto;max-height:min(64vh,760px);border:1px solid var(--line);margin-top:10px;background:repeating-conic-gradient(var(--bg-2) 0 25%,var(--surface-2) 0 50%) 0 0/18px 18px}
+.ip-fit{position:relative;width:100%;margin:0 auto}
 .ip-stage canvas{display:block;width:100%;height:auto}
 .ip-over{position:absolute;inset:0;cursor:crosshair;touch-action:none}
+.ip-over:focus,.ip-over:focus-visible{outline:none}   /* the canvas takes the focus so Ctrl+Z belongs to it, without a ring */
+.ip-sel{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}   /* the marching ants of the selection: never in the mask */
+.ip-grip{height:14px;margin-top:2px;display:flex;align-items:center;justify-content:center;cursor:ns-resize;touch-action:none}
+.ip-grip::before{content:'';width:52px;height:4px;border-radius:2px;background:var(--line-2,#3a3a3a);transition:background .15s}
+.ip-grip:hover::before,.ip-grip.drag::before{background:var(--accent)}
 .ip-tools{display:flex;gap:10px;align-items:center;margin-top:10px;flex-wrap:wrap}
 .ip-tools .seg{flex:0 0 auto}
 .ip-tools input[type=range]{width:140px}
+.ip-zoomv{font-family:var(--mono);font-size:12px;color:var(--muted);min-width:42px;display:inline-block}
 .tokens{display:flex;gap:6px;flex-wrap:wrap}
 .token{font-family:var(--mono);font-size:11.5px;padding:4px 8px;border-radius:7px;background:var(--surface-2);border:1px solid var(--line-2);color:var(--text)}
 .token:hover{border-color:var(--accent)}
@@ -7195,7 +7203,7 @@ function imgPanel(el, o) {
     if (a === 'save') saveItems([it]); else if (a === 'use') useMenu(it); else if (a === 'up') openUpscale(it); else goTo('library');
   };
   frame.style.aspectRatio = '16 / 9'; refresh();
-  return { frame, ratio: (w, h) => { if (!run && !last) frame.style.aspectRatio = `${w} / ${h}`; } };
+  return { frame, show: showItem, ratio: (w, h) => { if (!run && !last) frame.style.aspectRatio = `${w} / ${h}`; } };
 }
 
 function imgSeedBox(S) {
@@ -7591,13 +7599,19 @@ function imgJobSeed(root, S, seed) {
       <div class="card"><div class="card-h"><h3><span class="n">1</span>Изображение и закраска</h3></div>
         <label class="drop" id="ipDrop"><input type="file" accept="image/*"><div class="ph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="1.6"/><path d="m21 15-5-5L5 21"/></svg><b>Ваше изображение</b><span>перетащите или нажмите</span></div><span class="tag" hidden>Исходная</span><button class="x" type="button">✕</button></label>
         <div class="ip-edit" hidden>
-          <div class="ip-stage"><canvas class="ip-img"></canvas><canvas class="ip-over"></canvas></div>
+          <div class="ip-stage"><div class="ip-fit"><canvas class="ip-img"></canvas><canvas class="ip-over" tabindex="0"></canvas><canvas class="ip-sel"></canvas></div></div>
+          <div class="ip-grip" title="Потяните вверх или вниз — высота холста"></div>
           <div class="ip-tools">
-            <div class="seg ip-mode" style="grid-template-columns:1fr 1fr;width:210px"><button data-m="paint" class="on">Закрасить</button><button data-m="erase">Ластик</button></div>
+            <div class="seg ip-mode" style="grid-template-columns:1fr 1fr 1fr 1fr;width:392px"><button data-m="select" class="on">Выделение</button><button data-m="paint">Закрасить</button><button data-m="erase">Ластик</button><button data-m="fill">Заливка</button></div>
+            <div class="seg ip-selshape" style="grid-template-columns:1fr 1fr 1fr;width:300px"><button data-s="rect" class="on">Прямоугольник</button><button data-s="ellipse">Овал</button><button data-s="lasso">Лассо</button></div>
             <span class="hint">Кисть</span><input type="range" class="ip-brush" min="8" max="160" value="36">
+            <span class="hint">Холст</span><input type="range" class="ip-zoom" min="20" max="200" value="100"><b class="ip-zoomv">100 %</b>
+            <button class="btn ip-fitb" type="button" title="Показать картинку целиком: холст по высоте окна">Вся картинка</button>
+            <button class="btn ip-undo" type="button" title="Убрать последний мазок (Ctrl+Z)" disabled>Отменить</button>
             <button class="btn ip-clear" type="button">Очистить закраску</button>
+            <button class="btn ip-unsel" type="button" title="Закраска снова на всей картинке" disabled>Снять выделение</button>
           </div>
-          <div class="hint" style="margin-top:8px">Закрасьте то, что нужно переделать. Подойдёт и небольшое пятно: закрасьте с запасом, чтобы края слились.</div>
+          <div class="hint" style="margin-top:8px">Клавиши 1–4 выбирают инструмент, а 1 нажатая ещё раз перебирает форму выделения по кругу. «Заливка» заполняет область, обведённую кистью, «Выделение» ограничивает работу выбранной областью: Ctrl добавляет ещё одну, Shift держит ровный круг или квадрат, Alt перетаскивает выделение, Esc снимает. Если не закрашено ничего, в модель уходит само выделение. Ctrl+Z — убрать последний шаг, Shift+Ctrl+Z — вернуть его, Shift+колесо мыши — масштаб холста</div>
         </div></div>
       <div class="card"><div class="card-h"><h3><span class="n">2</span>Что должно быть на закрашенном месте</h3></div>
         <textarea class="ip-prompt" placeholder="Например: белая майка вместо красной куртки. Лицо, фон и свет оставить как было."></textarea>
@@ -7610,8 +7624,201 @@ function imgJobSeed(root, S, seed) {
   gridResize($('.grid', root));
   const drop = $('#ipDrop');
   const edit = $('.ip-edit', root), imgC = $('.ip-img', root), overC = $('.ip-over', root);
+  const selC = $('.ip-sel', root), sctx = selC.getContext('2d');
   const ictx = imgC.getContext('2d'), octx = overC.getContext('2d');
-  let mode = 'paint', brush = 36, hasMask = false;
+  let mode = 'select', brush = 36, hasMask = false;
+  overC.style.opacity = .55;   // the strokes are fully opaque in the data, but the picture stays visible under them
+  /* the tool cursors are drawn on a 32 px canvas: an eraser and a paint bucket, the way they look in editors.
+     The hot spot is taken from the picture itself — the lowest point of the rubber and of the paint drop —
+     so it stays right whatever the shapes above look like. */
+  const curUrl = (draw, spot, fallback) => {
+    const c = document.createElement('canvas'); c.width = c.height = 32;
+    const g = c.getContext('2d');
+    try {
+      draw(g);
+      const p = spot ? spot(g) : null;
+      return `url(${c.toDataURL('image/png')}) ${p ? p[0] : 16} ${p ? p[1] : 16}, ${fallback}`;
+    } catch { return fallback; }
+  };
+  const lowest = (g, test) => {   // bottom-most (then left-most) pixel of a given colour
+    const d = g.getImageData(0, 0, 32, 32).data;
+    let best = null;
+    for (let y = 31; y >= 0; y--) for (let x = 0; x < 32; x++) {
+      const i = (y * 32 + x) * 4;
+      if (d[i + 3] > 200 && test(d[i], d[i + 1], d[i + 2]) && (!best || y > best[1] || (y === best[1] && x < best[0]))) best = [x, y];
+    }
+    return best;
+  };
+  const roundBox = (g, x, y, w, h, r) => {   // roundRect is new in some engines: a plain box will do there
+    g.beginPath();
+    if (g.roundRect) g.roundRect(x, y, w, h, r); else g.rect(x, y, w, h);
+  };
+  const CUR = {
+    erase: curUrl(g => {
+      g.save(); g.translate(16, 16); g.rotate(-38 * Math.PI / 180); g.translate(-16, -16);
+      g.lineJoin = 'round'; g.strokeStyle = '#16171a'; g.lineWidth = 1.9;
+      roundBox(g, 3.5, 10, 25, 11.5, 3.2); g.fillStyle = '#ffffff'; g.fill(); g.stroke();
+      roundBox(g, 3.5, 10, 9.5, 11.5, 3.2); g.fillStyle = '#f2607f'; g.fill(); g.stroke();
+      g.restore();
+    }, g => lowest(g, (r, gr, b) => r > 200 && gr < 140 && b > 90 && b < 175), 'cell'),
+    fill: curUrl(g => {
+      g.save(); g.translate(16, 16); g.rotate(-30 * Math.PI / 180); g.translate(-16, -16);
+      g.lineJoin = 'round'; g.strokeStyle = '#16171a'; g.lineWidth = 1.9;
+      g.beginPath(); g.moveTo(8.5, 10); g.lineTo(24.5, 10); g.lineTo(21, 24.5); g.lineTo(12, 24.5); g.closePath();
+      g.fillStyle = '#f7f9fc'; g.fill(); g.stroke();
+      roundBox(g, 6.8, 6.8, 19.4, 6.2, 2.7); g.fillStyle = '#3f8efc'; g.fill(); g.stroke();
+      g.restore();
+      g.strokeStyle = '#16171a'; g.lineWidth = 1.5;
+      g.beginPath(); g.moveTo(24, 16.4); g.lineTo(26.6, 21.4); g.arc(24, 21.4, 2.6, 0, Math.PI); g.closePath();
+      g.fillStyle = '#3f8efc'; g.fill(); g.stroke();
+    }, g => lowest(g, (r, gr, b) => b > 190 && r < 130), 'copy'),
+    move: curUrl(g => {   // the usual four-way arrow: hold Alt to drag the selection
+      const p = new Path2D();
+      p.rect(14.3, 8.6, 3.4, 14.8);
+      p.rect(8.6, 14.3, 14.8, 3.4);
+      p.moveTo(16, 2.4); p.lineTo(20.6, 8.6); p.lineTo(11.4, 8.6); p.closePath();
+      p.moveTo(16, 29.6); p.lineTo(11.4, 23.4); p.lineTo(20.6, 23.4); p.closePath();
+      p.moveTo(2.4, 16); p.lineTo(8.6, 11.4); p.lineTo(8.6, 20.6); p.closePath();
+      p.moveTo(29.6, 16); p.lineTo(23.4, 20.6); p.lineTo(23.4, 11.4); p.closePath();
+      g.lineJoin = 'round';
+      g.fillStyle = '#16171a'; g.strokeStyle = '#16171a'; g.lineWidth = 4.6;   // the dark rim
+      g.fill(p); g.stroke(p);
+      g.fillStyle = '#ffffff'; g.strokeStyle = '#ffffff'; g.lineWidth = 2.4;   // the white body on top of it
+      g.fill(p); g.stroke(p);
+    }, null, 'move'),
+  };
+  let altHeld = false;
+  const cursorNow = () => {   // the arrow only where it will actually move something, in any tool
+    overC.style.cursor = altHeld && sel ? CUR.move : (CUR[mode] || 'crosshair');
+  };
+  document.addEventListener('keydown', e => { if (e.key === 'Alt') { altHeld = true; cursorNow(); } });
+  document.addEventListener('keyup', e => { if (e.key === 'Alt') { altHeld = false; cursorNow(); } });
+  window.addEventListener('blur', () => { altHeld = false; cursorNow(); });   // Alt+Tab would leave it stuck
+  /* the drawing canvas is as big as the user wants it: 100 % = the width of the card, more = the stage scrolls */
+  const fitEl = $('.ip-fit', root), stageEl = $('.ip-stage', root);
+  const zoomIn = $('.ip-zoom', root), zoomV = $('.ip-zoomv', root);
+  let zoom = 100;
+  const setZoom = (z, keep) => {
+    zoom = Math.max(20, Math.min(200, Math.round(z)));
+    fitEl.style.width = zoom + '%';
+    if (zoomIn.value !== String(zoom)) zoomIn.value = zoom;
+    zoomV.textContent = zoom + '%';
+    if (!keep) { try { localStorage.setItem('h3-ip-zoom', String(zoom)); } catch {} }
+  };
+  const fitZoom = () => {   // the biggest canvas that still shows the whole picture without scrolling
+    if (!drop._file || !imgC.height) return 100;
+    const panel = stageEl.clientWidth || 480;
+    const fixed = parseFloat(stageEl.style.height) || 0;   // the height the user dragged the stage to, if any
+    const maxH = fixed > 0 ? fixed - 4 : Math.min(window.innerHeight * .62, 720);
+    return Math.max(20, Math.min(100, Math.floor(100 * maxH / (panel * (imgC.height / imgC.width)))));
+  };
+  zoomIn.oninput = e => setZoom(+e.target.value);
+  $('.ip-fitb', root).onclick = () => setZoom(fitZoom());
+  stageEl.addEventListener('wheel', e => {   // Shift + wheel: zoom the canvas; Windows often sends it as deltaX
+    if (!e.shiftKey) return;
+    e.preventDefault();
+    const d = e.deltaY || e.deltaX;
+    if (!d) return;
+    setZoom(zoom + (d < 0 ? 5 : -5));
+  }, { passive: false });
+
+  /* the height of the canvas panel: drag the handle under it, the picture scrolls inside */
+  const grip = $('.ip-grip', root);
+  let gripFrom = null;
+  const gripEnd = () => { gripFrom = null; grip.classList.remove('drag'); };
+  grip.addEventListener('pointerdown', e => {
+    e.preventDefault(); grip.setPointerCapture(e.pointerId); grip.classList.add('drag');
+    gripFrom = { y: e.clientY, h: stageEl.getBoundingClientRect().height };
+  });
+  grip.addEventListener('pointermove', e => {
+    if (!gripFrom) return;
+    const h = Math.max(160, Math.min(window.innerHeight * .92, gripFrom.h + e.clientY - gripFrom.y));
+    stageEl.style.maxHeight = 'none';
+    stageEl.style.height = Math.round(h) + 'px';
+    try { localStorage.setItem('h3-ip-stage-h', String(Math.round(h))); } catch {}
+  });
+  grip.addEventListener('pointerup', gripEnd); grip.addEventListener('pointercancel', gripEnd);
+
+  /* --- selection: a rectangle, an ellipse or a lasso, and Shift adds one more area to the same selection.
+     While it exists the brush, the eraser and the bucket stay inside it; if nothing was painted at all, the
+     selection itself becomes the mask. Its outline lives on a canvas of its own, so it is never sent. --- */
+  let sel = null, selKind = 'rect', selMask = null, selDrag = null, selMove = null;
+  const selShape = $('.ip-selshape', root), unselB = $('.ip-unsel', root);
+  const shapeOf = d => {   // one dragged shape: a path plus its bounding box
+    const p = new Path2D();
+    if (selKind === 'lasso') {
+      if (d.pts.length < 3) return null;
+      let x0 = d.pts[0][0], y0 = d.pts[0][1], x1 = x0, y1 = y0;
+      p.moveTo(d.pts[0][0], d.pts[0][1]);
+      for (let i = 1; i < d.pts.length; i++) {
+        const x = d.pts[i][0], y = d.pts[i][1];
+        p.lineTo(x, y);
+        if (x < x0) x0 = x;
+        if (x > x1) x1 = x;
+        if (y < y0) y0 = y;
+        if (y > y1) y1 = y;
+      }
+      p.closePath();
+      return { path: p, box: { x: x0, y: y0, w: x1 - x0, h: y1 - y0 } };
+    }
+    let x1 = d.x1, y1 = d.y1;
+    if (d.round) {   // Shift: a square instead of a rectangle, a circle instead of an ellipse
+      const dx = x1 - d.x0, dy = y1 - d.y0;
+      const m = Math.max(Math.abs(dx), Math.abs(dy));
+      x1 = d.x0 + (dx < 0 ? -m : m);
+      y1 = d.y0 + (dy < 0 ? -m : m);
+    }
+    const x = Math.min(d.x0, x1), y = Math.min(d.y0, y1);
+    const w = Math.abs(x1 - d.x0), h = Math.abs(y1 - d.y0);
+    if (w < 3 || h < 3) return null;
+    if (selKind === 'ellipse') p.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2);
+    else p.rect(x, y, w, h);
+    return { path: p, box: { x, y, w, h } };
+  };
+  const mergeSel = (a, b) => {   // both shapes as subpaths of one path: they fill and clip as a union
+    if (!a) return b;
+    const p = new Path2D(); p.addPath(a.path); p.addPath(b.path);
+    const x0 = Math.min(a.box.x, b.box.x), y0 = Math.min(a.box.y, b.box.y);
+    const x1 = Math.max(a.box.x + a.box.w, b.box.x + b.box.w);
+    const y1 = Math.max(a.box.y + a.box.h, b.box.y + b.box.h);
+    return { path: p, box: { x: x0, y: y0, w: x1 - x0, h: y1 - y0 } };
+  };
+  const paintSel = () => {   // marching ants over the mask (and the shape being dragged)
+    sctx.clearRect(0, 0, selC.width, selC.height);
+    const drag = selDrag && shapeOf(selDrag);
+    if (!sel && !drag) return;
+    const p = new Path2D();
+    if (sel) p.addPath(sel.path);
+    if (drag) p.addPath(drag.path);
+    sctx.save();
+    sctx.lineWidth = 1.4;
+    sctx.setLineDash([5, 4]);
+    sctx.strokeStyle = 'rgba(0,0,0,.85)';
+    sctx.stroke(p);
+    sctx.lineDashOffset = 4.5;
+    sctx.strokeStyle = 'rgba(255,255,255,.95)';
+    sctx.stroke(p);
+    sctx.restore();
+  };
+  const selSet = s => { sel = s; selMask = null; unselB.disabled = !s; cursorNow(); paintSel(); };
+  const selCommit = s => {   // a change of the selection is a step of the same history as the strokes
+    selSet(s);
+    undone = [];
+    strokes.push({ selStep: true, sel: s });
+    undoB.disabled = false;
+  };
+  const selArray = () => {   // 1 inside the selection, for the bucket
+    if (!sel) return null;
+    if (selMask) return selMask;
+    const t = document.createElement('canvas'); t.width = selC.width; t.height = selC.height;
+    const g = t.getContext('2d');
+    g.fillStyle = '#fff'; g.fill(sel.path);
+    const d = g.getImageData(0, 0, t.width, t.height).data;
+    selMask = new Uint8Array(t.width * t.height);
+    for (let p = 0; p < selMask.length; p++) if (d[p * 4 + 3] > 127) selMask[p] = 1;
+    return selMask;
+  };
+  unselB.onclick = () => { if (sel) selCommit(null); };
   wireDrop(drop, (ok, img) => {
     if (!ok) { edit.hidden = true; return; }
     const setup = () => {
@@ -7619,42 +7826,251 @@ function imgJobSeed(root, S, seed) {
       const k = Math.min(1, 1600 / Math.max(w, h));
       w = Math.round(w * k); h = Math.round(h * k);
       imgC.width = overC.width = w; imgC.height = overC.height = h;
+      selC.width = w; selC.height = h; selSet(null);   // a new picture starts with no selection
       ictx.drawImage(img, 0, 0, w, h);
       octx.clearRect(0, 0, w, h);
       hasMask = false; edit.hidden = false;
+      cursorNow();
+      strokes = []; undone = []; undoB.disabled = true;   // a new picture starts with an empty mask
+      let savedH = 0; try { savedH = +localStorage.getItem('h3-ip-stage-h'); } catch {}
+      if (savedH >= 160) { stageEl.style.maxHeight = 'none'; stageEl.style.height = savedH + 'px'; }
+      let saved = 0; try { saved = +localStorage.getItem('h3-ip-zoom'); } catch {}
+      setZoom(saved >= 20 && saved <= 200 ? saved : fitZoom(), true);   // the picture is not blown up to the whole panel
     };
     if (img.complete && img.naturalWidth) setup(); else img.onload = setup;
   });
-  $$('.ip-mode button', root).forEach(b => b.onclick = () => {
-    mode = b.dataset.m;
-    $$('.ip-mode button', root).forEach(x => x.classList.toggle('on', x === b));
-    overC.style.cursor = mode === 'erase' ? 'cell' : 'crosshair';
-  });
+  const modeBtns = $$('.ip-mode button', root), shapeBtns = $$('.ip-selshape button', root);
+  const SHAPES = ['rect', 'ellipse', 'lasso'];
+  const TOOL_KEYS = { Digit1: 'select', Digit2: 'paint', Digit3: 'erase', Digit4: 'fill',
+                      Numpad1: 'select', Numpad2: 'paint', Numpad3: 'erase', Numpad4: 'fill' };
+  const setShape = k => {
+    selKind = k;
+    shapeBtns.forEach(x => x.classList.toggle('on', x.dataset.s === k));
+  };
+  const cycleShape = () => setShape(SHAPES[(SHAPES.indexOf(selKind) + 1) % SHAPES.length]);
+  const setMode = m => {
+    mode = m;
+    modeBtns.forEach(x => x.classList.toggle('on', x.dataset.m === m));
+    selShape.hidden = mode !== 'select';   // the shape choice only makes sense while selecting
+    cursorNow();
+  };
+  modeBtns.forEach(b => b.onclick = () => setMode(b.dataset.m));
+  shapeBtns.forEach(b => b.onclick = () => setShape(b.dataset.s));
   $('.ip-brush', root).oninput = e => { brush = +e.target.value; };
-  $('.ip-clear', root).onclick = () => { octx.clearRect(0, 0, overC.width, overC.height); hasMask = false; };
+
+  /* --- strokes and undo: every stroke is kept as a path, so Ctrl+Z drops the whole last stroke (or the whole
+     «clear») and the mask is redrawn from scratch — the very same pixels, no per-step snapshots in memory. --- */
+  const undoB = $('.ip-undo', root);
+  let strokes = [], undone = [];   // what is painted now, and what Ctrl+Z took away — Shift+Ctrl+Z puts it back
+  /* bucket fill: the area enclosed by the strokes. It is found on the mask itself, so a fill is just another
+     step in the history — Ctrl+Z / Shift+Ctrl+Z work with it exactly like with a stroke. */
+  const floodRegion = (px, py, S) => {   // all open pixels connected to the point; nothing is written yet
+    const w = overC.width, h = overC.height;
+    const sx = Math.floor(px), sy = Math.floor(py);
+    if (sx < 0 || sy < 0 || sx >= w || sy >= h) return null;
+    const img = octx.getImageData(0, 0, w, h), d = img.data;
+    const A = p => d[p * 4 + 3], WALL = 8;
+    // a selection is a wall too: the bucket stops at its edge, and the outline may be left open
+    const free = p => A(p) <= WALL && (!S || S[p]);
+    if (!free(sy * w + sx)) return null;          // on the stroke, or outside the selection: nothing to fill
+    const seen = new Uint8Array(w * h), stack = [sy * w + sx];
+    let count = 0, border = false;
+    while (stack.length) {
+      const p = stack.pop();
+      if (seen[p] || !free(p)) continue;
+      const y = (p / w) | 0;
+      let x0 = p - y * w, x1 = x0;
+      while (x0 > 0 && !seen[y * w + x0 - 1] && free(y * w + x0 - 1)) x0--;
+      while (x1 < w - 1 && !seen[y * w + x1 + 1] && free(y * w + x1 + 1)) x1++;
+      for (let x = x0; x <= x1; x++) { seen[y * w + x] = 1; count++; }
+      if (y === 0 || y === h - 1 || x0 === 0 || x1 === w - 1) border = true;
+      for (const ny of [y - 1, y + 1]) {
+        if (ny < 0 || ny >= h) continue;
+        let run = false;
+        for (let x = x0; x <= x1; x++) {   // one seed per open run of the row above / below
+          const k = ny * w + x, open = !seen[k] && free(k);
+          if (open && !run) { stack.push(k); run = true; } else if (!open) run = false;
+        }
+      }
+    }
+    return { img, seen, count, border };
+  };
+  const fillAt = (x, y, S) => {
+    if (S === undefined) S = selArray();
+    const r = floodRegion(x, y, S);
+    if (!r || !r.count) return 'empty';
+    // without a selection a fill that runs to the edges means the outline is not closed; a selection is the bound itself
+    if (!S && r.border && r.count > overC.width * overC.height * 0.5) return 'leak';
+    const w = overC.width, h = overC.height, d = r.img.data;
+    /* Where two brush strokes touch, their soft edges overlap to about half opacity, and the fill stops short of
+       such a seam — it showed as a hairline of the picture inside the painted area. So the fill creeps up to 3 px
+       into soft pixels; a solid stroke (alpha 250+) is never crossed, so it cannot leak through the outline. */
+    let edge = [];
+    for (let p = 0; p < r.seen.length; p++) {
+      if (!r.seen[p]) continue;
+      const y0 = (p / w) | 0, x0 = p - y0 * w;
+      if ((x0 > 0 && !r.seen[p - 1]) || (x0 < w - 1 && !r.seen[p + 1]) ||
+          (y0 > 0 && !r.seen[p - w]) || (y0 < h - 1 && !r.seen[p + w])) edge.push(p);
+    }
+    for (let pass = 0; pass < 3 && edge.length; pass++) {
+      const next = [];
+      const grow = k => {
+        const a = d[k * 4 + 3];
+        if (r.seen[k] || a > 250 || a === 0 || (S && !S[k])) return;   // solid stroke, open space or outside the selection
+        r.seen[k] = 1; next.push(k);
+      };
+      for (const p of edge) {
+        const y0 = (p / w) | 0, x0 = p - y0 * w;
+        if (x0 > 0) grow(p - 1);
+        if (x0 < w - 1) grow(p + 1);
+        if (y0 > 0) grow(p - w);
+        if (y0 < h - 1) grow(p + w);
+      }
+      edge = next;
+    }
+    for (let p = 0; p < r.seen.length; p++) if (r.seen[p]) {
+      const i = p * 4; d[i] = 232; d[i + 1] = 38; d[i + 2] = 79; d[i + 3] = 255;
+    }
+    octx.putImageData(r.img, 0, 0);
+    return 'filled';
+  };
+  const withClip = (path, fn) => {   // the selection: the brush and the eraser never paint outside it
+    if (!path) { fn(); return; }
+    octx.save(); octx.clip(path);
+    try { fn(); } finally { octx.restore(); }
+  };
+  const paintStroke = s => {
+    if (s.selStep) { sel = s.sel; selMask = null; unselB.disabled = !sel; return; }   // only the outline moves
+    if (s.fill) { fillAt(s.x, s.y, s.mask); return; }
+    if (s.clear) { octx.clearRect(0, 0, overC.width, overC.height); return; }
+    withClip(s.sel, () => {
+      octx.globalCompositeOperation = s.mode === 'erase' ? 'destination-out' : 'source-over';
+      octx.fillStyle = octx.strokeStyle = '#e8264f';   // opaque: the stroke's own alpha is the mask the model reads
+      octx.lineWidth = s.brush; octx.lineCap = octx.lineJoin = 'round';
+      const [x0, y0] = s.pts[0];
+      octx.beginPath(); octx.arc(x0, y0, s.brush / 2, 0, 7); octx.fill();
+      for (let i = 1; i < s.pts.length; i++) {
+        octx.beginPath(); octx.moveTo(s.pts[i - 1][0], s.pts[i - 1][1]); octx.lineTo(s.pts[i][0], s.pts[i][1]); octx.stroke();
+      }
+    });
+  };
+  const redraw = () => {
+    octx.globalCompositeOperation = 'source-over';
+    octx.clearRect(0, 0, overC.width, overC.height);
+    sel = null; selMask = null;   // the history is replayed from the very beginning, so the selection starts empty
+    strokes.forEach(paintStroke);
+    unselB.disabled = !sel;
+    paintSel();                   // the ants follow the selection the history has led to
+    hasMask = !!bbox();
+    undoB.disabled = !strokes.length;
+  };
+  const undo = () => { const s = strokes.pop(); if (!s) return; undone.push(s); redraw(); };
+  const redo = () => { const s = undone.pop(); if (!s) return; strokes.push(s); redraw(); };
   const pos = e => { const r = overC.getBoundingClientRect(); return [(e.clientX - r.left) * overC.width / r.width, (e.clientY - r.top) * overC.height / r.height]; };
-  let drawing = false, last = null;
-  const dot = (x, y) => { octx.beginPath(); octx.arc(x, y, brush / 2, 0, 7); octx.fill(); };
+  let drawing = false, live = null;
   overC.addEventListener('pointerdown', e => {
     if (edit.hidden) return;
-    e.preventDefault(); overC.setPointerCapture(e.pointerId); drawing = true;
-    const [x, y] = pos(e); last = [x, y];
-    octx.globalCompositeOperation = mode === 'erase' ? 'destination-out' : 'source-over';
-    octx.fillStyle = octx.strokeStyle = 'rgba(232,38,79,0.85)';
-    octx.lineWidth = brush; octx.lineCap = octx.lineJoin = 'round';
-    dot(x, y);
+    e.preventDefault();
+    overC.focus({ preventScroll: true });   // the prompt field must let go: Ctrl+Z now belongs to the canvas, not the text
+    if (e.altKey && sel) {                  // Alt: drag the whole selection to another place, in any tool
+      const [sx, sy] = pos(e);
+      overC.setPointerCapture(e.pointerId);
+      selMove = { x0: sx, y0: sy, orig: sel, moved: false };
+      return;
+    }
+    if (mode === 'select') {                // drag a rectangle, an ellipse or a lasso; Ctrl adds a second area
+      const [sx, sy] = pos(e);
+      overC.setPointerCapture(e.pointerId);
+      selDrag = { x0: sx, y0: sy, x1: sx, y1: sy, pts: [[sx, sy]],
+                  add: e.ctrlKey || e.metaKey, round: e.shiftKey };
+      return;
+    }
+    if (mode === 'fill') {                  // fill the area the brush has outlined, then remember it as one step
+      const [fx, fy] = pos(e);
+      const S = selArray();                 // the bucket stops at the edge of the selection
+      const res = fillAt(fx, fy, S);
+      if (res === 'filled') { undone = []; strokes.push({ fill: true, x: fx, y: fy, mask: S }); undoB.disabled = false; hasMask = true; }
+      else if (res === 'leak') toast('Заливка не выполнена: обведите область кистью целиком, без разрывов');
+      return;
+    }
+    overC.setPointerCapture(e.pointerId); drawing = true;
+    const [x, y] = pos(e);
+    live = { mode, brush, pts: [[x, y]], sel: sel ? sel.path : null };   // the selection goes into the history too, so a replay is exact
+    undone = [];                             // a new stroke drops the redo history
+    strokes.push(live); undoB.disabled = false;
+    paintStroke(live);
   });
   overC.addEventListener('pointermove', e => {
-    if (!drawing) return;
+    if (selMove) {                          // the selection travels with the mouse
+      const [x, y] = pos(e);
+      const dx = x - selMove.x0, dy = y - selMove.y0;
+      if (!dx && !dy) return;
+      selMove.moved = true;
+      const b = selMove.orig.box;
+      const p = new Path2D();
+      p.addPath(selMove.orig.path, new DOMMatrix().translate(dx, dy));
+      selSet({ path: p, box: { x: b.x + dx, y: b.y + dy, w: b.w, h: b.h } });
+      return;
+    }
+    if (selDrag) {                          // the new shape is drawn straight away, the old one stays until the drop
+      const [x, y] = pos(e);
+      selDrag.x1 = x; selDrag.y1 = y; selDrag.round = e.shiftKey;   // Shift limits it to a square or a circle
+      if (selKind === 'lasso') selDrag.pts.push([x, y]);
+      paintSel();
+      return;
+    }
+    if (!drawing || !live) return;
     const [x, y] = pos(e);
-    octx.beginPath(); octx.moveTo(last[0], last[1]); octx.lineTo(x, y); octx.stroke();
-    last = [x, y];
+    const p = live.pts[live.pts.length - 1];
+    if (Math.abs(x - p[0]) < 0.5 && Math.abs(y - p[1]) < 0.5) return;
+    live.pts.push([x, y]);
+    withClip(live.sel, () => {
+      octx.globalCompositeOperation = live.mode === 'erase' ? 'destination-out' : 'source-over';
+      octx.lineWidth = live.brush; octx.lineCap = octx.lineJoin = 'round';
+      octx.beginPath(); octx.moveTo(p[0], p[1]); octx.lineTo(x, y); octx.stroke();
+    });
   });
   const stop = () => {
-    if (!drawing) return; drawing = false;
+    if (selMove) {                          // the move is a step of the history too
+      const moved = selMove.moved;
+      selMove = null;
+      if (moved) selCommit(sel);
+      return;
+    }
+    if (selDrag) {                          // a shape too small to mean anything changes nothing
+      const s = shapeOf(selDrag), add = selDrag.add;
+      selDrag = null;
+      if (s) selCommit(add ? mergeSel(sel, s) : s); else paintSel();
+      return;
+    }
+    if (!drawing) return; drawing = false; live = null;
     hasMask = !!bbox();
   };
   overC.addEventListener('pointerup', stop); overC.addEventListener('pointercancel', stop);
+  undoB.onclick = undo;
+  $('.ip-clear', root).onclick = () => { undone = []; strokes.push({ clear: true }); redraw(); };
+  document.addEventListener('keydown', e => {
+    if (!root.classList.contains('active') || edit.hidden) return;
+    if (e.key === 'Escape') {   // Esc drops the selection (unless a zoom window or a question is on top of it)
+      if (sel && $('#zoomv')?.hidden !== false && $('#confirm')?.hidden !== false) { e.preventDefault(); selCommit(null); }
+      return;
+    }
+    const t = e.target;   // a real text field keeps its own keys; a slider or a button does not
+    const typing = t && (t.tagName === 'TEXTAREA' || t.isContentEditable
+      || (t.tagName === 'INPUT' && /^(text|search|email|url|tel|password|number)$/i.test(t.type || 'text')));
+    if (typing) return;
+    if (!e.ctrlKey && !e.metaKey && !e.altKey) {   // 1–4 pick a tool; 1 again cycles the shape of the selection
+      const tool = TOOL_KEYS[e.code];
+      if (tool) {
+        e.preventDefault();
+        if (tool === 'select' && mode === 'select') cycleShape(); else setMode(tool);
+        return;
+      }
+    }
+    if (!(e.ctrlKey || e.metaKey) || !(e.code === 'KeyZ' || String(e.key).toLowerCase() === 'z')) return;
+    e.preventDefault();
+    if (e.shiftKey) redo(); else undo();
+  });
   $$('.ip-q button', root).forEach(b => b.onclick = () => { S.size = b.dataset.s; $$('.ip-q button', root).forEach(x => x.classList.toggle('on', x === b)); });
   $('.ip-q button', root).classList.add('on');
   const bbox = () => {   // painted region, canvas coordinates
@@ -7670,30 +8086,45 @@ function imgJobSeed(root, S, seed) {
     return new File([arr], name, { type: 'image/png' });
   };
   const prep = () => {   // cut the picture around the painted area (with margin), like proven inpaint workflows
-    const b = bbox(); if (!b) return null;
+    const painted = bbox();
+    if (!painted && !sel) return null;
+    /* whole pixels only: a selection arrives as fractional mouse coordinates, and a crop cut at 123.4 px would
+       hand the server a size it cannot parse — that is how the picture ended up pasted at the corner */
+    const b = painted || {
+      x: Math.floor(sel.box.x), y: Math.floor(sel.box.y),
+      w: Math.ceil(sel.box.w), h: Math.ceil(sel.box.h),
+    };
     const px = Math.max(32, Math.round(b.w * .25)), py = Math.max(32, Math.round(b.h * .25));
-    const cx = Math.max(0, b.x - px), cy = Math.max(0, b.y - py);
+    const cx = Math.max(0, Math.round(b.x - px)), cy = Math.max(0, Math.round(b.y - py));
     const cw = Math.min(overC.width - cx, Math.ceil((b.w + px * 2) / 8) * 8), ch = Math.min(overC.height - cy, Math.ceil((b.h + py * 2) / 8) * 8);
     const cropC = document.createElement('canvas'); cropC.width = cw; cropC.height = ch;
     cropC.getContext('2d').drawImage(imgC, cx, cy, cw, ch, 0, 0, cw, ch);
     const maskC = document.createElement('canvas'); maskC.width = cw; maskC.height = ch;   // only the painted strokes
-    maskC.getContext('2d').drawImage(overC, cx, cy, cw, ch, 0, 0, cw, ch);
-    return { crop: pngFile(cropC, 'crop.png'), mask: pngFile(maskC, 'mask.png'), x: cx, y: cy };
+    const mg = maskC.getContext('2d');
+    mg.drawImage(overC, cx, cy, cw, ch, 0, 0, cw, ch);
+    if (!painted && sel) {   // a selection with no strokes in it: the whole selected area goes to the model
+      mg.save(); mg.translate(-cx, -cy);
+      mg.fillStyle = '#e8264f'; mg.fill(sel.path);
+      mg.restore();
+    }
+    return { crop: pngFile(cropC, 'crop.png'), mask: pngFile(maskC, 'mask.png'), x: cx, y: cy, w: cw, h: ch };
   };
   imgPanel($('.ip-prev', root), {
     mode: 'qwen', url: '/api/generate/inpaint',
     promptText: () => $('.ip-prompt', root).value.trim(),
-    validate: () => !drop._file ? 'Загрузите изображение' : !hasMask ? 'Закрасьте кисточкой место, которое нужно переделать'
+    validate: () => !drop._file ? 'Загрузите изображение' : !hasMask && !sel ? 'Закрасьте кисточкой место, которое нужно переделать'
       : !$('.ip-prompt', root).value.trim() ? 'Напишите, что должно быть в закрашенном месте' : '',
     form: () => {
       const p = prep();
       const fd = new FormData();
       fd.append('image', pngFile(imgC, 'image.png'));   // the exact picture the mask coordinates belong to
       fd.append('crop', p.crop); fd.append('mask', p.mask); fd.append('x', p.x); fd.append('y', p.y);
+      fd.append('crop_w', p.w); fd.append('crop_h', p.h);   // the model works at ~megapixels, the paste at the real size
       fd.append('prompt', $('.ip-prompt', root).value.trim()); fd.append('size', S.size);
       imgSeedForm(S, fd); return fd;
     }
   });
+
   imgSeedWire(root, S);
 })();
 

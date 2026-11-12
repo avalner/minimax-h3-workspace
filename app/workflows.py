@@ -1405,25 +1405,44 @@ def qwen_edit_graph(m, prompt, image, megapixels, seed, size=None, extras=()):
     return _qwen_base(m, image, megapixels, prompt, seed, size, extras)
 
 
-def qwen_inpaint_graph(m, prompt, image, crop, mask, x, y, megapixels, seed):
-    """Local edit like the proven crop-and-stitch inpainting: Qwen Image 2.1 redraws only the masked area.
-    `crop`/`mask` are the picture cut around the painted region (client-side), `x`/`y` its place in the original
-    `image`. The crop is scaled to ~megapixels for the model; the mask is scaled with the very same node and
-    settings, then ImageCompositeMasked pastes the redrawn crop back over the untouched original."""
-    g, stages = _qwen_base(m, crop, megapixels, prompt, seed)
-    g["12"] = {"class_type": "MaskToImage", "inputs": {"mask": ["21", 1]}}
-    g["13"] = {"class_type": "ImageScaleToTotalPixels", "inputs": {
-        "upscale_method": "lanczos", "megapixels": megapixels, "resolution_steps": 32, "image": ["12", 0]}}
-    g["14"] = {"class_type": "ImageToMask", "inputs": {"channel": "red", "image": ["13", 0]}}
-    # LoadImage's MASK output is 1-alpha (transparent counts as 1), so invert to get «painted area» back
-    g["19"] = {"class_type": "InvertMask", "inputs": {"mask": ["14", 0]}}
+def qwen_inpaint_graph(m, prompt, image, crop, mask, x, y, megapixels, seed, size=None, feather=8):
+    """Local edit on Qwen Image 2.1: `crop` is the picture cut around the painted region (client-side), `mask` its
+    brush strokes, `x`/`y` the crop's place in the original `image`, `size` the crop's own width and height.
+
+    Three things keep the result honest:
+    * the crop is never blown up beyond its own pixels — a small crop is generated at its own size, so the model
+      does not invent detail that is thrown away on the way back (that upscale-and-squeeze made flowers look plastic);
+    * the painted area becomes a soft mask (ImageBlur) both for the sampler and for the paste, so there is no seam;
+    * the latent carries a noise mask, so only the brushed part is denoised and the rest of the crop stays exactly
+      as it is: the model works against the real neighbours instead of inventing a whole new picture around them.
+    The redrawn crop is scaled back to the crop's own size and pasted into the untouched original."""
+    mp = megapixels
+    if size and size[0] and size[1]:
+        mp = max(0.25, min(megapixels, size[0] * size[1] / 1048576))
+    g, stages = _qwen_base(m, crop, mp, prompt, seed)
+    g["12"] = {"class_type": "InvertMask", "inputs": {"mask": ["21", 1]}}   # LoadImage's MASK is 1-alpha
+    g["13"] = {"class_type": "MaskToImage", "inputs": {"mask": ["12", 0]}}
+    g["14"] = {"class_type": "ImageBlur", "inputs": {"image": ["13", 0], "blur_radius": feather, "sigma": feather / 2.0}}
+    g["15"] = {"class_type": "ImageToMask", "inputs": {"channel": "red", "image": ["14", 0]}}   # soft mask, crop scale
+    g["16"] = {"class_type": "ImageScaleToTotalPixels", "inputs": {   # the same mask at the model's scale
+        "upscale_method": "lanczos", "megapixels": mp, "resolution_steps": 32, "image": ["14", 0]}}
+    g["17"] = {"class_type": "ImageToMask", "inputs": {"channel": "red", "image": ["16", 0]}}
+    g["18"] = {"class_type": "VAEEncode", "inputs": {"pixels": ["6", 0], "vae": ["3", 0]}}
+    g["19"] = {"class_type": "SetLatentNoiseMask", "inputs": {"samples": ["18", 0], "mask": ["17", 0]}}
+    g["9"]["inputs"]["latent_image"] = ["19", 0]
     g["20"] = {"class_type": "LoadImage", "inputs": {"image": image}}
     g["21"] = {"class_type": "LoadImage", "inputs": {"image": mask}}
-    g["22"] = {"class_type": "ImageCompositeMasked", "inputs": {
-        "destination": ["20", 0], "source": ["10", 0], "mask": ["19", 0], "x": x, "y": y, "resize_source": False}}
-    g["11"]["inputs"]["images"] = ["22", 0]
-    stages.update({"12": "encode", "13": "encode", "14": "encode", "19": "encode",
-                   "20": "load", "21": "load", "22": "decode"})
+    src = ["10", 0]
+    if size and size[0] and size[1]:   # the model worked at ~megapixels: bring its crop back to the real size
+        g["22"] = {"class_type": "ImageScale", "inputs": {
+            "upscale_method": "lanczos", "width": size[0], "height": size[1], "crop": "disabled", "image": ["10", 0]}}
+        src = ["22", 0]
+    g["23"] = {"class_type": "ImageCompositeMasked", "inputs": {
+        "destination": ["20", 0], "source": src, "mask": ["15", 0], "x": x, "y": y, "resize_source": False}}
+    g["11"]["inputs"]["images"] = ["23", 0]
+    stages.update({"12": "encode", "13": "encode", "14": "encode", "15": "encode", "16": "encode",
+                   "17": "encode", "18": "encode", "19": "encode", "20": "load", "21": "load",
+                   "22": "decode", "23": "decode"})
     return g, stages
 
 
