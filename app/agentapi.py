@@ -40,6 +40,8 @@ import aiohttp
 from aiohttp import web
 
 import workflows as wf
+from domain.errors import InvalidSpec
+from domain.jobs import InputRef, JobSpec, ResultPolicy
 from storage.atomic import atomic_write_json
 from version import APP_VERSION
 
@@ -499,11 +501,6 @@ class AgentAPI:
         if quality not in wf.QUALITY:
             raise AgentError(400, "INVALID_PARAM", f"Неизвестное quality: {quality}",
                              "Разрешены: " + ", ".join(wf.QUALITY))
-        try:
-            seconds = float(get("seconds", 5))
-        except (TypeError, ValueError):
-            raise AgentError(400, "INVALID_PARAM", "seconds должно быть числом")
-        seconds = min(self.max_seconds, max(3.0, seconds))
         seed = get("seed")
         try:
             seed = int(seed) if seed not in (None, "") else random.randrange(2 ** 50)
@@ -531,19 +528,35 @@ class AgentAPI:
                     last_name = first_name
                 elif last:
                     last_name = await app.put_input(self.assets.file(last))
-            graph, stages = wf.video_graph(app.model_names, prompt, width, height, seconds, seed,
-                                           first_name, last_name, app.custom_loras(), None)
+            refs = []
+            if first_name:
+                refs.append(InputRef(role="Первый кадр" + (" · зациклено" if loop else ""), kind="image",
+                                     comfy=first_name, asset=first["asset"] if first else None))
+            if last_name and last_name != first_name:
+                refs.append(InputRef(role="Последний кадр", kind="image", comfy=last_name,
+                                     asset=last["asset"] if last else None))
+            # the same description the window builds: the duration is clamped and checked in one place
+            spec = JobSpec.video(prompt=prompt, aspect=aspect, quality=quality, seconds=get("seconds", 5),
+                                 seed=seed, width=width, height=height, models=dict(app.model_names),
+                                 loras=app.custom_loras("video"), inputs=tuple(refs),
+                                 result_policy=ResultPolicy.LIBRARY, source="agent",
+                                 sub=self._job_subtitle(first_name, last_name, loop),
+                                 max_seconds=self.max_seconds)
+            graph, stages = wf.video_graph(app.model_names, spec.prompt, spec.width, spec.height, spec.seconds,
+                                           spec.seed, first_name, last_name, app.custom_loras("video"), None)
             inputs = []   # the files the job is made from: the details window in the queue shows them
             if first_name:
                 inputs.append(self._job_input("Первый кадр" + (" · зациклено" if loop else ""), "image", first_name))
             if last_name and last_name != first_name:
                 inputs.append(self._job_input("Последний кадр", "image", last_name))
             response = await app.queue(graph, stages, {
-                "mode": "video", "sub": self._job_subtitle(first_name, last_name, loop),
-                "prompt": prompt, "aspect": aspect, "q": quality, "len": seconds,
-                "res": f"{width}×{height}", "seed": seed, "inputs": inputs,
+                "mode": "video", "sub": spec.sub,
+                "prompt": spec.prompt, "aspect": spec.aspect, "q": spec.quality, "len": spec.seconds,
+                "res": f"{spec.width}×{spec.height}", "seed": spec.seed, "inputs": inputs,
                 "origin": {"kind": "agent", "client": str(body.get("client") or "")[:40] or None,
-                           "idempotency_key": key or None}})
+                           "idempotency_key": key or None}}, spec=spec)
+        except InvalidSpec as e:
+            raise AgentError(400, "INVALID_PARAM", e.message, e.hint)
         except web.HTTPException as e:
             raise AgentError(e.status if 400 <= e.status < 500 else 502, "GENERATION_REFUSED", e.text or e.reason)
         except (aiohttp.ClientError, asyncio.TimeoutError, ConnectionError) as e:
@@ -562,8 +575,8 @@ class AgentAPI:
         await app.broadcast({"type": "external_job", "prompt_id": job_id, "mode": "video",
                              "prompt": self._short_title(prompt)})
         return web.json_response({
-            "job": job_id, "state": "queued", "deduplicated": False, "seed": seed, "seconds": seconds,
-            "aspect": aspect, "quality": quality, "res": f"{width}×{height}",
+            "job": job_id, "state": "queued", "deduplicated": False, "seed": spec.seed, "seconds": spec.seconds,
+            "aspect": spec.aspect, "quality": spec.quality, "res": f"{spec.width}×{spec.height}",
             "inputs": {"first_frame": {"asset": first["asset"], "comfy": first_name} if first else None,
                        "last_frame": {"asset": last["asset"], "comfy": last_name} if (last and not loop) else None},
             "origin": {"kind": "agent", "idempotency_key": key or None},

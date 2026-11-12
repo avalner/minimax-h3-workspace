@@ -47,6 +47,10 @@ import report
 import speech
 import updater
 import watchdog
+from domain.errors import InvalidSpec, InvalidTransition, JobConflict
+from domain.jobs import (MAX_SECONDS, InputRef, JobRecord, JobSpec, JobState, ResultPolicy, new_job_id,
+                         public_state)
+from domain.media import MediaKind, MediaRecord, MediaState
 from storage.atomic import atomic_write_json, atomic_write_text
 from version import APP_VERSION
 
@@ -353,7 +357,6 @@ LONG_DIR = DATA_DIR / "long"   # saved scene states of the long video made scene
 LIBRARY_FILE = DATA_DIR / "library.json"
 QUEUE_FILE = DATA_DIR / "queue.json"
 WORKFLOWS_DIR = DATA_DIR / "workflows"
-MAX_SECONDS = 25.0  # H3 itself is made for up to 15 s; longer clips are allowed, quality is the user's call
 PREVIEW_LIMIT = 40  # finished pictures waiting for «Добавить в библиотеку»: the newest are kept, the rest is forgotten
 
 CLIENT_ID = "h3studio-" + uuid.uuid4().hex[:8]
@@ -920,6 +923,8 @@ class App:
         for jid in [j for j, job in self.jobs.items() if not job.get("task") and not job.get("finalizing")]:
             # a job that is being finalized has already finished in the engine: only its result is
             # being written, so a replaced engine is not a reason to declare it lost
+            self.try_set_job_state(self.jobs[jid], JobState.CANCELED if kind == "interrupted" else JobState.FAILED,
+                                   error=message)
             self.keep_meta(self.jobs.get(jid))
             self.jobs.pop(jid, None)
             await self.broadcast({"type": kind, "prompt_id": jid, **({"message": message} if message else {})})
@@ -1027,7 +1032,7 @@ class App:
         if t in ("execution_start", "executing", "progress"):
             job["last_ev"] = datetime.now().timestamp()  # the lost-job watch measures silence in wall-clock seconds
         if t == "execution_start":
-            job["state"] = "running"
+            self.try_set_job_state(job, JobState.RUNNING)
             await self.send_stage(job, "load")
         elif t == "executing" and d.get("node"):
             stage = job["stages"].get(d["node"])
@@ -1040,7 +1045,7 @@ class App:
         elif t == "execution_success":
             await self.finish_job(job)
         elif t == "execution_error":
-            job["state"] = "error"
+            self.try_set_job_state(job, JobState.FAILED, error=str(d.get("exception_message", "")).strip())
             self.note_error(f'Ошибка генерации, узел {d.get("node_type", "")}: {d.get("exception_message", "").strip()}')
             hint = self.model_hint((job.get("meta") or {}).get("mode", ""), d.get("exception_message", ""))
             await self.broadcast({"type": "error", "prompt_id": pid,
@@ -1048,6 +1053,7 @@ class App:
             self.keep_meta(job)
             self.jobs.pop(pid, None)
         elif t == "execution_interrupted":
+            self.try_set_job_state(job, JobState.CANCELED)
             await self.broadcast({"type": "interrupted", "prompt_id": pid})
             self.keep_meta(job)
             self.jobs.pop(pid, None)
@@ -1084,6 +1090,55 @@ class App:
                 await asyncio.sleep(delay * (n + 1))
         return {}
 
+    # ---------- what a job is, and where it is ----------
+
+    def backend_identity(self):
+        """Which engine a job belongs to. The settings may change later; a job must not follow them."""
+        if self.rh():
+            return "cloud:runninghub"
+        return "comfy:" + self.comfy
+
+    def new_record(self, spec, prompt_id, backend_job_id=None):
+        """The typed record of a new job: our id, the engine's id, the public id and the request.
+
+        The record is born already queued: it exists only once the engine has accepted the job and
+        given it an id. Before that there is nothing to track — the durable "submitting" moment of
+        stage 4 is what will change that.
+        """
+        now = datetime.now().timestamp()
+        return JobRecord(job_id=new_job_id(), spec=spec, backend="cloud" if self.rh() else "comfy",
+                         backend_id=self.backend_identity(), backend_job_id=backend_job_id or prompt_id,
+                         prompt_id=prompt_id, state=JobState.QUEUED, created_at=now, updated_at=now)
+
+    def set_job_state(self, job, target, *, error=None):
+        """The one place a job changes state.
+
+        The rules live in `domain.jobs`; here the legacy fields the window and the agent API read are
+        kept in step with the record: `state` in the words they already know, and the `finalizing`
+        mark. A job without a record (an older run, or a test double) keeps the old behaviour.
+        """
+        target = JobState(target)
+        record = job.get("record")
+        if record is None:
+            job["state"] = public_state(target)
+            job["finalizing"] = target is JobState.FINALIZING
+            return True
+        changed = record.apply(target, now=datetime.now().timestamp(), error=error)
+        job["state"] = public_state(record.state)
+        job["finalizing"] = record.state is JobState.FINALIZING
+        return changed
+
+    def try_set_job_state(self, job, target, *, error=None):
+        """Like set_job_state, but a late or repeated engine event is ignored instead of raising.
+
+        The websocket loop must not be dropped because ComfyUI sent the same event twice or sent one
+        for a job that has already ended.
+        """
+        try:
+            return self.set_job_state(job, target, error=error)
+        except InvalidTransition:
+            return False
+
     async def finish_job(self, job):
         """Register the result of a job that ComfyUI has finished.
 
@@ -1099,13 +1154,16 @@ class App:
         if job.get("finalizing") or job.get("finalized"):
             return   # a second event for the same job: the first one is registering its result
         pid = job["prompt_id"]
-        job["finalizing"] = True
+        self.set_job_state(job, JobState.FINALIZING)   # also sets the `finalizing` mark the watch reads
         job["finalize_tries"] = job.get("finalize_tries", 0) + 1
         self.save_queue()   # a crash in the middle of finalization must be known to the next start
         try:
             await self._finish_job(job)
         except Exception as e:  # noqa: BLE001 - a lost library record is better than a lost clip
             job["finalizing"] = False
+            record = job.get("record")
+            if record is not None:
+                record.finalize_attempts += 1   # stays FINALIZING: the generation itself did happen
             self.note_error(f"Результат задания {pid} сгенерирован, но не сохранился: {type(e).__name__}: {e}")
             await self.broadcast({"type": "notice", "text": (
                 "Результат готов, но записать его в Библиотеку не удалось: " + str(e) +
@@ -1143,6 +1201,7 @@ class App:
                   and f.get("type", "output") == "output"]
         if not videos and not images:
             self.note_error(f"ComfyUI закончил работу, но в истории нет файлов (папка {self.output_dir or 'output'})")
+            self.set_job_state(job, JobState.FAILED, error="ComfyUI не вернул ни видео, ни изображение")
             self.jobs.pop(pid, None)   # there is nothing to wait for any more
             await self.broadcast({"type": "error", "prompt_id": pid,
                                   "message": "ComfyUI не вернул ни видео, ни изображение: проверьте папку output"})
@@ -1155,7 +1214,11 @@ class App:
                 t = str((job.get("titles") or {}).get(node_of.get(id(f)), ""))
                 return (0 if t.startswith("Лист") else 1, t)
             picked.sort(key=order)
-        preview = bool(job.get("preview"))
+        record = job.get("record")
+        # the result policy is part of the request now: a draft stays a draft because it was asked for,
+        # not because a flag happened to travel next to the job
+        policy = record.spec.result_policy if record is not None and record.spec is not None else None
+        preview = policy is ResultPolicy.DRAFT if policy is not None else bool(job.get("preview"))
         items = []
         for f in picked:
             item = dict(job["meta"], id=uuid.uuid4().hex[:12], prompt_id=pid,
@@ -1175,9 +1238,16 @@ class App:
             else:
                 self.library.add(item)   # may raise: then the job stays and this is tried again
                 await self.archive_item(item)
+            if record is not None:
+                record.add_result(MediaRecord(
+                    media_id=item["id"], kind=MediaKind.of_name(f["filename"]),
+                    state=MediaState.DRAFT if preview else MediaState.LIBRARY,
+                    path=str(item["local"]) if item.get("local") else None, backend_file=dict(f),
+                    library_id=None if preview else item["id"],
+                    created_at=datetime.now().timestamp()))
             items.append(self.public(item))
         job["finalized"] = True
-        job["finalizing"] = False
+        self.set_job_state(job, JobState.SUCCEEDED)
         self.jobs.pop(pid, None)   # the result is registered: only now the job leaves the queue
         await self.broadcast({"type": "done", "prompt_id": pid, "item": items[0], "items": items})
 
@@ -1865,10 +1935,14 @@ class App:
         the agent API see it again. The `finalizing` mark is not restored: whoever resumes a job decides
         whether it still has to be finalized."""
         now = datetime.now().timestamp()
-        return {"prompt_id": pid, "state": state, "stages": saved.get("stages") or {}, "stage": None,
-                "meta": saved.get("meta") or {}, "last_output": saved.get("last_output", False),
-                "titles": saved.get("titles") or {}, "graph": saved.get("graph"), "scenes": None,
-                "t0": now, "last_ev": now, "preview": saved.get("preview", False)}
+        job = {"prompt_id": pid, "state": state, "stages": saved.get("stages") or {}, "stage": None,
+               "meta": saved.get("meta") or {}, "last_output": saved.get("last_output", False),
+               "titles": saved.get("titles") or {}, "graph": saved.get("graph"), "scenes": None,
+               "t0": now, "last_ev": now, "preview": saved.get("preview", False)}
+        job["record"] = JobRecord(job_id=new_job_id(), prompt_id=pid, backend="comfy",
+                                  backend_id=self.backend_identity(), backend_job_id=pid,
+                                  state=JobState(state), created_at=now, updated_at=now)
+        return job
 
     async def _history_done(self, pid):
         """What ComfyUI's history says about a job of the previous run: finished, failed or unknown."""
@@ -1969,9 +2043,11 @@ class App:
         out = {"prompt_id": pid, "state": "unknown", "fps": wf.FPS}
         job = self.jobs.get(pid)
         if job:
+            record = job.get("record")
             out.update(state=job.get("state") or "queued", stage=job.get("stage"), step=job.get("step"),
                        max=job.get("step_max"), created=job.get("t0"), meta=job.get("meta") or {},
-                       finalizing=bool(job.get("finalizing")))
+                       finalizing=bool(job.get("finalizing")),
+                       phase=record.state.value if record is not None else None)
             return web.json_response(out)
         items = [self.public(x) for x in (*self.library.items, *self.pending.values()) if x.get("prompt_id") == pid]
         if items:   # finished: the Library record keeps the job's own meta (prompt, format, inputs)
@@ -2144,7 +2220,7 @@ class App:
             return web.json_response({"error": str(e)}, status=400)
         return web.json_response({"ok": True, "account": acc, "models": sorted(names)[:40]})
 
-    async def queue_cloud(self, rh, graph, stages, meta, preview=False):
+    async def queue_cloud(self, rh, graph, stages, meta, preview=False, spec=None):
         if not self.config.get("rh_workflow_id"):
             return web.json_response({"error": "Укажите ID любого вашего workflow на RunningHub (раздел «Настройки» → «Облако»)"},
                                      status=400)
@@ -2160,7 +2236,9 @@ class App:
             return web.json_response({"error": str(e)}, status=400)
         pid = "rh-" + task
         self.jobs[pid] = {"prompt_id": pid, "state": "queued", "stages": {}, "stage": None,
-                          "meta": dict(meta, cloud=True), "task": task, "t0": datetime.now().timestamp(), "preview": preview}
+                          "meta": dict(meta, cloud=True), "task": task, "t0": datetime.now().timestamp(),
+                          "preview": preview, "record": self.new_record(spec, pid, backend_job_id=task)}
+        self.set_job_state(self.jobs[pid], JobState.QUEUED)
         asyncio.create_task(self.poll_cloud(rh, pid))
         return web.json_response({"prompt_id": pid, "seed": meta["seed"]})
 
@@ -2175,12 +2253,16 @@ class App:
                     stage = {"QUEUED": "cloud_queued", "RUNNING": "cloud_run"}.get(status)
                     if stage:
                         await self.send_stage(job, stage)
+                    target = {"QUEUED": JobState.QUEUED, "RUNNING": JobState.RUNNING}.get(status)
+                    if target is not None:
+                        self.try_set_job_state(job, target)
                 if status == "SUCCESS":
                     outs = await rh.outputs(job["task"]) or []
                     video = next((o for o in outs if str(o.get("fileType", "")).lower() in ("mp4", "webm", "mov", "mkv")
                                   or str(o.get("fileUrl", "")).lower().split("?")[0].endswith((".mp4", ".webm", ".mov"))), None)
                     if not video:
                         raise cloud.CloudError("RunningHub не вернул видео")
+                    self.try_set_job_state(job, JobState.FINALIZING)
                     dest = DATA_DIR / "cloud" / f'{pid}.mp4'
                     dest.parent.mkdir(parents=True, exist_ok=True)
                     async with self.session.get(video["fileUrl"]) as r:
@@ -2202,8 +2284,20 @@ class App:
                             await self.broadcast({"type": "error", "prompt_id": pid, "message": (
                                 f"Видео скачано в файл {dest}, но в Библиотеку не попало: {e}")})
                             return
+                    self.try_set_job_state(job, JobState.SUCCEEDED)
                     await self.broadcast({"type": "done", "prompt_id": pid, "item": self.public(item)})
                     return
+                if status == "FAILED":
+                    await rh.outputs(job["task"])  # raises with the failure reason
+                    raise cloud.CloudError("Задание на RunningHub завершилось ошибкой")
+                await asyncio.sleep(5)
+        except Exception as e:
+            if pid in self.jobs:
+                job = self.jobs.get(pid)
+                self.try_set_job_state(job, JobState.FAILED, error=str(e))
+                self.keep_meta(job)
+                self.jobs.pop(pid, None)
+                await self.broadcast({"type": "error", "prompt_id": pid, "message": str(e)})
                 if status == "FAILED":
                     await rh.outputs(job["task"])  # raises with the failure reason
                     raise cloud.CloudError("Задание на RunningHub завершилось ошибкой")
@@ -2232,11 +2326,11 @@ class App:
         seed = int(form["seed"]) if form.get("seed", "").isdigit() else random.randrange(2 ** 50)
         return form, files, prompt, aspect, quality, seed
 
-    async def queue(self, graph, stages, meta, last_output=False, titles=None, preview=False):
+    async def queue(self, graph, stages, meta, last_output=False, titles=None, preview=False, spec=None):
         scenes = stages.pop("__scenes__", None)   # which sampler is which scene (long video), for the progress text
         rh = self.rh()
         if rh:
-            return await self.queue_cloud(rh, graph, stages, meta, preview)
+            return await self.queue_cloud(rh, graph, stages, meta, preview, spec=spec)
         await self.stop_llm()  # the agent's model and H3 do not fit in VRAM together
         mode_key = (meta or {}).get("mode", "")
         same = mode_key == getattr(self, "last_mode", None) and mode_key in ("krea", "kreareal", "qwen", "flux")
@@ -2262,7 +2356,9 @@ class App:
             return web.json_response({"error": comfy_error_text(res)}, status=400)
         pid = res["prompt_id"]
         self.jobs[pid] = {"prompt_id": pid, "state": "queued", "stages": stages, "stage": None, "meta": meta, "last_output": last_output, "titles": titles or {},
-                          "graph": graph, "scenes": scenes, "t0": datetime.now().timestamp(), "preview": preview}
+                          "graph": graph, "scenes": scenes, "t0": datetime.now().timestamp(), "preview": preview,
+                          "record": self.new_record(spec, pid)}
+        self.set_job_state(self.jobs[pid], JobState.QUEUED)   # created → submitting → queued, in the record
         return web.json_response({"prompt_id": pid, "seed": meta["seed"], "queue_number": res.get("number")})
 
     async def need_models(self, mode):
@@ -2686,7 +2782,6 @@ class App:
         await self.need_models("video")
         form, images, prompt, aspect, quality, seed = await self.read_form(req, ("first", "last"))
         preview = form.get("preview") == "1"   # from the video sections: the Library waits for «Добавить в библиотеку»
-        seconds = min(MAX_SECONDS, max(3.0, float(form.get("duration", 5))))
         width, height = wf.resolution(aspect, quality, form)
         first, last = images.get("first"), images.get("last") if images.get("first") else None
         loop = bool(first) and form.get("loop") == "1"
@@ -2709,20 +2804,38 @@ class App:
                 raise web.HTTPBadRequest(text="Для быстрого режима нужен файл Turbo-SLA (около 2 ГБ). Нажмите «Скачать» под переключателем «Ускорение» "
                                               "или выберите «Обычное».")
             fast = self.model_names["sla_lora"]
-        graph, stages = wf.video_graph(self.model_names, prompt, width, height, seconds, seed, first, last, self.custom_loras("video"), fast, fused)
         sub = "Зацикленное видео" if loop else "Кадр → кадр" if last else "Изображение → видео" if first else "Текст → видео"
         if fused:
             sub += " · Fused Turbo"
         elif fast:
             sub += " · быстрый черновик"
+        refs = []
+        if first:
+            refs.append(InputRef(role="Первый кадр" + (" · зациклено" if loop else ""), kind="image", comfy=first))
+        if last and last != first:
+            refs.append(InputRef(role="Последний кадр", kind="image", comfy=last))
+        try:
+            # the request is described once, here, and the same description is what the agent API builds:
+            # the duration is clamped and checked in JobSpec, not in each entrance
+            spec = JobSpec.video(prompt=prompt, aspect=aspect, quality=quality, seconds=form.get("duration", 5),
+                                 seed=seed, width=width, height=height, models=dict(self.model_names),
+                                 loras=self.custom_loras("video"), inputs=tuple(refs),
+                                 model="fused" if fused else "fast", acceleration="sla" if fast else "normal",
+                                 result_policy=ResultPolicy.DRAFT if preview else ResultPolicy.LIBRARY,
+                                 source="ui", sub=sub)
+        except InvalidSpec as e:
+            raise web.HTTPBadRequest(text=e.message)
+        graph, stages = wf.video_graph(self.model_names, spec.prompt, spec.width, spec.height, spec.seconds, spec.seed,
+                                       first, last, self.custom_loras("video"), fast, fused)
         inputs = []
         if first:
             inputs.append(media_input("Первый кадр" + (" · зациклено" if loop else ""), "image", comfy=first))
         if last and last != first:
             inputs.append(media_input("Последний кадр", "image", comfy=last))
         return await self.queue(graph, stages, {
-            "mode": "video", "sub": sub, "prompt": prompt, "aspect": aspect, "q": quality,
-            "len": seconds, "res": f"{width}×{height}", "seed": seed, "inputs": inputs}, preview=preview)
+            "mode": "video", "sub": spec.sub, "prompt": spec.prompt, "aspect": spec.aspect, "q": spec.quality,
+            "len": spec.seconds, "res": f"{spec.width}×{spec.height}", "seed": spec.seed, "inputs": inputs},
+            preview=preview, spec=spec)
 
     async def h_generate_lipsync(self, req):
         await self.need_models("lipsync")
@@ -3969,7 +4082,13 @@ class App:
             # now would throw away a clip that exists on disk
             await self.broadcast({"type": "notice", "text": "Генерация уже закончилась: результат сохраняется."})
             return
+        if job is not None and job.get("record") is not None:
+            try:
+                job["record"].request_cancel(now=datetime.now().timestamp())   # a request; the state waits for the engine
+            except JobConflict:
+                pass   # terminal or finalizing: nothing to ask for any more
         if job and job.get("task"):  # cloud task
+            self.try_set_job_state(job, JobState.CANCELED)
             self.keep_meta(job)
             self.jobs.pop(pid, None)
             rh = self.rh()
@@ -3981,6 +4100,7 @@ class App:
             await self.broadcast({"type": "interrupted", "prompt_id": pid})
         elif job and job["state"] == "queued":
             await self.comfy_json("POST", "/queue", json={"delete": [pid]})
+            self.try_set_job_state(job, JobState.CANCELED)
             self.keep_meta(job)
             self.jobs.pop(pid, None)
             await self.broadcast({"type": "interrupted", "prompt_id": pid})
@@ -4112,7 +4232,7 @@ class App:
 
     async def _stale_job(self, job, message):
         pid = job["prompt_id"]
-        job["state"] = "error"
+        self.try_set_job_state(job, JobState.FAILED, error=message)
         self.note_error("Задание зависло и снято: " + message)
         await self.broadcast({"type": "error", "prompt_id": pid, "message": message})
         self.jobs.pop(pid, None)
