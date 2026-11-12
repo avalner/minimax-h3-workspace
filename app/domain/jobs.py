@@ -272,6 +272,10 @@ class JobRecord:
     finalize_attempts: int = 0
     progress: dict = field(default_factory=dict)   # stage/step/max/scene: not a business event
     results: list = field(default_factory=list)    # MediaRecord
+    graph: dict | None = None                      # the built engine graph: computed, not asked for
+    # a job of a previous run, exactly as the older version saved it: kept so it can be resumed
+    # without guessing, and dropped once submission owns the queue (stage 4)
+    legacy: dict = field(default_factory=dict)
 
     # ---------- state ----------
 
@@ -347,6 +351,8 @@ class JobRecord:
             "finalize_attempts": self.finalize_attempts,
             "progress": dict(self.progress),
             "results": [m.to_dict() for m in self.results],
+            "graph": self.graph,
+            "legacy": dict(self.legacy),
         }
 
     @classmethod
@@ -368,4 +374,5 @@ class JobRecord:
             finalize_attempts=int(data.get("finalize_attempts") or 0),
             progress=dict(data.get("progress") or {}),
             results=[MediaRecord.from_dict(m) for m in (data.get("results") or ())],
+            graph=data.get("graph"), legacy=dict(data.get("legacy") or {}),
         )
