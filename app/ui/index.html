@@ -925,6 +925,7 @@ equirements.txt</code><br>
 <!-- mode modules: each owns its section's state, wiring and cleanup; they register here and build
      on the first visit. Loaded before the page, because `h3Video.state` is read while it parses. -->
 <script src="/ui/js/modes/video.js"></script>
+<script src="/ui/js/modes/lipsync.js"></script>
 <script src="/ui/js/modes/pictures.js"></script>
 <script src="/ui/js/modes/montage.js"></script>
 
@@ -1227,7 +1228,7 @@ setTimeout(openSection, 0);
 // their markup and their handlers. Loaded before this script, so the first panel can be built here.
 const H3C = window.h3Components;
 const { ASPECTS, QUALITY_ALL, QUALITY, qLabel, r32, resFor, frames, paramsCard, SZ_ROW, szWire,
-        sizeForm, newSeed, seedForm, useSeed, drawCover, makeScene, renderLive, fmtTime,
+        sizeForm, newSeed, seedForm, useSeed, drawCover, makeScene, renderLive, fmtTime, wavSlice,
         playWithSound, soundChip, hideSoundChip, previewPanel, REF_HINT, LORA_DEFS, mountLoras,
         loraForm, fitSlot, resetSlot, fitAspect, wireDrop, slotSet, wireSlotSwap, clearSlots } = H3C;
 H3C.configure({
@@ -1251,345 +1252,10 @@ H3C.configure({
   postJSON: (url, body) => postJSON(url, body),
 });
 
-/* ---------- LIPSYNC view ---------- */
-const L = { aspect: '9:16', q: '1080p', refSize: 'max', start: 0, end: 0, dur0: 0, refs: 0, len: () => Math.max(0, L.end - L.start) };
-const MAX_LEN = 15, REC_LEN = 12;
-const lPrev = previewPanel($('#lPreview'), L, {
-  extraLabel: 'Проходы',
-  extra: () => {
-    const [w, h] = resFor(L.aspect, L.q), s = QUALITY_ALL.find(x => x.id === L.q).px >= 1824 * 1024 ? 2 : 1.5;
-    return `${r32(w / s)}×${r32(h / s)} → ×${s}`;
-  },
-  passes: () => [8, 4],
-  twoPass: true,
-  real: {
-    url: '/api/generate/lipsync',
-    form: () => {
-      const fd = new FormData();
-      fd.append('prompt', $('#lPrompt').value.trim());
-      sizeForm(L, fd); fd.append('aspect', L.aspect); fd.append('quality', L.q); fd.append('ref_size', L.refSize);
-      loraForm(L, fd); seedForm(L, fd);
-      fd.append('audio', new File([wavSlice(abuf, L.start, L.end)], 'clip.wav', { type: 'audio/wav' }));
-      fd.append('audio_len', L.len().toFixed(3));
-      $$('.ref', refsEl).filter(r => r._file).forEach((r, i) => fd.append('ref' + i, r._file));
-      return fd;
-    },
-  },
-  target: () => $('#refs .ref img'),
-  meta: () => ({ mode: 'lipsync', prompt: $('#lPrompt').value.trim(), sub: `${L.refs} реф. · аудио ${L.len().toFixed(1)} с` }),
-  onDone: item => addToLib(item),
-  validate: () => !L.dur0 ? 'Загрузите аудио' : !L.refs ? 'Добавьте хотя бы один референс — лицо персонажа' : L.len() > MAX_LEN ? `Фрагмент длиннее ${MAX_LEN} с — укоротите` : !$('#lPrompt').value.trim() ? 'Напишите промпт' : '',
-});
-const lUpd = paramsCard($('#lParams'), L, {
-  n: 4, duration: false, onChange: () => {
-    lPrev();
-    $('#refHint').textContent = REF_HINT[L.refSize];
-  },
-  extraRow: `
-    <div class="row">
-      <div class="row-l">Точность переноса с изображений</div>
-      <div class="seg" style="grid-template-columns:1fr 1fr">
-        <button data-r="match">Быстро<small>изображения уменьшаются</small></button>
-        <button data-r="max">Максимум<small>лучшее сходство</small></button>
-      </div>
-      <div class="hint" id="refHint"></div>
-    </div>
-    <div id="lLoras"></div>`,
-});
-lUpd();
-mountLoras($('#lLoras'), L, ['realism']);
-
-// refs
-const MAX_REFS = 9;
+/* ---------- LIPSYNC view: ui/js/modes/lipsync.js ---------- */
+// The section's state and audio editor live in the module; the page needs the reference slots for
+// remembered files and for the agent's "use in lipsync", and reads the module's API.
 const refsEl = $('#refs');
-for (let i = 1; i <= MAX_REFS; i++) {
-  const r = document.createElement('label');
-  r.className = 'ref';
-  r.innerHTML = `<input type="file" accept="image/*"><div class="plus"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>${i === 1 ? 'Персонаж' : 'Референс'}</div>
-    <span class="tag" hidden>Picture ${i}</span><button class="x" type="button">✕</button>`;
-  refsEl.append(r);
-  const input = $('input', r);
-  const set = f => {
-    if (!f || !f.type.startsWith('image/')) return;
-    $('img', r)?.remove(); $('select', r)?.remove();
-    r._file = f;
-    const img = document.createElement('img'); img.src = URL.createObjectURL(f); r.prepend(img);
-    fitSlot(r, img);
-    if (!$$('.ref.filled', refsEl).length) fitAspect(L, img, lUpd);
-    const sel = document.createElement('select');
-    sel.innerHTML = ['Персонаж', 'Локация', 'Одежда', 'Предмет', 'Стиль'].map(o => `<option>${o}</option>`).join('');
-    if (i > 1) sel.selectedIndex = 1;
-    sel.onclick = e => e.preventDefault();
-    sel.onmousedown = e => e.stopPropagation();
-    r.append(sel);
-    r.classList.add('filled'); $('.plus', r).hidden = true; $('.tag', r).hidden = false;
-    refsChanged();
-  };
-  input.onchange = () => set(input.files[0]);
-  r.addEventListener('dragover', e => e.preventDefault());
-  r.addEventListener('drop', e => { e.preventDefault(); set(e.dataTransfer.files[0]); });
-  $('.x', r).onclick = e => {
-    e.preventDefault(); e.stopPropagation();
-    $('img', r)?.remove(); $('select', r)?.remove(); input.value = ''; r._file = null; resetSlot(r);
-    r.classList.remove('filled'); $('.plus', r).hidden = false; $('.tag', r).hidden = true; refsChanged();
-  };
-}
-wireSlotSwap($$('.ref', refsEl), refsChanged);
-$('#rClrAll').onclick = () => clearSlots($$('.ref', refsEl));
-function refsChanged() {
-  // H3 numbers references without gaps, so tags follow the order of filled slots
-  const slots = $$('.ref.filled', refsEl);
-  slots.forEach((r, i) => $('.tag', r).textContent = `Picture ${i + 1}`);
-  const filled = slots.map((_, i) => i + 1);
-  L.refs = filled.length;
-  $('#rCount').textContent = `${L.refs} / ${MAX_REFS}`;
-  $('#tokens').innerHTML = filled.map(n => `<button class="token" type="button">&lt;Picture ${n}&gt;</button>`).join('') || '<span class="hint">добавьте референсы — появятся метки</span>';
-}
-$('#tokens').onclick = e => {
-  const t = e.target.closest('.token'); if (!t) return;
-  const ta = $('#lPrompt'), s = ta.selectionStart, txt = t.textContent + ' ';
-  ta.value = ta.value.slice(0, s) + txt + ta.value.slice(ta.selectionEnd);
-  ta.focus(); ta.selectionStart = ta.selectionEnd = s + txt.length;
-};
-refsChanged();
-
-// audio editor
-let actx, abuf, peaks = [], src, raf, playStart = 0;
-const wave = $('#wave'), cv = $('#waveCv'), selEl = $('#sel'), ph = $('#ph');
-const aFile = $('#aFile');
-$('#aChange').onclick = () => aFile.click();
-$('#aRemove').onclick = () => {
-  stop();
-  abuf = null; peaks = []; undoStack = []; cut = null; audioName = '';
-  L.dur0 = 0; L.start = 0; L.end = 0; MEM.audio = null; aFile.value = '';
-  $('#aEd').classList.remove('on'); aDrop.style.display = '';
-  syncCut(); lUpd(); memSave();
-  toast('Аудио удалено');
-};
-aFile.onchange = () => loadAudio(aFile.files[0]);
-const aDrop = $('#aDrop');
-aDrop.addEventListener('dragover', e => { e.preventDefault(); aDrop.classList.add('over'); });
-aDrop.addEventListener('dragleave', () => aDrop.classList.remove('over'));
-aDrop.addEventListener('drop', e => { e.preventDefault(); aDrop.classList.remove('over'); loadAudio(e.dataTransfer.files[0]); });
-
-async function loadAudio(f) {
-  if (!f) return;
-  MEM.audio = f;
-  stop();
-  actx = actx || new AudioContext();
-  try { abuf = await actx.decodeAudioData(await f.arrayBuffer()); }
-  catch { alert('Не удалось прочитать этот аудиофайл'); return; }
-  L.dur0 = abuf.duration; L.start = 0; L.end = Math.min(abuf.duration, REC_LEN);
-  const fmt = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
-  audioName = f.name; undoStack = []; cut = null; setEditMode('clip'); $('#aPausesBox').hidden = true;
-  aDrop.style.display = 'none'; $('#aEd').classList.add('on');
-  refreshAudioInfo(); computePeaks();
-  drawWave(); syncSel(); syncCut(); checkVocals();
-}
-function computePeaks() {
-  const ch = abuf.getChannelData(0), N = 600, step = Math.max(1, Math.floor(ch.length / N));
-  peaks = Array.from({ length: N }, (_, i) => { let m = 0; for (let j = i * step; j < (i + 1) * step; j += 16) m = Math.max(m, Math.abs(ch[j] || 0)); return m; });
-  const mx = Math.max(...peaks) || 1; peaks = peaks.map(p => p / mx);
-}
-function refreshAudioInfo() {
-  const fmt = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
-  $('#aName').innerHTML = `${esc(audioName)}<small>${fmt(abuf.duration)} · ${abuf.sampleRate / 1000} кГц${undoStack.length ? ' · изменено' : ''}</small>`;
-}
-
-/* editing: cut a piece out, remove pauses, keep only the voice. Every edit makes a new buffer; "Отменить" goes back. */
-let audioName = '', editMode = 'clip', cut = null, undoStack = [];
-function setEditMode(m) {
-  editMode = m; wave.classList.toggle('cutmode', m === 'cut');
-  $$('.a-mode button').forEach(b => b.classList.toggle('on', b.dataset.m === m));
-  $('#aToolHint').textContent = m === 'cut' ? 'Проведите мышью по волне, чтобы выделить кусок, который нужно убрать (края можно двигать), и нажмите «Удалить вырезанное».' : '';
-  if (m === 'clip') { cut = null; syncCut(); }
-}
-function syncCut() {
-  const el = $('#cutSel'), btn = $('#aCutDel');
-  if (!cut || !L.dur0) { el.hidden = true; btn.disabled = true; btn.textContent = '✂ Удалить вырезанное'; return; }
-  const w = wave.clientWidth; el.hidden = false;
-  el.style.left = (cut.a / L.dur0 * w) + 'px'; el.style.width = ((cut.b - cut.a) / L.dur0 * w) + 'px';
-  btn.disabled = cut.b - cut.a < 0.05; btn.textContent = `✂ Удалить вырезанное (${(cut.b - cut.a).toFixed(1)} с)`;
-}
-// the pieces [a,b] (seconds) of buf that stay, joined with tiny fades so the joins do not click
-function keepRanges(buf, ranges) {
-  const sr = buf.sampleRate, chs = buf.numberOfChannels, fade = Math.round(0.004 * sr);
-  const lens = ranges.map(([a, b]) => Math.max(0, Math.round((b - a) * sr)));
-  const out = actx.createBuffer(chs, Math.max(1, lens.reduce((x, y) => x + y, 0)), sr);
-  for (let c = 0; c < chs; c++) {
-    const srcd = buf.getChannelData(c), dst = out.getChannelData(c); let o = 0;
-    ranges.forEach(([a], i) => {
-      const s = Math.round(a * sr), n = lens[i];
-      dst.set(srcd.subarray(s, s + n), o);
-      for (let k = 0; k < Math.min(fade, n); k++) { if (i > 0) dst[o + k] *= k / fade; if (i < ranges.length - 1) dst[o + n - 1 - k] *= k / fade; }
-      o += n;
-    });
-  }
-  return out;
-}
-// where a moment of the old audio ends up after the removed pieces [a,b] are taken out
-const shiftAfter = removed => t => t - removed.reduce((s, [a, b]) => s + (t >= b ? b - a : t > a ? t - a : 0), 0);
-function commitEdit(newBuf, mapT) {
-  stop();
-  undoStack.push({ buf: abuf, start: L.start, end: L.end }); if (undoStack.length > 15) undoStack.shift();
-  abuf = newBuf; L.dur0 = abuf.duration;
-  L.start = Math.min(mapT(L.start), Math.max(0, L.dur0 - 1)); L.end = Math.min(Math.max(mapT(L.end), L.start + 1), L.dur0);
-  cut = null; computePeaks(); refreshAudioInfo(); drawWave(); syncSel(); syncCut(); $('#aUndo').disabled = false;
-}
-$('.a-mode').onclick = e => { const b = e.target.closest('button[data-m]'); if (b && L.dur0) setEditMode(b.dataset.m); };
-$('#aCutDel').onclick = () => {
-  if (!cut || cut.b - cut.a < 0.05) return;
-  const { a, b } = cut, keep = [[0, a], [b, abuf.duration]].filter(([x, y]) => y - x > 0.001);
-  if (!keep.length) { toast('Нельзя вырезать всё аудио'); return; }
-  commitEdit(keepRanges(abuf, keep), shiftAfter([[a, b]]));
-  toast(`Вырезано ${(b - a).toFixed(1)} с`);
-};
-$('#aUndo').onclick = () => {
-  const s = undoStack.pop(); if (!s) return; stop();
-  abuf = s.buf; L.dur0 = abuf.duration; L.start = s.start; L.end = s.end; cut = null;
-  computePeaks(); refreshAudioInfo(); drawWave(); syncSel(); syncCut(); $('#aUndo').disabled = !undoStack.length;
-};
-// pauses: stretches quieter than the speech, longer than "min", shortened to "keep"
-function findPauses(buf, minLen, keep) {
-  const sr = buf.sampleRate, win = Math.round(sr * 0.01), n = Math.floor(buf.length / win);
-  const a = buf.getChannelData(0), b = buf.numberOfChannels > 1 ? buf.getChannelData(1) : a, rms = new Float32Array(n);
-  for (let i = 0; i < n; i++) { let s = 0, c = 0; for (let j = i * win; j < (i + 1) * win; j += 2) { s += (a[j] * a[j] + b[j] * b[j]) * 0.5; c++; } rms[i] = Math.sqrt(s / c); }
-  const sorted = Float32Array.from(rms).sort(), floor = sorted[Math.floor(n * 0.1)] || 0, loud = sorted[Math.floor(n * 0.9)] || 0;
-  const thr = Math.min(Math.max(floor * 3, loud * 0.05, 0.002), loud * 0.2), found = []; let run = -1;
-  for (let i = 0; i <= n; i++) {
-    const quiet = i < n && rms[i] < thr;
-    if (quiet && run < 0) run = i;
-    if (!quiet && run >= 0) { const s = run * 0.01, e = i * 0.01; if (e - s >= minLen && e - s > keep + 0.02) found.push([s + keep / 2, e - keep / 2]); run = -1; }
-  }
-  return found;
-}
-function pausesPreview() {
-  if (!L.dur0) return [];
-  const f = findPauses(abuf, +$('#apMin').value || 0.6, +$('#apKeep').value || 0.25), saved = f.reduce((s, [x, y]) => s + y - x, 0);
-  $('#apInfo').textContent = f.length ? `Найдено пауз: ${f.length}, станет короче на ${saved.toFixed(1)} с` : 'Длинных пауз не найдено';
-  $('#apApply').disabled = !f.length; return f;
-}
-$('#aPauses').onclick = () => { const box = $('#aPausesBox'); box.hidden = !box.hidden; if (!box.hidden) pausesPreview(); };
-$('#apMin').oninput = $('#apKeep').oninput = pausesPreview;
-$('#apApply').onclick = () => {
-  const f = pausesPreview(); if (!f.length) return;
-  const keep = []; let pos = 0; f.forEach(([s, e]) => { keep.push([pos, s]); pos = e; }); keep.push([pos, abuf.duration]);
-  commitEdit(keepRanges(abuf, keep.filter(([x, y]) => y - x > 0.001)), shiftAfter(f));
-  $('#aPausesBox').hidden = true; toast(`Убрано пауз: ${f.length}`);
-};
-// voice only (needs the MelBand RoFormer node and model in ComfyUI)
-let vocalsOk = null;
-async function checkVocals() {
-  if (!API) return;
-  try { vocalsOk = await apiGet('/api/audio/info'); } catch { vocalsOk = { available: false, reason: 'ComfyUI не запущен.' }; }
-  const b = $('#aVocals'); b.disabled = !vocalsOk.available;
-  b.title = vocalsOk.available ? 'Оставить только голос, без музыки' : 'Недоступно: ' + vocalsOk.reason;
-}
-$('#aVocals').onclick = async () => {
-  if (!L.dur0) return;
-  if (abuf.duration > 360) { toast('Для отделения голоса аудио должно быть не длиннее 6 минут: сначала вырежьте нужное'); return; }
-  const b = $('#aVocals'), old = b.textContent; b.disabled = true; b.textContent = 'Отделяем голос…'; stop();
-  try {
-    const fd = new FormData(); fd.append('file', wavSlice(abuf, 0, abuf.duration), 'a.wav');
-    const nb = await actx.decodeAudioData(await apiSend('/api/audio/separate', { method: 'POST', body: fd, raw: 'arrayBuffer' }));
-    commitEdit(nb, t => Math.min(t, nb.duration));
-    toast('Голос отделён, музыки больше нет. Прослушайте (▶). Не понравилось — «Отменить».');
-  } catch (e) { toast(e.message); }
-  b.textContent = old; b.disabled = !(vocalsOk?.available);
-};
-function drawWave() {
-  const r = wave.getBoundingClientRect(), dpr = devicePixelRatio || 1;
-  cv.width = r.width * dpr; cv.height = r.height * dpr;
-  const c = cv.getContext('2d'); c.scale(dpr, dpr); c.clearRect(0, 0, r.width, r.height);
-  const cs = getComputedStyle(document.documentElement);
-  const wc = { accent: cs.getPropertyValue('--accent').trim(), accent2: cs.getPropertyValue('--accent-2').trim(), idle: cs.getPropertyValue('--line-2').trim() };
-  const bars = Math.floor(r.width / 3), mid = r.height / 2;
-  const a = L.start / L.dur0, b = L.end / L.dur0;
-  for (let i = 0; i < bars; i++) {
-    const p = peaks[Math.floor(i / bars * peaks.length)] || 0, hgt = Math.max(2, p * (r.height - 16));
-    const t = i / bars;
-    c.fillStyle = t >= a && t <= b ? (t < (a + b) / 2 ? wc.accent : wc.accent2) : wc.idle;
-    c.fillRect(i * 3, mid - hgt / 2, 2, hgt);
-  }
-}
-function syncSel() {
-  const w = wave.clientWidth;
-  selEl.style.left = (L.start / L.dur0 * w) + 'px';
-  selEl.style.width = ((L.end - L.start) / L.dur0 * w) + 'px';
-  $('#aStart').value = L.start.toFixed(1); $('#aEnd').value = L.end.toFixed(1);
-  const len = L.len();
-  $('#aLen').textContent = `${len.toFixed(1)} с`;
-  const n = $('#aNote');
-  if (len > MAX_LEN) { n.className = 'note warn'; n.querySelector('span').textContent = `Максимум ${MAX_LEN} секунд — укоротите фрагмент.`; }
-  else if (len > REC_LEN) { n.className = 'note warn'; n.querySelector('span').textContent = `Лучше держать фрагмент до ${REC_LEN} секунд — так синхронизация губ точнее. Длинный трек можно разбить на несколько клипов.`; }
-  else { n.className = 'note'; n.querySelector('span').textContent = 'Оставьте небольшую паузу до и после слов — так губы начинают и заканчивают движение естественно.'; }
-  drawWave(); lPrev();
-}
-let drag = null;
-wave.addEventListener('pointerdown', e => {
-  if (!L.dur0) return;
-  const w = wave.clientWidth, x = e.clientX - wave.getBoundingClientRect().left, t = x / w * L.dur0;
-  const h = e.target.dataset.h;
-  if (editMode === 'cut' && !(h === 'cl' || h === 'cr')) { drag = { mode: 'cnew', anchor: t }; cut = { a: t, b: t }; }
-  else if (h === 'cl' || h === 'cr') drag = { mode: h };
-  else drag = h ? { mode: h } : e.target === selEl ? { mode: 'move', off: t - L.start, len: L.len() } : { mode: 'new', anchor: t };
-  wave.setPointerCapture(e.pointerId);
-});
-wave.addEventListener('pointermove', e => {
-  if (!drag) return;
-  const w = wave.clientWidth;
-  const t = Math.min(L.dur0, Math.max(0, (e.clientX - wave.getBoundingClientRect().left) / w * L.dur0));
-  const MIN = 1;
-  if (drag.mode === 'cnew') { cut = { a: Math.min(drag.anchor, t), b: Math.max(drag.anchor, t) }; syncCut(); return; }
-  if (drag.mode === 'cl') { cut.a = Math.min(t, cut.b - 0.05); syncCut(); return; }
-  if (drag.mode === 'cr') { cut.b = Math.max(t, cut.a + 0.05); syncCut(); return; }
-  if (drag.mode === 'l') L.start = Math.min(t, L.end - MIN);
-  else if (drag.mode === 'r') L.end = Math.max(t, L.start + MIN);
-  else if (drag.mode === 'move') { L.start = Math.min(Math.max(0, t - drag.off), L.dur0 - drag.len); L.end = L.start + drag.len; }
-  else { L.start = Math.min(drag.anchor, t); L.end = Math.max(drag.anchor, t, L.start + MIN); }
-  syncSel();
-});
-wave.addEventListener('pointerup', () => drag = null);
-$('#aStart').onchange = e => { L.start = Math.min(Math.max(0, +e.target.value), L.end - 1); syncSel(); };
-$('#aEnd').onchange = e => { L.end = Math.max(Math.min(L.dur0, +e.target.value), L.start + 1); syncSel(); };
-addEventListener('resize', () => L.dur0 && (syncSel(), syncCut()));
-
-$('#aPlay').onclick = () => src ? stop() : play();
-function play() {
-  src = actx.createBufferSource(); src.buffer = abuf; src.connect(actx.destination);
-  src.start(0, L.start, L.len()); playStart = actx.currentTime;
-  src.onended = stop;
-  $('#aPlayIc').innerHTML = '<path d="M6 4h4v16H6zM14 4h4v16h-4z"/>';
-  ph.style.display = 'block';
-  const tick = () => {
-    const t = L.start + (actx.currentTime - playStart);
-    ph.style.left = (t / L.dur0 * wave.clientWidth) + 'px';
-    raf = requestAnimationFrame(tick);
-  };
-  tick();
-}
-// selected part of the decoded audio as 16-bit PCM WAV
-function wavSlice(buf, t0, t1) {
-  const sr = buf.sampleRate, ch = Math.min(2, buf.numberOfChannels);
-  const a = Math.floor(t0 * sr), n = Math.max(0, Math.floor(t1 * sr) - a);
-  const out = new DataView(new ArrayBuffer(44 + n * ch * 2));
-  const str = (o, s) => [...s].forEach((c, i) => out.setUint8(o + i, c.charCodeAt(0)));
-  str(0, 'RIFF'); out.setUint32(4, 36 + n * ch * 2, true); str(8, 'WAVEfmt ');
-  out.setUint32(16, 16, true); out.setUint16(20, 1, true); out.setUint16(22, ch, true);
-  out.setUint32(24, sr, true); out.setUint32(28, sr * ch * 2, true); out.setUint16(32, ch * 2, true);
-  out.setUint16(34, 16, true); str(36, 'data'); out.setUint32(40, n * ch * 2, true);
-  const data = Array.from({ length: ch }, (_, c) => buf.getChannelData(c));
-  let o = 44;
-  for (let i = 0; i < n; i++) for (let c = 0; c < ch; c++) {
-    const s = Math.max(-1, Math.min(1, data[c][a + i])); out.setInt16(o, s < 0 ? s * 0x8000 : s * 0x7fff, true); o += 2;
-  }
-  return new Blob([out.buffer], { type: 'audio/wav' });
-}
-function stop() {
-  if (src) { src.onended = null; try { src.stop(); } catch {} src = null; }
-  cancelAnimationFrame(raf); ph.style.display = 'none';
-  $('#aPlayIc').innerHTML = '<path d="M7 4v16l13-8z"/>';
-}
 
 /* ---------- SETUP & MODELS view ---------- */
 const GB = b => b < 1e9 ? Math.round(b / 1e6) + ' МБ' : (b / 1e9).toFixed(1).replace(/\.0$/, '') + ' ГБ';
@@ -2492,28 +2158,6 @@ function noticeJobParams(params) {
   else if (params.source === 'unknown') toast('В записи не сохранились модель и ускорение: стоят FastH3 и «обычное».');
 }
 
-async function jobEditLipsync(meta, files) {
-  $('#lPrompt').value = String(meta.prompt || '');
-  $$('#refs .ref.filled .x').forEach(x => x.click());
-  const slots = $$('#refs .ref input');
-  for (let i = 0; i < Math.min(slots.length, files.image.length); i++) await jobPut(slots[i], files.image[i].file);
-  if (ASPECTS.some(a => a.id === meta.aspect)) L.aspect = meta.aspect;
-  if (QUALITY_ALL.some(q => q.id === meta.q)) L.q = meta.q;
-  if (meta.ref_size) L.refSize = meta.ref_size;
-  if (meta.seed != null && meta.seed !== '') useSeed(L, meta.seed);
-  if (files.audio[0]) {   // голос задания: тот же фрагмент встаёт в аудиоредактор
-    if (L.dur0) $('#aRemove').click();
-    await setDropFile($('#aFile'), files.audio[0].file);
-    const t0 = performance.now();
-    while (!L.dur0 && performance.now() - t0 < 6000) await new Promise(r => setTimeout(r, 80));
-    if (L.dur0) {
-      const end = meta.len > 0 ? Math.min(L.dur0, +meta.len) : Math.min(L.dur0, REC_LEN);
-      $('#aStart').value = '0'; $('#aStart').onchange({ target: $('#aStart') });
-      $('#aEnd').value = String(end); $('#aEnd').onchange({ target: $('#aEnd') });
-    }
-  }
-  lUpd();
-}
 async function jobEditRef(meta, mode, files) {
   const r = RM[mode], S = r.S;
   $$('.ref.filled .x', r.root).forEach(x => x.click());
@@ -2547,7 +2191,7 @@ async function jobEditImage(meta, mode, files) {
 }
 async function jobEditFill(meta, mode, files) {
   if (mode === 'video') await window.h3Video.edit(meta, files);
-  else if (mode === 'lipsync') await jobEditLipsync(meta, files);
+  else if (mode === 'lipsync') await window.h3Lipsync.edit(meta, files);
   else if (RM[mode]) await jobEditRef(meta, mode, files);
   else if (mode === 'krea' || mode === 'qwen') await jobEditImage(meta, mode, files);
 }
@@ -2884,7 +2528,7 @@ $('#vwRepeat').onclick = () => {
     const ta = r.prompt(); if (ta) ta.value = it.prompt; else toast('Нет поля для описания: откройте раздел и добавьте сцену вручную');
     r.upd(); goTo(it.mode);
   }
-  else { Object.assign(L, { aspect: it.aspect, q: it.q, refSize: it.ref_size || L.refSize }); $('#lPrompt').value = it.prompt; lUpd(); goTo('lipsync'); }
+  else window.h3Lipsync.repeat(it);
   toast('Настройки перенесены — можно генерировать');
 };
 
@@ -4087,7 +3731,7 @@ function agCtx() {
     : AG.target === 'video'
     ? `Длительность ${window.h3Video.state.dur} с (как в «Генерации видео»). Изображения в чате: ${n} — 1-я станет первым кадром, 2-я последним.`
     : AG.target === 'lipsync'
-      ? `Длина видео = длине аудио${L.dur0 ? ` (${L.len().toFixed(1)} с)` : ''}. Изображения в чате: ${n} — станут референсами Picture 1, 2…`
+      ? `Длина видео = длине аудио${window.h3Lipsync.state.dur0 ? ` (${window.h3Lipsync.state.len().toFixed(1)} с)` : ''}. Изображения в чате: ${n} — станут референсами Picture 1, 2…`
       : `Длительность ${RM[AG.target].S.dur} с (как в разделе «${{ refs: 'Референсы', actor: 'Актёрская игра', action: 'Экшн-сцены' }[AG.target]}»). Изображения в чате: ${n} — станут Picture 1, 2…`;
 }
 function mdLite(s) {
@@ -4186,8 +3830,9 @@ $('#agLib').onclick = () => {
   };
 };
 $('#agFromLip').onclick = () => {
-  if (!L.dur0) return;
-  setChatAudio(wavSlice(abuf, L.start, L.end), 'фрагмент из Lipsync', L.len());
+  const clip = window.h3Lipsync.audioClip();
+  if (!clip) return;
+  setChatAudio(clip, 'фрагмент из Lipsync', window.h3Lipsync.state.len());
 };
 $('#agAudioText').oninput = e => { if (AG.audio) AG.audio.text = e.target.value; };
 $('#agAudioX').onclick = () => { AG.audio = null; showAudioBox(); };
@@ -4242,7 +3887,7 @@ async function agSend() {
   AG.msgs.push(reply); renderMsgs();
   const el = $('#agMsgs .msg:last-child');
   AG.busy = true; $('#agSend').classList.add('busy'); $('#agSend').title = 'Остановить'; AG.ctrl = new AbortController();
-  const ctx = { model: AG.storyFrames && AG.storyModel === 'krea' ? 'flux' : AG.storyModel, frames: AG.target === 'story' && AG.storyFrames, duration: AG_IMG.includes(AG.target) ? null : AG.target === 'video' ? V.dur : AG.target === 'lipsync' ? (L.dur0 ? L.len() : null) : RM[AG.target].S.dur };
+  const ctx = { model: AG.storyFrames && AG.storyModel === 'krea' ? 'flux' : AG.storyModel, frames: AG.target === 'story' && AG.storyFrames, duration: AG_IMG.includes(AG.target) ? null : AG.target === 'video' ? window.h3Video.state.dur : AG.target === 'lipsync' ? (window.h3Lipsync.state.dur0 ? window.h3Lipsync.state.len() : null) : RM[AG.target].S.dur };
   if (AG.target === 'actor') ctx.voice = RM.actor.voice() ? 1 : 0;
   if (AG.target === 'long') ctx.long = { sound: RM.long.root._snd, secs: $$('.sc input[type=range]', RM.long.root).map(r => +r.value) };
   try {
@@ -4559,7 +4204,7 @@ async function agStatus() {
   $('#agInstall').hidden = s.installing || (s.custom && !s.has_model) || (!needModel && s.speech_ready);
   $('#agInstall').textContent = !needModel ? `Докачать распознавание речи (~${Math.round(s.speech_size / 1e6)} МБ)`
     : s.custom ? 'Скачать движок llama.cpp (37 МБ) и распознавание речи' : `Скачать модель (~${((s.size + s.speech_size) / 1e9).toFixed(1)} ГБ, вместе с распознаванием речи)`;
-  $('#agFromLip').hidden = !L.dur0;
+  $('#agFromLip').hidden = !window.h3Lipsync.state.dur0;
   const sp = s.speech || {};
   $('#agWhReset').hidden = !sp.custom;
   if (sp.custom && !$('#agWhDir').value) $('#agWhDir').value = sp.custom;
@@ -4843,7 +4488,7 @@ async function memFile(op, key, value) {
     } catch { res(null); }
   });
 }
-const memStates = () => ({ video: [window.h3Video.state, $('#vPrompt'), () => window.h3Video.update()], lipsync: [L, $('#lPrompt'), lUpd],
+const memStates = () => ({ video: [window.h3Video.state, $('#vPrompt'), () => window.h3Video.update()], lipsync: [window.h3Lipsync.state, $('#lPrompt'), () => window.h3Lipsync.update()],
   ...Object.fromEntries(Object.entries(RM).map(([m, r]) => [m, [r.S, r.prompt(), r.upd]])) });
 function memSlots() {
   const out = [['video/first', $('#dFirst')], ['video/last', $('#dLast')]];
@@ -4863,7 +4508,7 @@ function memSave() {
       const o = {}; Object.keys(st).forEach(p => { if (!MEM.skip.has(p) && typeof st[p] !== 'function') o[p] = st[p]; });
       data[k] = { s: JSON.parse(JSON.stringify(o)), prompt: prompt ? prompt.value : undefined };
     });
-    data.lipsync.s.start = L.start; data.lipsync.s.end = L.end;
+    data.lipsync.s.start = window.h3Lipsync.state.start; data.lipsync.s.end = window.h3Lipsync.state.end;
     localStorage.setItem(MEM.KEY, JSON.stringify(data));
   } catch {}
   const slots = memSlots();
@@ -4898,9 +4543,9 @@ async function memRestore() {
   }
   const au = await memFile('get', 'lipsync/audio');
   if (au instanceof File) {
-    await loadAudio(au); MEM.audio = au; MEM.sig['lipsync/audio'] = `${au.name}|${au.size}|${au.lastModified}`;
+    await window.h3Lipsync.loadAudio(au); MEM.audio = au; MEM.sig['lipsync/audio'] = `${au.name}|${au.size}|${au.lastModified}`;
     const ls = data?.lipsync?.s;
-    if (ls && ls.end > ls.start && ls.end <= L.dur0 + 0.01) { L.start = ls.start; L.end = ls.end; syncSel(); lUpd(); }
+    if (ls && ls.end > ls.start && ls.end <= window.h3Lipsync.state.dur0 + 0.01) window.h3Lipsync.select(ls.start, ls.end);
   }
   setTimeout(() => { apply(); MEM.ready = true; }, 800);  // adding a picture re-fits the format: put the saved choice back after that
 }
@@ -4981,7 +4626,7 @@ async function bmOpen(id) {
   }
   if (b.mode === 'lipsync' && (b.files || []).includes('lipsync/audio')) {
     const au = await memFile('get', `bm/${b.id}/lipsync/audio`);
-    if (au instanceof File) { await loadAudio(au); MEM.audio = au; }
+    if (au instanceof File) { await window.h3Lipsync.loadAudio(au); MEM.audio = au; }
   }
   setTimeout(apply, 800);  // adding a picture re-fits the format: put the saved choice back after that
   toast('Этап открыт: «' + b.name + '»');
@@ -5681,10 +5326,6 @@ function disposeView(id) {
     if (img.src.startsWith('blob:')) { try { URL.revokeObjectURL(img.src); } catch {} }
   });
 }
-window.h3Modes.register('lipsync', {
-  leave: () => { stop(); lPrev.pause(); leaveView('lipsync'); },
-  dispose: () => { stop(); lPrev.dispose(); disposeView('lipsync'); },
-});
 window.h3Modes.register('long', {
   leave: () => { RM.long?.root?._save?.(); leaveView('long'); },   // the project is remembered on disk
   dispose: () => disposeView('long'),

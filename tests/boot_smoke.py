@@ -131,8 +131,8 @@ def main():
                                             b"/ui/css/sections.css", b"/ui/js/api.js",
                                             b"/ui/js/events.js", b"/ui/js/state.js",
                                             b"/ui/js/components.js", b"/ui/js/modes.js",
-                                            b"/ui/js/modes/video.js", b"/ui/js/modes/pictures.js",
-                                            b"/ui/js/modes/montage.js"))
+                                            b"/ui/js/modes/video.js", b"/ui/js/modes/lipsync.js",
+                                            b"/ui/js/modes/pictures.js", b"/ui/js/modes/montage.js"))
               and b"<style" not in body[:6000], body[:200].decode("utf-8", "replace"))
 
         # the window's own files: the content type is part of the contract — a module script served as
@@ -149,7 +149,7 @@ def main():
         status, ctype, _ = head(base + "/ui/js/events.js")
         check("the event module is served as JavaScript too", status == 200 and "javascript" in ctype, f"{status} {ctype}")
         for name in ("state.js", "components.js", "lifecycle.js", "modes.js",
-                     "modes/video.js", "modes/pictures.js", "modes/montage.js"):
+                     "modes/video.js", "modes/lipsync.js", "modes/pictures.js", "modes/montage.js"):
             status, ctype, module = head(base + "/ui/js/" + name)
             check(f"{name} is served as JavaScript", status == 200 and "javascript" in ctype and len(module) > 500,
                   f"{status} {ctype} {len(module)}")

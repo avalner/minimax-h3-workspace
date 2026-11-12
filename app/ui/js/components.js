@@ -288,6 +288,25 @@ function soundChip(v) {
 }
 function hideSoundChip(host) { host?.querySelector?.('.snd')?.remove(); }
 
+/* A piece of decoded audio as 16-bit PCM WAV: used by the lipsync editor and by the agent when it
+   sends a fragment of a clip to the chat. Pure — no DOM, no state. */
+function wavSlice(buf, t0, t1) {
+  const sr = buf.sampleRate, ch = Math.min(2, buf.numberOfChannels);
+  const a = Math.floor(t0 * sr), n = Math.max(0, Math.floor(t1 * sr) - a);
+  const out = new DataView(new ArrayBuffer(44 + n * ch * 2));
+  const str = (o, s) => [...s].forEach((c, i) => out.setUint8(o + i, c.charCodeAt(0)));
+  str(0, 'RIFF'); out.setUint32(4, 36 + n * ch * 2, true); str(8, 'WAVEfmt ');
+  out.setUint32(16, 16, true); out.setUint16(20, 1, true); out.setUint16(22, ch, true);
+  out.setUint32(24, sr, true); out.setUint32(28, sr * ch * 2, true); out.setUint16(32, ch * 2, true);
+  out.setUint16(34, 16, true); str(36, 'data'); out.setUint32(40, n * ch * 2, true);
+  const data = Array.from({ length: ch }, (_, c) => buf.getChannelData(c));
+  let o = 44;
+  for (let i = 0; i < n; i++) for (let c = 0; c < ch; c++) {
+    const s = Math.max(-1, Math.min(1, data[c][a + i])); out.setInt16(o, s < 0 ? s * 0x8000 : s * 0x7fff, true); o += 2;
+  }
+  return new Blob([out.buffer], { type: 'audio/wav' });
+}
+
 function previewPanel(el, st, opts) {
   el.innerHTML = `
     <div class="screen"><div class="frame">
@@ -750,7 +769,7 @@ const clearSlots = zones => zones.forEach(z => { const x = $('.x', z); if (x) x.
     configure,
     ASPECTS, QUALITY_ALL, QUALITY, qLabel, r32, resFor, frames,
     paramsCard, SZ_ROW, szWire, sizeForm, newSeed, seedForm, useSeed,
-    drawCover, makeScene, renderLive, fmtTime, playWithSound, soundChip, hideSoundChip, previewPanel,
+    drawCover, makeScene, renderLive, fmtTime, wavSlice, playWithSound, soundChip, hideSoundChip, previewPanel,
     REF_HINT, LORA_DEFS, mountLoras, loraForm,
     fitSlot, resetSlot, fitAspect, wireDrop, slotSet, wireSlotSwap, clearSlots,
   };

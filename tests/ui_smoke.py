@@ -290,9 +290,37 @@ async def run_page(base: str, browser: str, shots: Path):
                 check("a picture panel filled before opening keeps the prompt",
                       pictures and pictures["qprompt"] == "правка картинки", str(pictures))
 
+                # The lipsync editor is a module too, but its audio lives outside the panel: a
+                # generated WAV goes through the same `loadAudio` the page's restore uses.
+                lips = await cdp.evaluate(
+                    "(() => { document.querySelector('.nav[data-view=\"lipsync\"]').click();"
+                    " const sr = 8000, n = 8000, b = new ArrayBuffer(44 + n * 2), v = new DataView(b);"
+                    " const w = (o, s) => [...s].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));"
+                    " w(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); w(8, 'WAVEfmt ');"
+                    " v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);"
+                    " v.setUint32(24, sr, true); v.setUint32(28, sr * 2, true); v.setUint16(32, 2, true);"
+                    " v.setUint16(34, 16, true); w(36, 'data'); v.setUint32(40, n * 2, true);"
+                    " for (let i = 0; i < n; i++) v.setInt16(44 + i * 2, Math.round(Math.sin(i / 10) * 2000), true);"
+                    " const file = new File([b], 'test.wav', {type: 'audio/wav'});"
+                    " return window.h3Lipsync.loadAudio(file).then(() => {"
+                    "  const st = window.h3Lipsync.state, clip = window.h3Lipsync.audioClip();"
+                    "  return {frame: !!document.querySelector('#lPreview .frame'),"
+                    "   chips: document.querySelectorAll('#lParams .chip[data-a]').length,"
+                    "   refs: document.querySelectorAll('#refs .ref').length,"
+                    "   dur: st.dur0, start: st.start, end: st.end,"
+                    "   clip: clip ? clip.size : 0, count: document.querySelector('#rCount').textContent};"
+                    " }); })()", await_promise=True)
+                check("the lipsync section builds its panel and nine reference slots",
+                      lips and lips["frame"] and lips["chips"] >= 5 and lips["refs"] == 9, str(lips))
+                check("a WAV loaded through the module reaches the editor state",
+                      lips and abs(lips["dur"] - 1.0) < 0.02 and lips["start"] == 0
+                      and abs(lips["end"] - 1.0) < 0.02, str(lips))
+                check("the module hands the selected fragment to the chat as a WAV file",
+                      lips and lips["clip"] > 44, str(lips))
+
                 # The same two sections twice more, with the screenshots a human can look at.
-                for view, name in (("video", "video"), ("krea", "krea"), ("montage", "montage"),
-                                   ("library", "library"), ("settings", "settings")):
+                for view, name in (("video", "video"), ("krea", "krea"), ("lipsync", "lipsync"),
+                                   ("montage", "montage"), ("library", "library"), ("settings", "settings")):
                     opened = await cdp.evaluate(
                         f"(() => {{ const b = document.querySelector('.nav[data-view=\"{view}\"]');"
                         f" if (!b) return false; b.click(); return true; }})()")
