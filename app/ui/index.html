@@ -1080,7 +1080,6 @@ img.pr-media{object-position:center 38%}
 .viewer{display:grid;grid-template-columns:1.5fr 1fr}
 .v-media{position:relative;background:var(--screen);display:grid;place-items:center;min-height:300px}
 .v-media img{width:100%;height:100%;object-fit:contain;max-height:calc(var(--vh,1vh)*70);display:block}
-.v-media .li-play{opacity:1;background:none}
 .v-info{padding:22px;display:grid;gap:14px;align-content:start}
 .v-info h3{font-size:16px;padding-right:30px}
 .kv{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:12.5px}
@@ -1906,7 +1905,7 @@ equirements.txt</code><br>
 <div class="modal" id="viewer" hidden>
   <div class="box viewer">
     <button class="close" data-close aria-label="Закрыть">✕</button>
-    <div class="v-media"><div id="vwCmp" hidden></div><video controls loop playsinline hidden></video><img alt="" id="vwImg"><button class="cw-zb" id="vwZoom" type="button" title="Открыть на весь экран" hidden><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4M11 8v6M8 11h6"/></svg></button><div class="li-play"><i><svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 4v16l13-8z"/></svg></i></div></div>
+    <div class="v-media"><div id="vwCmp" hidden></div><video controls loop playsinline hidden></video><img alt="" id="vwImg"><button class="cw-zb" id="vwZoom" type="button" title="Открыть на весь экран" hidden><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4M11 8v6M8 11h6"/></svg></button></div>
     <div class="v-info">
       <h3 id="vwTitle"></h3>
       <div class="kv" id="vwKv"></div>
@@ -4426,8 +4425,8 @@ function openViewer(id) {
   $('#viewer').hidden = false;
 }
 function vwMedia(it) {   // which of the viewer's players is shown
-  const pic = it.kind === 'image';
-  $('#viewer video').hidden = !it.url || pic; $('#viewer img').hidden = $('#viewer .li-play').hidden = !!it.url && !pic;
+  const pic = it.kind === 'image', isVid = !pic && !!it.url;
+  $('#viewer video').hidden = !isVid; $('#viewer img').hidden = isVid;   // no play badge: the video is a plain player, like everywhere else
   $('#vwZoom').hidden = !pic || !it.url;
 }
 /* before / after: a handle moves left-right over the same picture or video */
@@ -4436,7 +4435,7 @@ function cmpSet(on, it) {
   const box = $('#vwCmp'); clearInterval(CMP_TIMER); box.innerHTML = '';
   $('#vwCmpBtn').textContent = on ? 'Только результат' : 'До и после';
   if (!on) { box.hidden = true; vwMedia(it); return; }
-  box.hidden = false; $('#viewer video').pause(); $('#viewer video').hidden = true; $('#viewer img').hidden = true; $('#viewer .li-play').hidden = true; $('#vwZoom').hidden = true;
+  box.hidden = false; $('#viewer video').pause(); $('#viewer video').hidden = true; $('#viewer img').hidden = true; $('#vwZoom').hidden = true;
   CMP_TIMER = cmpMount(box, it, false);
 }
 /* the slider itself; `full`: in the big window over the whole screen */
