@@ -5,7 +5,9 @@ outside are injected:
 
 - `client(method, path, **kwargs) -> (status, payload)` — the HTTP call, so the backend can be checked
   against a fake engine and so the key of a rented server stays where the app configures it;
-- `models()` and `loras(mode)` — snapshots of what this engine sees and of the user's own LoRAs.
+- `models()` and `loras(mode)` — snapshots of what this engine sees and of the user's own LoRAs;
+- `view(path, params)` — an async context manager yielding `(status, content_length, chunks)`, so an
+  output file is streamed and never read into memory as a whole.
 
 `BackendUnavailable` means "I could not ask the engine"; that is deliberately not the same as a job
 that failed, and the job service must never resend a job on that evidence.
@@ -13,11 +15,12 @@ that failed, and the job service must never resend a job on that evidence.
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from typing import Callable, Mapping
 
 import workflows as wf
-from backends.base import (BackendError, BackendUnavailable, Capabilities, InspectResult, SubmitRejected,
-                           SubmitResult)
+from backends.base import (BackendError, BackendUnavailable, Capabilities, InspectResult, OutputStream,
+                           SubmitRejected, SubmitResult)
 from domain.jobs import JobState
 
 
@@ -48,13 +51,13 @@ class ComfyBackend:
     capabilities = Capabilities(can_cancel_queued=True, can_cancel_running=True)
 
     def __init__(self, *, client, url, client_id, models: Callable[[], Mapping[str, str]],
-                 loras: Callable[[str], list] = lambda mode: (), stream=None):
+                 loras: Callable[[str], list] = lambda mode: (), view=None):
         self.client = client
         self.url = url
         self.client_id = client_id
         self.models = models
         self.loras = loras
-        self._stream = stream
+        self.view = view
 
     async def submit(self, spec, *, model_names=None):
         if spec.mode != "video":
@@ -123,11 +126,15 @@ class ComfyBackend:
         entry = (history or {}).get(record.backend_job_id) or {}
         return entry.get("outputs") or {}
 
-    async def download(self, record, file_ref, destination):
-        """Stream one output file. The `.part` names and the rename belong to the media service."""
-        if self._stream is None:
-            raise BackendError("скачивание файлов с этого движка идёт другим путём (этап 5)")
+    @asynccontextmanager
+    async def open_output(self, file_ref):
+        """Stream one output file. The `.part` name, the size check and the rename belong to the
+        media service; here only the engine's answer is checked."""
+        if self.view is None:
+            raise BackendError("этот движок не умеет отдавать файлы потоком")
         params = {"filename": file_ref["filename"], "subfolder": file_ref.get("subfolder", ""),
                   "type": file_ref.get("type", "output")}
-        async for chunk in self._stream("/view", params):
-            destination.write(chunk)
+        async with self.view("/view", params) as (status, size, chunks):
+            if status != 200:
+                raise BackendUnavailable(f"движок не отдал файл {file_ref.get('filename')}: HTTP {status}")
+            yield OutputStream(chunks=chunks, expected_bytes=size)

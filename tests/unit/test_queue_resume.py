@@ -144,10 +144,10 @@ class QueueResumeTest(unittest.IsolatedAsyncioTestCase):
 
         self.app.comfy_json = comfy
 
-        def full(item):
+        def full(*args, **kwargs):
             raise sqlite3.OperationalError("disk I/O error")
 
-        with mock.patch.object(self.app.library, "add", full):
+        with mock.patch.object(self.app.library.repo, "add", full):
             body = json.loads((await self.app.h_queue_resume(None)).text)
         self.assertEqual(body["kept"], 1)
         self.assertEqual(body["jobs"][0]["state"], "queued")

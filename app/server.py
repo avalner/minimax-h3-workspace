@@ -10,6 +10,7 @@ own ComfyUI or installs one (plus node packs and models) and manages it.
 
 import argparse
 import asyncio
+import contextlib
 import ctypes
 import hashlib
 import json
@@ -55,8 +56,8 @@ from backends.comfy import ComfyBackend
 from domain.errors import InvalidSpec, InvalidTransition, JobConflict
 from domain.jobs import (MAX_SECONDS, InputRef, JobRecord, JobSpec, JobState, ResultPolicy, new_job_id,
                          public_state)
-from domain.media import MediaKind, MediaRecord, MediaState
 from services.jobs import JobService
+from services.media import EmptyResult, MediaService
 from storage.atomic import atomic_write_json, atomic_write_text
 from storage.database import Database
 from storage.migrations import migrate
@@ -467,6 +468,15 @@ class Library:
         self.repo.add(item)   # raises if the row cannot be written: memory is not touched then
         self.items.insert(0, item)
 
+    def note_committed(self, item):
+        """The row was already written inside someone else's transaction: only the window's list changes.
+
+        `MediaService.finalize` writes the row together with the job's `succeeded`, so the item must
+        not enter the list before that transaction commits, and the same id must not appear twice.
+        """
+        if self.get(item["id"]) is None:
+            self.items.insert(0, item)
+
     def remove(self, item_id):
         self.repo.delete(item_id)
         self.items = [x for x in self.items if x["id"] != item_id]
@@ -538,6 +548,30 @@ class App:
         # the engine address, which may point at a process the app manages)
         self.idempotency = IdempotencyRepository(self.db)
         self.service = JobService(self.jobs_repo, self.build_backend(), keys=self.idempotency)
+        # the results of the jobs: one finalization for every path that collects them, streaming
+        # copies into the results folder, and the drafts that wait for «Добавить в библиотеку»
+        self.media = MediaService(
+            db=self.db, jobs=self.jobs_repo, media=self.media_repo, results=self.results_repo,
+            library=self.library, source=self.service.backend, outputs_of=self.outputs_for_media,
+            output_dir=lambda: self.output_dir, results_dir=self.results_dir,
+            keep_copies=self.keep_copies, present=self.public, hold_draft=self.hold_preview,
+            note_error=self.note_error, on_outputs=self.keep_scene_state,
+            extra_folders=lambda: [DATA_DIR / "cloud", DATA_DIR / "cache"])
+
+    async def outputs_for_media(self, pid):
+        """The engine's outputs, asked through the App every time: the media service must not keep a
+        stale copy of `job_outputs` (the engine may be replaced, and the watch polls it)."""
+        return await self.job_outputs(pid)
+
+    @contextlib.asynccontextmanager
+    async def view_stream(self, path, params):
+        """One output file of the engine as a stream: status, declared size and chunks, no whole read.
+
+        The media service owns the destination and the `.part`; this only lets the backend ask for
+        the file without knowing how it is stored.
+        """
+        async with self.session.get(self.comfy + path, params=params) as r:
+            yield r.status, r.content_length, r.content.iter_chunked(1 << 20)
 
     def llm_root(self):
         if self.config.get("llm_dir"):
@@ -627,6 +661,10 @@ class App:
         trace.on_request_start.append(_comfy_key)
         self.session = aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=_ssl_context()), trace_configs=[trace])
         asyncio.get_running_loop().run_in_executor(None, self.prune_input_cache)  # the details window copies files it shows
+        try:   # `.part` files of a closed run: never a file an active writer owns, never a user's file
+            self.media.cleanup()
+        except Exception as e:  # noqa: BLE001 - an untidy folder must not stop the program
+            self.note_error(f"Уборка недописанных файлов не удалась: {e}")
         if self.config.get("engine") == "managed" and self.config.get("setup_done") and not self.comfy_override:
             if self.missing_node_packs():
                 self.packs_task = asyncio.create_task(self.install_missing_packs())
@@ -684,6 +722,7 @@ class App:
         if self.process:
             await asyncio.to_thread(self.process.stop)
         await asyncio.to_thread(self.llm.stop)
+        await self.media.shutdown(timeout=10.0)   # writers stop and remove their own `.part` files
         await self.session.close()
 
     def start_managed(self):
@@ -1123,7 +1162,8 @@ class App:
     def build_backend(self):
         """The engine behind the job service: small callables, not the whole App."""
         return ComfyBackend(client=self.comfy_client, url=self.comfy, client_id=CLIENT_ID,
-                            models=lambda: self.model_names, loras=lambda mode: self.custom_loras(mode))
+                            models=lambda: self.model_names, loras=lambda mode: self.custom_loras(mode),
+                            view=self.view_stream)
 
     async def comfy_client(self, method, path, **kwargs):
         """The backend's HTTP: an engine that does not answer is not a job that failed."""
@@ -1223,88 +1263,51 @@ class App:
             self.save_queue()
 
     async def _finish_job(self, job):
+        """One call to the media service: find the outputs, make the copies, record, notify.
+
+        The order inside the service is the recovery rule (see `services.media`): a broken transfer
+        leaves a `.part`, never a half-written clip under the real name, and a repeated attempt finds
+        the copy and the Library record of the previous one instead of making a second pair.
+        """
         pid = job["prompt_id"]
         self.keep_meta(job)
-        outputs = await self.job_outputs(pid)
-        tagged = [(nid, f) for nid, out in outputs.items() for lst in out.values() if isinstance(lst, list)
-                  for f in lst if isinstance(f, dict) and "filename" in f]
-        files = [f for _, f in tagged]
-        node_of = {id(f): nid for nid, f in tagged}
-        videos = [f for f in files if f["filename"].lower().endswith((".mp4", ".webm", ".mkv", ".mov"))]
-        videos = [f for f in videos if f.get("type", "output") == "output"] or videos  # not the previews of loaded clips
-        lg = (job.get("meta") or {}).get("long")
-        if lg and not lg.get("test"):  # a scene of the long video: keep the tail of its latent for the next scene (not for a size test)
-            lat = next((f for f in files if f["filename"].lower().endswith(".latent")), None)
-            if lat and videos:
-                try:
-                    async with self.session.get(self.comfy + "/view", params={
-                            "filename": lat["filename"], "subfolder": lat.get("subfolder", ""), "type": lat.get("type", "output")}) as r:
-                        body = await r.read()
-                    if r.status == 200 and body:
-                        d = LONG_DIR / lg["run"]
-                        d.mkdir(parents=True, exist_ok=True)
-                        sfx = "_d" if lg.get("draft") else ""
-                        (d / f"state_{lg['part']}{sfx}.latent").write_bytes(body)
-                        atomic_write_json(d / f"state_{lg['part']}{sfx}.json",
-                                          {"res": (job.get("meta") or {}).get("res", "")})
-                except Exception as e:
-                    self.note_error(f"Не удалось сохранить состояние сцены: {e}")
-        images = [f for f in files if f["filename"].lower().endswith((".png", ".jpg", ".jpeg", ".webp"))
-                  and f.get("type", "output") == "output"]
-        if not videos and not images:
+        try:
+            await self.media.finalize(job, notify=self.broadcast)
+        except EmptyResult:
             self.note_error(f"ComfyUI закончил работу, но в истории нет файлов (папка {self.output_dir or 'output'})")
             self.set_job_state(job, JobState.FAILED, error="ComfyUI не вернул ни видео, ни изображение")
             self.jobs.pop(pid, None)   # there is nothing to wait for any more
             await self.broadcast({"type": "error", "prompt_id": pid,
                                   "message": "ComfyUI не вернул ни видео, ни изображение: проверьте папку output"})
             return
-        if videos:
-            picked = [videos[-1] if job.get("last_output") else videos[0]]
-        else:  # a workflow that makes pictures: every saved picture is a result (the picture sections keep it as a draft)
-            picked = images[:12]
-            def order(f):  # the glued sheet first, then the frames 1, 2, 3...
-                t = str((job.get("titles") or {}).get(node_of.get(id(f)), ""))
-                return (0 if t.startswith("Лист") else 1, t)
-            picked.sort(key=order)
-        record = job.get("record")
-        # the result policy is part of the request now: a draft stays a draft because it was asked for,
-        # not because a flag happened to travel next to the job
-        policy = record.spec.result_policy if record is not None and record.spec is not None else None
-        preview = policy is ResultPolicy.DRAFT if policy is not None else bool(job.get("preview"))
-        items = []
-        for f in picked:
-            item = dict(job["meta"], id=uuid.uuid4().hex[:12], prompt_id=pid,
-                        date=datetime.now().isoformat(timespec="seconds"), fav=False, file=f,
-                        ext=Path(f["filename"]).suffix.lstrip(".").lower() or "mp4")
-            if not videos:
-                item["kind"] = "image"
-                title = (job.get("titles") or {}).get(node_of.get(id(f)), "")  # "Результат: апскейл (после…)" -> "апскейл"
-                label = re.split(r"\s*[(\[]", title.split(":")[-1].strip())[0].strip()[:24]
-                if label:
-                    item["label"] = label
-            meta = f.get("metadata") or {}
-            if meta.get("width") and meta.get("height") and not (item.get("mode") == "upscale" and item.get("res")):
-                item["res"] = f'{meta["width"]}×{meta["height"]}'
-            if preview:   # the picture sections: wait for «Добавить в библиотеку»
-                self.hold_preview(item)
-            else:
-                self.library.add(item)   # may raise: then the job stays and this is tried again
-                await self.archive_item(item)
-            if record is not None:
-                record.add_result(MediaRecord(
-                    media_id=item["id"], kind=MediaKind.of_name(f["filename"]),
-                    state=MediaState.DRAFT if preview else MediaState.LIBRARY,
-                    path=str(item["local"]) if item.get("local") else None,
-                    # the node is part of the engine's own identity of this output: the database makes
-                    # the result unique by it, so registering the same clip twice cannot add a row
-                    backend_file={**f, "node": str(node_of.get(id(f), ""))},
-                    library_id=None if preview else item["id"],
-                    created_at=datetime.now().timestamp()))
-            items.append(self.public(item))
         job["finalized"] = True
         self.set_job_state(job, JobState.SUCCEEDED)
         self.jobs.pop(pid, None)   # the result is registered: only now the job leaves the queue
-        await self.broadcast({"type": "done", "prompt_id": pid, "item": items[0], "items": items})
+
+    async def keep_scene_state(self, job, refs):
+        """A scene of the long video: keep the tail of its latent for the next scene, not for a size test.
+
+        The latent is streamed through a `.part` like every other result file: it is small, but a
+        half-written state would make the next scene load a broken one.
+        """
+        lg = (job.get("meta") or {}).get("long")
+        if not lg or lg.get("test"):
+            return
+        lat = next((ref for _, ref in refs if str(ref["filename"]).lower().endswith(".latent")), None)
+        videos = [ref for _, ref in refs if str(ref["filename"]).lower().endswith((".mp4", ".webm", ".mkv", ".mov"))]
+        if not lat or not videos:
+            return
+        try:
+            d = LONG_DIR / lg["run"]
+            d.mkdir(parents=True, exist_ok=True)
+            sfx = "_d" if lg.get("draft") else ""
+            async with self.service.backend.open_output(lat) as stream:
+                await self.media.files.save_stream(d / f"state_{lg['part']}{sfx}.latent", stream.chunks,
+                                                   expected_bytes=stream.expected_bytes)
+            atomic_write_json(d / f"state_{lg['part']}{sfx}.json",
+                              {"res": (job.get("meta") or {}).get("res", "")})
+        except Exception as e:
+            self.note_error(f"Не удалось сохранить состояние сцены: {e}")
 
     async def broadcast(self, payload):
         self.remember(payload)
@@ -1380,33 +1383,13 @@ class App:
         return self.config.get("keep_copies") is not False
 
     async def archive_item(self, item):
-        """Copy the finished file of a library item into the program's own results folder."""
-        if not self.keep_copies() or item.get("local") and Path(item["local"]).exists():
-            return False
-        f = item["file"]
-        if f.get("type") == "local":
-            return False
-        try:
-            dest_dir = self.results_dir()
-            dest_dir.mkdir(parents=True, exist_ok=True)
-            dest = dest_dir / f"{str(item.get('date', ''))[:10].replace('-', '')}_{item['id']}_{f['filename']}"
-            src = self.output_dir / f.get("subfolder", "") / f["filename"] if self.output_dir and f.get("type") == "output" else None
-            if src and src.exists():
-                await asyncio.to_thread(shutil.copy2, src, dest)
-            else:   # output folder unknown (own ComfyUI): take the file from ComfyUI itself
-                params = {"filename": f["filename"], "subfolder": f.get("subfolder", ""), "type": f.get("type", "output")}
-                async with self.session.get(self.comfy + "/view", params=params) as r:
-                    if r.status != 200:
-                        return False
-                    with open(dest, "wb") as out:
-                        async for chunk in r.content.iter_chunked(1 << 20):
-                            out.write(chunk)
-            item["local"] = str(dest)
-            self.library.save(item)   # one changed row, not the whole list
-            return True
-        except Exception as e:
-            self.note_error(f"Не удалось сохранить копию результата: {e}")
-            return False
+        """Copy the finished file of a library item into the program's own results folder.
+
+        The copy itself belongs to the media service: a `.part` next to the destination, a size
+        check, an atomic rename, and a failure that is reported as `archive_failed` instead of
+        putting the generation in doubt.
+        """
+        return await self.media.archive_item(item)
 
     async def upload_state(self, path, name):
         """Put a saved scene state (.latent) into ComfyUI's input folder, where its LoadLatent node looks for it."""
@@ -2370,8 +2353,13 @@ class App:
                     self.try_set_job_state(job, JobState.FINALIZING)
                     dest = DATA_DIR / "cloud" / f'{pid}.mp4'
                     dest.parent.mkdir(parents=True, exist_ok=True)
+                    # the clip is streamed through a `.part` and published only when complete: a
+                    # broken cloud download must not leave a finished-looking video on the disk
                     async with self.session.get(video["fileUrl"]) as r:
-                        dest.write_bytes(await r.read())
+                        if r.status != 200:
+                            raise cloud.CloudError(f"RunningHub не отдал видео: HTTP {r.status}")
+                        await self.media.files.save_stream(dest, r.content.iter_chunked(1 << 20),
+                                                           expected_bytes=r.content_length)
                     self.jobs.pop(pid, None)
                     item = dict(job["meta"], id=uuid.uuid4().hex[:12], prompt_id=pid,
                                 date=datetime.now().isoformat(timespec="seconds"), fav=False,
@@ -4429,12 +4417,11 @@ class App:
             return web.json_response({"item": self.public(self.library.get(iid)), "kept": True})
         item.pop("preview", None)
         try:
-            self.library.add(item)          # writes one row; raises if the database cannot take it
+            item = await self.media.keep(item)   # one row, then its copy; raises if the row cannot be written
         except STORE_ERRORS as e:
             item["preview"] = True          # still a draft: «Добавить в библиотеку» can be pressed again
             self.note_error(f"Не удалось добавить картинку в Библиотеку: {e}")
             raise web.HTTPInternalServerError(text=f"Не удалось записать Библиотеку: {e}. Попробуйте ещё раз.")
-        await self.archive_item(item)       # the program's own copy, as for every Library result
         self.pending.pop(iid, None)
         return web.json_response({"item": self.public(item)})
 

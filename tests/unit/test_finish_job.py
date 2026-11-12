@@ -65,12 +65,12 @@ class FinishJobTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.app.library.items), 1)
 
     async def test_a_failed_registration_keeps_the_job_for_a_retry(self):
-        def full(item):
+        def full(*args, **kwargs):
             raise sqlite3.OperationalError("disk I/O error")
 
         job = support.job("p1", record=support.job_record("p1"))
         self.app.jobs["p1"] = job
-        with mock.patch.object(self.app.library, "add", full):
+        with mock.patch.object(self.app.library.repo, "add", full):
             await self.app.finish_job(job)   # does not raise: the clip is not lost because a write failed
         self.assertIn("p1", self.app.jobs, "задание пропало вместе с несозданной записью")
         self.assertFalse(self.app.jobs["p1"]["finalizing"], "повторная попытка была бы заблокирована")

@@ -7,6 +7,7 @@ A fake ComfyUI answers from a table, so the adapter is checked without a server 
 
 from __future__ import annotations
 
+import contextlib
 import unittest
 
 import support  # noqa: F401  (puts app/ on sys.path)
@@ -150,6 +151,48 @@ class CancelTest(unittest.IsolatedAsyncioTestCase):
     async def test_a_job_without_an_engine_id_cannot_be_cancelled(self):
         with self.assertRaises(BackendError):
             await self.backend(FakeComfy()).cancel(record(backend_job_id=None))
+
+
+class OutputTest(unittest.IsolatedAsyncioTestCase):
+    """The file of a finished job reaches the media service as a stream, with its declared size."""
+
+    def backend(self, view):
+        return ComfyBackend(client=FakeComfy(), url="http://127.0.0.1:8188", client_id="c1",
+                            models=lambda: MODELS, view=view)
+
+    async def test_a_file_is_streamed_with_the_size_the_engine_declared(self):
+        asked = {}
+
+        @contextlib.asynccontextmanager
+        async def view(path, params):
+            asked.update(path=path, params=params)
+
+            async def chunks():
+                yield b"abc"
+                yield b"de"
+
+            yield 200, 5, chunks()
+
+        async with self.backend(view).open_output({"filename": "clip.mp4", "subfolder": "s"}) as stream:
+            self.assertEqual(stream.expected_bytes, 5)
+            pieces = [chunk async for chunk in stream.chunks]
+        self.assertEqual(pieces, [b"abc", b"de"])
+        self.assertEqual(asked["path"], "/view")
+        self.assertEqual(asked["params"], {"filename": "clip.mp4", "subfolder": "s", "type": "output"})
+
+    async def test_a_file_the_engine_does_not_give_is_not_streamed(self):
+        @contextlib.asynccontextmanager
+        async def view(path, params):
+            yield 404, None, None
+
+        with self.assertRaises(BackendUnavailable):
+            async with self.backend(view).open_output({"filename": "gone.mp4"}):
+                pass
+
+    async def test_a_backend_without_files_says_so_instead_of_pretending(self):
+        with self.assertRaises(BackendError):
+            async with self.backend(None).open_output({"filename": "clip.mp4"}):
+                pass
 
 
 if __name__ == "__main__":

@@ -29,6 +29,9 @@ import server  # noqa: E402
 
 SOURCES = [APP / "server.py", APP / "agentapi.py", APP / "engine.py", APP / "ffmpeg_mgr.py",
            APP / "agent.py", APP / "updater.py", APP / "catalog.py", APP / "loras_registry.py"]
+# the layers the refactoring moved the work into: a map that only sees server.py stops being a map
+for package in ("services", "storage", "backends", "domain"):
+    SOURCES += sorted(p for p in (APP / package).glob("*.py") if p.is_file())
 
 
 def routes():
@@ -57,7 +60,8 @@ def scan(pattern):
             continue
         for n, line in enumerate(text.splitlines(), 1):
             if re.search(pattern, line):
-                found.append((path.name, n, line.strip()))
+                name = str(path.relative_to(APP)).replace("\\", "/")
+                found.append((name, n, line.strip()))
     return found
 
 
@@ -102,9 +106,11 @@ def main():
     print()
 
     for title, pattern, header in [
-        ("Состояние заданий", r"self\.jobs\[|self\.jobs\.pop|job\[.state.\]|job\.get\(.state.",
+        ("Состояние заданий", r"self\.jobs\[|self\.jobs\.pop|job\[.state.\]|job\.get\(.state.|"
+                              r"record\.(apply|succeed|fail|cancel_confirmed)\(",
          ["файл", "строка", "код"]),
-        ("Черновики и Библиотека", r"self\.pending\b|self\.library\.(add|remove|save)|self\.library\.get",
+        ("Черновики и Библиотека", r"self\.pending\b|self\.library\.(repo\.)?(add|remove|save|get)|"
+                                   r"self\.library\.items\.insert",
          ["файл", "строка", "код"]),
         ("Короткая память об исходах", r"self\.recent\[|self\.history\[|self\.remember\(",
          ["файл", "строка", "код"]),

@@ -34,6 +34,10 @@ class PreviewKeepTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("preview", self.app.library.items[0])
         self.assertEqual([x["id"] for x in server.Library(self.app.db).items], ["d1"],
                          "запись должна быть в таблице, а не только в памяти")
+        media = self.app.media_repo.get("d1")
+        self.assertIsNotNone(media, "у файла нет записи в media")
+        self.assertEqual(media.state.value, "library")
+        self.assertEqual(media.library_id, "d1")
 
     async def test_a_second_press_returns_the_same_item(self):
         first = json.loads((await self.keep()).text)

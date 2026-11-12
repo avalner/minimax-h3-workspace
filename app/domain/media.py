@@ -5,18 +5,24 @@ engine's output folder, the program may not have copied it yet, the user may not
 «Добавить в библиотеку», and the extra copy in the results folder may have failed. Those are
 different states of the same file, and the UI has to be able to tell them apart.
 
-This is the type; the service that moves a record from one state to another is stage 5.
+`media_id_for` is what makes registering one engine output twice the same record instead of two:
+the id is derived from the job and from the engine's own identity of the file (node, subfolder, type,
+filename), so a repeated finalization after a restart lands on the same row.
+
+The service that moves a record from one state to another is `services.media`.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import PurePath
 
 from domain.errors import InvalidSpec, SchemaVersionError
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2   # 2: `archive_failed` — the Library record exists, the independent copy does not
 
 
 class MediaKind(str, Enum):
@@ -46,6 +52,7 @@ class MediaState(str, Enum):
     DRAFT = "draft"        # waits for «Добавить в библиотеку», not in the Library list
     LIBRARY = "library"    # a Library record points at it
     ARCHIVED = "archived"  # additionally copied into the user's own results folder
+    ARCHIVE_FAILED = "archive_failed"  # in the Library, but the independent copy was not made
     MISSING = "missing"    # the file is gone from disk
 
 
@@ -69,7 +76,7 @@ class MediaRecord:
 
     @property
     def in_library(self) -> bool:
-        return self.state in (MediaState.LIBRARY, MediaState.ARCHIVED)
+        return self.state in (MediaState.LIBRARY, MediaState.ARCHIVED, MediaState.ARCHIVE_FAILED)
 
     @property
     def has_copy(self) -> bool:
@@ -92,3 +99,17 @@ class MediaRecord:
                    backend_file=dict(data.get("backend_file") or {}), library_id=data.get("library_id"),
                    bytes=data.get("bytes"), created_at=float(data.get("created_at") or 0.0),
                    error=data.get("error"))
+
+
+def media_id_for(job_id, node, file_ref) -> str:
+    """The one id of "this output of this job": the same on every retry, after a restart too.
+
+    The engine's identity of a file is node + subfolder + type + filename (that is what the database
+    makes unique), and a job is ours. Deriving the id instead of rolling a new one is what makes a
+    repeated finalization an update of the same Library item instead of a second copy of the clip.
+    """
+    ref = file_ref or {}
+    identity = json.dumps([str(job_id or ""), str(node or ""), str(ref.get("subfolder") or ""),
+                           str(ref.get("type") or "output"), str(ref.get("filename") or "")],
+                          ensure_ascii=False, sort_keys=True)
+    return hashlib.sha1(identity.encode("utf-8")).hexdigest()[:12]

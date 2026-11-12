@@ -9,8 +9,9 @@ says so, and the service then refuses the request instead of pretending.
 
 from __future__ import annotations
 
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Protocol, runtime_checkable
+from typing import Any, AsyncIterator, Mapping, Protocol, runtime_checkable
 
 
 class BackendError(Exception):
@@ -23,6 +24,19 @@ class BackendUnavailable(BackendError):
 
 class SubmitRejected(BackendError):
     """The engine refused the job (a bad graph, a missing model). Nothing was created."""
+
+
+@dataclass
+class OutputStream:
+    """One output file of a finished job, as a stream of chunks.
+
+    `expected_bytes` is what the engine said the file is (None when it did not say): it lets the
+    media service refuse a short transfer instead of publishing half a clip. The stream does not
+    know about `.part` files or destinations — that is the media service's decision.
+    """
+
+    chunks: AsyncIterator[bytes]
+    expected_bytes: int | None = None
 
 
 @dataclass(frozen=True)
@@ -76,5 +90,5 @@ class Backend(Protocol):
     async def outputs(self, record) -> dict:
         """The files the engine reports for a finished job (its own output format)."""
 
-    async def download(self, record, file_ref, destination) -> None:
-        """Copy one of those files to `destination`."""
+    def open_output(self, file_ref) -> AbstractAsyncContextManager[OutputStream]:
+        """Stream one of those files. The caller decides the destination and the `.part` name."""
