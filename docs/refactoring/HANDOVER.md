@@ -20,7 +20,7 @@
 | `5802337` | этап 3, часть 2: библиотека, очередь и задания живут в базе |
 | `9f850aa` | этап 4: JobService, backend-адаптер, долговечные ключи, отмена |
 | `9fb410f` | этап 5: медиасервис, одна финализация, `.part`, отдельный статус архивной копии |
-| _(этап 6)_ | супервизор задач, EngineManager, согласованный shutdown, облачное задание переживает окно |
+| `e66a6fa` | этап 6: супервизор задач, EngineManager, согласованный shutdown, облачное задание переживает окно |
 
 Отчёты: [stage-0-baseline.md](stage-0-baseline.md), [stage-1-report.md](stage-1-report.md),
 [stage-2-report.md](stage-2-report.md), [stage-3-precondition.md](stage-3-precondition.md),
