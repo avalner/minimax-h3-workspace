@@ -479,6 +479,7 @@ textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft
 .ip-over{position:absolute;inset:0;cursor:crosshair;touch-action:none}
 .ip-over:focus,.ip-over:focus-visible{outline:none}   /* the canvas takes the focus so Ctrl+Z belongs to it, without a ring */
 .ip-sel{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}   /* the marching ants of the selection: never in the mask */
+.ip-ring{position:fixed;box-sizing:border-box;border-radius:50%;pointer-events:none;transform:translate(-50%,-50%);border:1px solid rgba(255,255,255,.95);box-shadow:0 0 0 1px rgba(0,0,0,.6),inset 0 0 0 1px rgba(0,0,0,.3);z-index:40}
 .ip-grip{height:14px;margin-top:2px;display:flex;align-items:center;justify-content:center;cursor:ns-resize;touch-action:none}
 .ip-grip::before{content:'';width:52px;height:4px;border-radius:2px;background:var(--line-2,#3a3a3a);transition:background .15s}
 .ip-grip:hover::before,.ip-grip.drag::before{background:var(--accent)}
@@ -486,6 +487,7 @@ textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft
 .ip-tools .seg{flex:0 0 auto}
 .ip-tools input[type=range]{width:140px}
 .ip-zoomv{font-family:var(--mono);font-size:12px;color:var(--muted);min-width:42px;display:inline-block}
+.ip-brushv{font-family:var(--mono);font-size:12px;color:var(--muted);min-width:28px;display:inline-block}
 .tokens{display:flex;gap:6px;flex-wrap:wrap}
 .token{font-family:var(--mono);font-size:11.5px;padding:4px 8px;border-radius:7px;background:var(--surface-2);border:1px solid var(--line-2);color:var(--text)}
 .token:hover{border-color:var(--accent)}
@@ -7599,19 +7601,19 @@ function imgJobSeed(root, S, seed) {
       <div class="card"><div class="card-h"><h3><span class="n">1</span>Изображение и закраска</h3></div>
         <label class="drop" id="ipDrop"><input type="file" accept="image/*"><div class="ph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="1.6"/><path d="m21 15-5-5L5 21"/></svg><b>Ваше изображение</b><span>перетащите или нажмите</span></div><span class="tag" hidden>Исходная</span><button class="x" type="button">✕</button></label>
         <div class="ip-edit" hidden>
-          <div class="ip-stage"><div class="ip-fit"><canvas class="ip-img"></canvas><canvas class="ip-over" tabindex="0"></canvas><canvas class="ip-sel"></canvas></div></div>
+          <div class="ip-stage"><div class="ip-fit"><canvas class="ip-img"></canvas><canvas class="ip-over" tabindex="0"></canvas><canvas class="ip-sel"></canvas><div class="ip-ring" hidden></div></div></div>
           <div class="ip-grip" title="Потяните вверх или вниз — высота холста"></div>
           <div class="ip-tools">
             <div class="seg ip-mode" style="grid-template-columns:1fr 1fr 1fr 1fr;width:392px"><button data-m="select" class="on">Выделение</button><button data-m="paint">Закрасить</button><button data-m="erase">Ластик</button><button data-m="fill">Заливка</button></div>
             <div class="seg ip-selshape" style="grid-template-columns:1fr 1fr 1fr;width:300px"><button data-s="rect" class="on">Прямоугольник</button><button data-s="ellipse">Овал</button><button data-s="lasso">Лассо</button></div>
-            <span class="hint">Кисть</span><input type="range" class="ip-brush" min="8" max="160" value="36">
+            <span class="hint">Кисть</span><input type="range" class="ip-brush" min="8" max="160" value="36"><b class="ip-brushv">36</b>
             <span class="hint">Холст</span><input type="range" class="ip-zoom" min="20" max="200" value="100"><b class="ip-zoomv">100 %</b>
             <button class="btn ip-fitb" type="button" title="Показать картинку целиком: холст по высоте окна">Вся картинка</button>
             <button class="btn ip-undo" type="button" title="Убрать последний мазок (Ctrl+Z)" disabled>Отменить</button>
             <button class="btn ip-clear" type="button">Очистить закраску</button>
             <button class="btn ip-unsel" type="button" title="Закраска снова на всей картинке" disabled>Снять выделение</button>
           </div>
-          <div class="hint" style="margin-top:8px">Клавиши 1–4 выбирают инструмент, а 1 нажатая ещё раз перебирает форму выделения по кругу. «Заливка» заполняет область, обведённую кистью, «Выделение» ограничивает работу выбранной областью: Ctrl добавляет ещё одну, Shift держит ровный круг или квадрат, Alt перетаскивает выделение, Esc снимает. Если не закрашено ничего, в модель уходит само выделение. Ctrl+Z — убрать последний шаг, Shift+Ctrl+Z — вернуть его, Shift+колесо мыши — масштаб холста</div>
+          <div class="hint" style="margin-top:8px">Клавиши 1–4 выбирают инструмент (1 ещё раз — форма выделения), [ и ] меняют размер кисти и ластика. «Заливка» заполняет область, обведённую кистью, «Выделение» ограничивает работу выбранной областью: Ctrl добавляет ещё одну, Shift держит ровный круг или квадрат, Alt перетаскивает выделение, Esc снимает. Если не закрашено ничего, в модель уходит само выделение. Ctrl+Z — убрать последний шаг, Shift+Ctrl+Z — вернуть его, Shift+колесо мыши — масштаб холста</div>
         </div></div>
       <div class="card"><div class="card-h"><h3><span class="n">2</span>Что должно быть на закрашенном месте</h3></div>
         <textarea class="ip-prompt" placeholder="Например: белая майка вместо красной куртки. Лицо, фон и свет оставить как было."></textarea>
@@ -7689,10 +7691,56 @@ function imgJobSeed(root, S, seed) {
   };
   let altHeld = false;
   const cursorNow = () => {   // the arrow only where it will actually move something, in any tool
-    overC.style.cursor = altHeld && sel ? CUR.move : (CUR[mode] || 'crosshair');
+    if (altHeld && sel) { overC.style.cursor = CUR.move; return; }
+    if (hoverPt && (mode === 'paint' || mode === 'erase')) { overC.style.cursor = 'none'; return; }   // the ring is the cursor
+    overC.style.cursor = CUR[mode] || 'crosshair';
   };
-  document.addEventListener('keydown', e => { if (e.key === 'Alt') { altHeld = true; cursorNow(); } });
-  document.addEventListener('keyup', e => { if (e.key === 'Alt') { altHeld = false; cursorNow(); } });
+
+  /* the ring under the pointer is the brush itself: stroke width is its diameter, so the size is visible
+     before the first dab (and after [ or ] without touching the picture). It lives in the page and is placed by
+     the mouse coordinates themselves — no parent box, scroll or border can shift it off the pointer. */
+  const ring = $('.ip-ring', root);
+  let hoverPt = null;   // where the pointer is, in page coordinates
+  /* In the app window the page may be scaled (UI zoom, display scaling), and then one unit of "left" is not one
+     screen pixel — the ring drifts aside by exactly that factor. So the mapping is measured once, on the live
+     element: two known positions, read back as rectangles. Works the same in a browser where the scale is 1. */
+  let ringCal = null;
+  const ringScale = () => {
+    const z = document.documentElement.style.zoom || '1';
+    if (ringCal && ringCal.z === z) return ringCal;
+    const keepCss = ring.style.cssText, keepHidden = ring.hidden;
+    ring.hidden = false;
+    ring.style.cssText = 'position:fixed;left:0;top:0;width:0;height:0;border:0;box-shadow:none;transform:none';
+    const a = ring.getBoundingClientRect();
+    ring.style.left = '100px'; ring.style.top = '100px';
+    const b = ring.getBoundingClientRect();
+    ring.style.cssText = keepCss; ring.hidden = keepHidden;
+    ringCal = { z, x0: a.left, y0: a.top, kx: ((b.left - a.left) / 100) || 1, ky: ((b.top - a.top) / 100) || 1 };
+    return ringCal;
+  };
+  const paintRing = () => {
+    const show = hoverPt && !edit.hidden && !altHeld && (mode === 'paint' || mode === 'erase');
+    if (!show) { ring.hidden = true; cursorNow(); return; }
+    const k = (overC.getBoundingClientRect().width / overC.width) || 1;   // canvas pixels -> screen pixels
+    const d = Math.max(4, brush * k);
+    const c = ringScale();
+    ring.hidden = false;
+    ring.style.width = ring.style.height = d + 'px';
+    ring.style.left = (hoverPt[0] - c.x0) / c.kx + 'px';   // the ring sits exactly on the point the stroke starts from
+    ring.style.top = (hoverPt[1] - c.y0) / c.ky + 'px';
+    // and one exact fit on top of it: read back where it landed and shift by whatever is left over
+    const r = ring.getBoundingClientRect();
+    const dx = hoverPt[0] - (r.left + r.width / 2), dy = hoverPt[1] - (r.top + r.height / 2);
+    if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) {
+      ring.style.left = parseFloat(ring.style.left) + dx / c.kx + 'px';
+      ring.style.top = parseFloat(ring.style.top) + dy / c.ky + 'px';
+    }
+    cursorNow();
+  };
+  window.addEventListener('resize', () => { ringCal = null; paintRing(); });
+  window.addEventListener('scroll', () => { if (hoverPt) { hoverPt = null; paintRing(); } }, true);
+  document.addEventListener('keydown', e => { if (e.key === 'Alt') { altHeld = true; cursorNow(); paintRing(); } });
+  document.addEventListener('keyup', e => { if (e.key === 'Alt') { altHeld = false; cursorNow(); paintRing(); } });
   window.addEventListener('blur', () => { altHeld = false; cursorNow(); });   // Alt+Tab would leave it stuck
   /* the drawing canvas is as big as the user wants it: 100 % = the width of the card, more = the stage scrolls */
   const fitEl = $('.ip-fit', root), stageEl = $('.ip-stage', root);
@@ -7704,6 +7752,7 @@ function imgJobSeed(root, S, seed) {
     if (zoomIn.value !== String(zoom)) zoomIn.value = zoom;
     zoomV.textContent = zoom + '%';
     if (!keep) { try { localStorage.setItem('h3-ip-zoom', String(zoom)); } catch {} }
+    hoverPt = null; paintRing();   // the picture moved under the pointer: the ring comes back on the next move
   };
   const fitZoom = () => {   // the biggest canvas that still shows the whole picture without scrolling
     if (!drop._file || !imgC.height) return 100;
@@ -7853,10 +7902,19 @@ function imgJobSeed(root, S, seed) {
     modeBtns.forEach(x => x.classList.toggle('on', x.dataset.m === m));
     selShape.hidden = mode !== 'select';   // the shape choice only makes sense while selecting
     cursorNow();
+    paintRing();
   };
   modeBtns.forEach(b => b.onclick = () => setMode(b.dataset.m));
   shapeBtns.forEach(b => b.onclick = () => setShape(b.dataset.s));
-  $('.ip-brush', root).oninput = e => { brush = +e.target.value; };
+  const brushIn = $('.ip-brush', root), brushV = $('.ip-brushv', root);
+  const setBrush = v => {   // [ and ] step it by a quarter each time, so both 9 px and 160 px are easy to reach
+    brush = Math.max(8, Math.min(160, Math.round(v)));
+    if (brushIn.value !== String(brush)) brushIn.value = brush;
+    brushV.textContent = brush;
+    paintRing();
+  };
+  brushIn.oninput = e => setBrush(+e.target.value);
+  setBrush(brush);
 
   /* --- strokes and undo: every stroke is kept as a path, so Ctrl+Z drops the whole last stroke (or the whole
      «clear») and the mask is redrawn from scratch — the very same pixels, no per-step snapshots in memory. --- */
@@ -8001,6 +8059,7 @@ function imgJobSeed(root, S, seed) {
     paintStroke(live);
   });
   overC.addEventListener('pointermove', e => {
+    hoverPt = [e.clientX, e.clientY]; paintRing();
     if (selMove) {                          // the selection travels with the mouse
       const [x, y] = pos(e);
       const dx = x - selMove.x0, dy = y - selMove.y0;
@@ -8047,6 +8106,7 @@ function imgJobSeed(root, S, seed) {
     hasMask = !!bbox();
   };
   overC.addEventListener('pointerup', stop); overC.addEventListener('pointercancel', stop);
+  overC.addEventListener('pointerleave', () => { hoverPt = null; paintRing(); });
   undoB.onclick = undo;
   $('.ip-clear', root).onclick = () => { undone = []; strokes.push({ clear: true }); redraw(); };
   document.addEventListener('keydown', e => {
@@ -8064,6 +8124,11 @@ function imgJobSeed(root, S, seed) {
       if (tool) {
         e.preventDefault();
         if (tool === 'select' && mode === 'select') cycleShape(); else setMode(tool);
+        return;
+      }
+      if (e.code === 'BracketLeft' || e.code === 'BracketRight') {   // [ smaller, ] bigger — any keyboard layout
+        e.preventDefault();
+        setBrush(e.code === 'BracketLeft' ? brush / 1.25 : brush * 1.25);
         return;
       }
     }
