@@ -732,16 +732,18 @@ class AgentAPI:
 
     async def h_jobs(self, _request):
         active = [self.job_view(k) for k in list(self.app.jobs)]
-        recent = list((getattr(self.app, "recent", None) or {}).items())[-20:]
+        # the outcomes come from the same records the window sees, so they survive a restart
+        recent = list(getattr(self.app, "recent_outcomes", lambda n=20: [])(20))
         return web.json_response({"active": [v for v in active if v],
-                                  "finished": [{"job": k, "state": v.get("state"), "at": v.get("at")}
-                                               for k, v in reversed(recent)]})
+                                  "finished": [{"job": r["prompt_id"], "state": r["state"], "at": r["at"]}
+                                               for r in reversed(recent)]})
 
     async def h_job(self, request):
         view = self.job_view(request.match_info["jid"])
         if not view:
             return self._err(404, "JOB_NOT_FOUND", "Такого задания приложение не помнит",
-                             "Задания до перезапуска программы видны только в Библиотеке: GET " + PREFIX + "library")
+                             "Задание старше недели или было удалено: готовое ищите в Библиотеке, "
+                             "GET " + PREFIX + "library")
         return web.json_response(view)
 
     async def h_job_wait(self, request):

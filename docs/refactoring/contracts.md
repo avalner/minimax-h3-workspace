@@ -203,7 +203,7 @@
 | application.py | 776 | job["state"] = public_state(record.state) |
 | application.py | 866 | self.jobs.pop(pid, None)   # there is nothing to wait for any more |
 | application.py | 872 | self.jobs.pop(pid, None)   # the result is registered: only now the job leaves the queue |
-| application.py | 948 | jobs.append({"prompt_id": pid, "state": job.get("state") or "queued", |
+| application.py | 961 | jobs.append({"prompt_id": pid, "state": job.get("state") or "queued", |
 | agentapi.py | 673 | running = job.get("state") == "running" |
 | services/jobs.py | 72 | record.apply(JobState.SUBMITTING, now=self._clock()) |
 | services/jobs.py | 77 | record.fail(str(e), now=self._clock()) |
@@ -244,11 +244,11 @@
 | файл | строка | код |
 | --- | --- | --- |
 | application.py | 94 | self.pending = {}  # item id -> item; memory only, so a restart forgets them |
-| application.py | 960 | for item in (*self.library.items, *self.pending.values()): |
-| application.py | 988 | return self.library.get(item_id) or self.pending.get(item_id) |
-| application.py | 993 | self.pending[item["id"]] = item |
-| application.py | 994 | while len(self.pending) > PREVIEW_LIMIT: |
-| application.py | 995 | self.pending.pop(next(iter(self.pending))) |
+| application.py | 969 | for item in (*self.library.items, *self.pending.values()): |
+| application.py | 997 | return self.library.get(item_id) or self.pending.get(item_id) |
+| application.py | 1002 | self.pending[item["id"]] = item |
+| application.py | 1003 | while len(self.pending) > PREVIEW_LIMIT: |
+| application.py | 1004 | self.pending.pop(next(iter(self.pending))) |
 | services/media.py | 399 | self.library.repo.add(item)   # the row and the file are both there, or neither is shown |
 | services/media.py | 524 | existing = self.library.get(item["id"]) |
 | services/media.py | 527 | self.library.add(item)          # the row is written first: it may raise, the draft is kept |
@@ -290,8 +290,8 @@
 | application.py | 339 | worker = asyncio.ensure_future(asyncio.to_thread(func, *args)) |
 | application.py | 502 | self.hw = await asyncio.to_thread(engine.detect_hardware) |
 | application.py | 541 | gpu = await asyncio.to_thread(self.monitor.gpu) |
-| application.py | 1055 | raw = await asyncio.to_thread(path.read_bytes) |
-| application.py | 1109 | gpu = await asyncio.to_thread(self.monitor.gpu) |
+| application.py | 1064 | raw = await asyncio.to_thread(path.read_bytes) |
+| application.py | 1118 | gpu = await asyncio.to_thread(self.monitor.gpu) |
 | agentapi.py | 320 | gpu = await asyncio.to_thread(app.monitor.gpu) |
 | services/engines.py | 89 | await asyncio.to_thread(process.stop)   # a worker thread: terminate + wait 15 s + taskkill |
 | services/engines.py | 109 | await asyncio.to_thread(self.process.restart) |

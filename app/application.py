@@ -904,6 +904,19 @@ class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, Agent
         """
         await self.events.publish(payload)
 
+    def recent_outcomes(self, limit=100):
+        """The latest outcomes in the window's words (oldest first): prompt_id, state, at, message.
+
+        The record is the owner of the outcome, so the same list is served to a reconnecting window
+        and to an agent, and it contains what happened in earlier runs of the program as well.
+        """
+        words = {"succeeded": "done", "failed": "error", "canceled": "interrupted"}
+        return [{"prompt_id": record.prompt_id or record.backend_job_id,
+                 "state": words[record.state.value],
+                 "at": datetime.fromtimestamp(record.updated_at).isoformat(timespec="seconds"),
+                 "message": (record.legacy or {}).get("message") or ""}
+                for record in reversed(self.jobs_repo.outcomes(limit=limit))]
+
     def job_outcome(self, pid):
         """How a job that has left the queue ended: the record in the database is the one owner.
 
@@ -950,11 +963,7 @@ class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, Agent
                          "mode": meta.get("mode"), "finalizing": bool(job.get("finalizing")),
                          "prompt": str(meta.get("sub") or meta.get("prompt") or "")[:140],
                          "agent": (meta.get("origin") or {}).get("kind") == "agent"})
-        recent = [{"prompt_id": record.prompt_id or record.backend_job_id,
-                   "state": {"succeeded": "done", "failed": "error", "canceled": "interrupted"}[record.state.value],
-                   "at": datetime.fromtimestamp(record.updated_at).isoformat(timespec="seconds"),
-                   "message": (record.legacy or {}).get("message") or ""}
-                  for record in reversed(self.jobs_repo.outcomes(limit=100))]
+        recent = self.recent_outcomes(limit=100)
         wanted = {rec["prompt_id"] for rec in recent}
         results = []
         for item in (*self.library.items, *self.pending.values()):

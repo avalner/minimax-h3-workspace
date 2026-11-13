@@ -46,6 +46,9 @@
 app/
   main.py                 # окно, запуск и остановка сервера
   server.py               # сборка зависимостей и подключение маршрутов
+  application.py          # App: жизненный цикл, движок, задания, очередь, библиотека, события
+  webcommon.py            # пути данных, бюджеты остановки, общие помощники, Library
+  journal.py              # журнал заданий для отчёта разработчику (без секретов)
   domain/
     jobs.py               # состояния, JobSpec, JobRecord, правила переходов
     media.py              # MediaRecord, ссылки на файлы, политика черновиков
@@ -57,7 +60,7 @@ app/
   storage/
     atomic.py             # атомарные JSON и маленькие файлы
     database.py           # соединение, транзакции, версия схемы
-    repositories.py       # задания, результаты, ключи повторных запросов
+    repositories.py       # задания, результаты (включая исходы), ключи повторных запросов
     migrations.py         # импорт и обновления схемы
   backends/
     comfy.py              # протокол ComfyUI
@@ -66,8 +69,8 @@ app/
   runtime/
     tasks.py              # TaskSupervisor
     events.py             # уведомления и доставка WebSocket
-  http/
-    jobs.py, media.py, ... # группы маршрутов, тонкие обработчики
+  routes/
+    status.py, models.py, ... # группы маршрутов, тонкие обработчики (смешиваются в App)
   ui/
     index.html
     css/...
@@ -75,6 +78,11 @@ app/
 ```
 
 Направление зависимостей: HTTP → services → domain и интерфейсы storage/backends. Конкретные реализации соединяются в build_app. Domain не импортирует server, aiohttp, pywebview или subprocess. Backend не получает весь App. Не создавать пустые слои и классы только ради схемы: переносить ответственность вместе с её реальным использованием.
+
+Правила импортов закреплены проверкой [test_layers.py](../../tests/unit/test_layers.py): `domain`,
+`services`, `storage`, `backends` и `runtime` не импортируют `aiohttp`/`web`/`server`/`application`/
+`routes`/`webcommon` (domain — ещё и `subprocess`); группы `routes/*` не импортируют друг друга,
+`application` и `server`; `webcommon` и `report.py` не импортируют приложение.
 
 ## 4. Порядок реализации
 
