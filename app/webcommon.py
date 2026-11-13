@@ -319,6 +319,11 @@ def round_size(form, step=32, low=256, high=2048, max_px=2200000):
     return r(w), r(h)
 
 
+# MiniMax H3 Image works at 4-20 MP of area: its own size limit is far above the 2.2 MP of the other picture models
+H3IMG_MAX_PX = 20_000_000
+H3IMG_MAX_SIDE = 8192
+
+
 SUPPORT_URL = "https://pay.cloudtips.ru/p/0e4d4824"
 # Immers.Cloud: the author's referral link goes here (a discount for the new user, a bonus for the author). Empty: the plain site is opened.
 RENT_REFERRAL = "https://immers.cloud/signup/r/20240927-7463913-939/"

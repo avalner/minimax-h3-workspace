@@ -8,7 +8,7 @@ in one place, `server.build_app`.
 """
 
 from webcommon import (
-    CLIENT_ID, LONG_DIR, WORKFLOWS_DIR, comfy_error_text, freshest_long_run, http_refusal,
+    CLIENT_ID, H3IMG_MAX_PX, H3IMG_MAX_SIDE, LONG_DIR, WORKFLOWS_DIR, comfy_error_text, freshest_long_run, http_refusal,
     lora_strength, media_input, round_size, split_frames
 )
 
@@ -136,7 +136,7 @@ class GenerateRoutes:
                 crop = await self.upload_input(field)
             elif field.name == "orig" and field.filename:
                 form["_orig"] = await self.upload_input(field)
-            elif field.name in ("image2", "image3") and field.filename:
+            elif field.name in ("image2", "image3", "image4", "image5") and field.filename:
                 extra.append(await self.upload_input(field))
             else:
                 form[field.name] = await field.text()
@@ -289,6 +289,15 @@ class GenerateRoutes:
             return await self.queue(graph, stages, {
                 "mode": "krea", "sub": "Изображение (FLUX.2)", "prompt": prompt, "aspect": aspect, "q": "1K",
                 "len": 0.0, "res": f"{width}×{height}", "seed": seed, "inputs": [], **lab}, preview=preview)
+        if engine == "h3img":   # MiniMax H3 Image: the size comes from the format and the area (MP), not from the 1 MP table
+            await self.need_models("h3img")
+            mp = wf.H3IMG_MP.get(form.get("mp", "4"), 4.0)
+            # the size of the user's own is not cut down to 2 MP here: this model lives at 4-16 MP
+            width, height = round_size(form, high=H3IMG_MAX_SIDE, max_px=H3IMG_MAX_PX) or wf.h3img_size(aspect, mp)
+            graph, stages = wf.h3img_t2i_graph(self.model_names, prompt, width, height, seed)
+            return await self.queue(graph, stages, {
+                "mode": "krea", "sub": "Изображение (MiniMax H3 Image)", "prompt": prompt, "aspect": aspect,
+                "q": f"{mp:g} МП", "len": 0.0, "res": f"{width}×{height}", "seed": seed, "inputs": [], **lab}, preview=preview)
         if engine == "qwen":
             await self.need_models("qwen")
             graph, stages = wf.qwen_t2i_graph(self.model_names, prompt, form.get("negative", "").strip()[:600], width, height, seed)
@@ -310,8 +319,12 @@ class GenerateRoutes:
     async def h_generate_qwen(self, req):
         form, image, seed = await self.read_image_form(req)
         preview = form.get("preview") == "1"   # from the picture sections: the Library waits for «Добавить в библиотеку»
-        flux = form.get("kind") != "sheet" and form.get("engine") == "flux"
-        await self.need_models("flux" if flux else "qwen")
+        kind = form.get("kind", "edit")
+        flux = kind != "sheet" and form.get("engine") == "flux"
+        # MiniMax H3 Image lives inside the picture editor: edit / storyboard / character sheet, up to 5 reference pictures.
+        # "bg" and "outpaint" stay on Qwen: they are built around the Qwen pipeline and have no H3 recipe.
+        h3 = form.get("engine") == "h3img" and kind in ("edit", "story", "sheet")
+        await self.need_models("h3img" if h3 else "flux" if flux else "qwen")
 
         def pics(main_role):
             out = [media_input(main_role, "image", comfy=image)] if image else []
@@ -356,18 +369,25 @@ class GenerateRoutes:
                 "mode": "qwen", "sub": "Расширение изображения", "prompt": prompt, "aspect": "",
                 "q": "", "len": 0.0, "res": f"{w}×{h}", "seed": seed}, preview=preview)
         if form.get("kind") == "story" and form.get("frames") == "1":
-            # storyboard frame by frame (FLUX.2 klein): every frame is its own picture, the sheet is glued from them
+            # storyboard frame by frame: every frame is its own picture, the sheet is glued from them
             use_qwen = form.get("engine") == "qwen"
-            await self.need_models("qwen" if use_qwen else "flux")
+            await self.need_models("h3img" if h3 else "qwen" if use_qwen else "flux")
             frames = split_frames(form.get("prompt", ""))
             if len(frames) not in wf.FRAME_COLS:
                 raise web.HTTPBadRequest(text=f"Нужно 2, 3, 4, 6, 8 или 9 кадров, а в описании их {len(frames)}. Напишите каждый кадр с новой строки: «1: ...», «2: ...».")
             refs = [x for x in ([image] if image else []) + list(form.get("_extra") or [])]
-            build = wf.qwen_frames_graph if use_qwen else wf.flux_frames_graph
-            graph, stages, titles = build(self.model_names, refs, frames, seed, size=round_size(form) or wf.FRAME_SIZE, line=form.get("line", "white"))
+            build = wf.h3img_frames_graph if h3 else wf.qwen_frames_graph if use_qwen else wf.flux_frames_graph
+            if h3:   # a frame is at most 8 MP: nine frames of 16 MP would take an hour
+                fsize = (round_size(form, high=H3IMG_MAX_SIDE, max_px=H3IMG_MAX_PX)
+                         or wf.h3img_size("16:9", min(wf.H3IMG_MP.get(form.get("size", "8"), 8.0), 8.0)))
+            else:
+                fsize = round_size(form) or wf.FRAME_SIZE
+            graph, stages, titles = build(self.model_names, refs, frames, seed, size=fsize, line=form.get("line", "white"))
             return await self.queue(graph, stages, {
                 "mode": "qwen", "sub": "Раскадровка по кадрам", "prompt": form.get("prompt", "").strip(), "aspect": "",
-                "q": "", "len": 0.0, "res": "", "seed": seed, "inputs": pics("Референс персонажа")}, titles=titles, preview=preview)
+                "q": f"{fsize[0] * fsize[1] / 1e6:.0f} МП" if h3 else "", "len": 0.0, "res": "%d×%d" % fsize if h3 else "",
+                "seed": seed, "inputs": pics("Референс персонажа"), **({"engine": "h3img", "mp": f"{fsize[0] * fsize[1] / 1e6:g}"} if h3 else {})},
+                titles=titles, preview=preview)
         if not image:
             raise web.HTTPBadRequest(text="Загрузите изображение")
         if form.get("kind") == "story":
@@ -375,14 +395,36 @@ class GenerateRoutes:
             if not prompt:
                 raise web.HTTPBadRequest(text="Опишите историю по кадрам")
             refs = [image] + list(form.get("_extra") or [])
-            sz = round_size(form) or wf.STORY_SIZE
-            if flux:
+            if h3:
+                sz = (round_size(form, high=H3IMG_MAX_SIDE, max_px=H3IMG_MAX_PX)
+                      or wf.h3img_size("16:9", wf.H3IMG_MP.get(form.get("size", "16"), 16.0)))
+                graph, stages = wf.h3img_story_graph(self.model_names, refs, prompt, seed, sz)
+            elif flux:
+                sz = round_size(form) or wf.STORY_SIZE
                 graph, stages = wf.flux_story_graph(self.model_names, refs, prompt, seed, sz)
             else:
+                sz = round_size(form) or wf.STORY_SIZE
                 graph, stages = wf.qwen_story_graph(self.model_names, refs, prompt, seed, sz)
             return await self.queue(graph, stages, {
                 "mode": "qwen", "sub": "Раскадровка по изображениям", "prompt": prompt, "aspect": "",
-                "q": "", "len": 0.0, "res": "%d×%d" % wf.STORY_SIZE, "seed": seed, "inputs": pics("Главный герой")}, preview=preview)
+                "q": f"{wf.H3IMG_MP.get(form.get('size', '16'), 16.0):g} МП" if h3 else "", "len": 0.0,
+                "res": "%d×%d" % sz if h3 else "%d×%d" % wf.STORY_SIZE, "seed": seed, "inputs": pics("Главный герой"),
+                **({"engine": "h3img"} if h3 else {})}, preview=preview)
+        if h3 and kind == "edit":   # «Править по описанию» on MiniMax H3 Image: the picture to edit + up to 4 references
+            prompt = form.get("prompt", "").strip()
+            if not prompt:
+                raise web.HTTPBadRequest(text="Напишите, что сделать с изображениями")
+            mp = wf.H3IMG_MP.get(form.get("size", "4"), 4.0)
+            size = round_size(form, high=H3IMG_MAX_SIDE, max_px=H3IMG_MAX_PX) \
+                or (wf.h3img_size(form.get("aspect"), mp) if form.get("aspect") else None)
+            refs = [image] + list(form.get("_extra") or [])
+            # the references go in at 4 MP at most: a big result stays clean without feeding huge pictures to the encoder
+            graph, stages = wf.h3img_edit_graph(self.model_names, prompt, refs, mp, seed, size, min(mp, 4.0))
+            return await self.queue(graph, stages, {
+                "mode": "qwen", "sub": f"Правка (MiniMax H3 Image, картинок: {len(refs)})", "prompt": prompt,
+                "aspect": form.get("aspect", ""), "q": f"{mp:g} МП", "len": 0.0,
+                "res": "%d×%d" % size if size else "", "seed": seed, "inputs": pics("Исходное изображение"),
+                "engine": "h3img", "mp": f"{mp:g}"}, preview=preview)
         if flux:
             prompt = form.get("prompt", "").strip()
             if not prompt:
@@ -394,10 +436,15 @@ class GenerateRoutes:
                 "q": "", "len": 0.0, "res": "", "seed": seed, "inputs": pics("Исходное изображение")}, preview=preview)
         if form.get("kind") == "sheet":
             panels = 6 if form.get("panels") == "6" else 4
-            graph, stages, prompt = wf.qwen_sheet_graph(
+            sheet_mp = wf.H3IMG_MP.get(form.get("size", "16"), 16.0)
+            build = wf.h3img_sheet_graph if h3 else wf.qwen_sheet_graph
+            graph, stages, prompt = build(
                 self.model_names, image, seed, headless=form.get("headless", "1") != "0",
-                background=form.get("background", "grey"), marks=form.get("marks", "")[:300], panels=panels)
-            sub, res = "Лист персонажа", "%d×%d" % (wf.SHEET6_SIZE if panels == 6 else wf.SHEET_SIZE)
+                background=form.get("background", "grey"), marks=form.get("marks", "")[:300], panels=panels,
+                **({"mp": sheet_mp} if h3 else {}))
+            size = (wf.h3img_size("11:5" if panels == 6 else "16:9", sheet_mp) if h3
+                    else (wf.SHEET6_SIZE if panels == 6 else wf.SHEET_SIZE))
+            sub, res = "Лист персонажа", "%d×%d" % size
             prompt = "Лист персонажа" + (" (6 панелей)" if panels == 6 else "") + (": " + form["marks"].strip()[:80] if form.get("marks", "").strip() else "")
         else:
             prompt = form.get("prompt", "").strip()
@@ -411,7 +458,9 @@ class GenerateRoutes:
                   else pics("Исходное изображение"))
         return await self.queue(graph, stages, {
             "mode": "qwen", "sub": sub, "prompt": prompt, "aspect": form.get("aspect", "") if form.get("kind") != "sheet" else "",
-            "q": "", "len": 0.0, "res": res, "seed": seed, "inputs": inputs}, preview=preview)
+            "q": f"{sheet_mp:g} МП" if h3 and form.get("kind") == "sheet" else "", "len": 0.0, "res": res, "seed": seed,
+            "inputs": inputs, **({"engine": "h3img", "mp": f"{sheet_mp:g}"} if h3 and form.get("kind") == "sheet" else {})},
+            preview=preview)
 
     async def fused_model(self):
         """The Fused Turbo checkpoint for the Video section, or None when its file is not in this ComfyUI."""
