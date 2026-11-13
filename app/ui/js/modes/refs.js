@@ -26,6 +26,9 @@ let REF_FUSED_CHECK = null;   // the references section re-checks its optional m
 function makeRefMode(cfg) {
   const root = $('#view-' + cfg.mode);
   const S = { aspect: '16:9', q: 'HD+', dur: cfg.dur, steps: 6, refSize: 'max', accel: 'old', unet: 'fast', len: () => S.dur };
+  // this section writes its own markup, while the stage bar («＋ Сохранить этап» / «Этапы ▾») is the
+  // page's and was put there before this module was loaded: keep it, or the section loses its stages
+  const stBar = $('.st-bar', root);
   root.innerHTML = `
     <div class="head"><div><h1>${cfg.title}</h1><p>${cfg.sub}</p></div><div class="mode-pill"><i></i><span class="rm-pill">${cfg.pill}</span></div></div>
     <div class="grid"><div class="col">
@@ -46,6 +49,7 @@ function makeRefMode(cfg) {
       </div>
       <div class="card rm-params"></div>
     </div><div class="preview rm-preview"></div></div>`;
+  if (stBar) root.prepend(stBar);   // the section's stages stay above its own markup
   const imgsEl = $('.rm-imgs', root), vidsEl = $('.rm-vids', root), audsEl = $('.rm-auds', root);
 
   // picture slots (same behaviour as Lipsync)
@@ -239,7 +243,12 @@ function makeRefMode(cfg) {
       root._renderTL?.(); changed(); onScenes(); refreshStates(); if (root._save && !root._restoring) root._save();
     };
     root._recount = recount;
-    root._mode = 'parts'; root._run = Math.random().toString(36).slice(2, 12);
+    /* A film belongs to a project: the studio keeps the project the film was started in, so the work
+       is never written into another project after the header was switched. A new film of a new
+       project gets a fresh run id; the old one stays saved under its own project. */
+    const newRun = () => { root._run = Math.random().toString(36).slice(2, 12); root._project = window.h3Projects?.active?.() || ''; return root._run; };
+    root._newRun = newRun;
+    root._mode = 'parts'; newRun();
     const sig = c => JSON.stringify([+$('input[type=range]', c).value]);
     const secOf = sg => { try { const a = JSON.parse(sg); return a.length === 1 ? a[0] : a[1]; } catch { return null; } };   // old saved projects had [text, seconds, file]
     const sigOk = c => !!c._done && String(secOf(c._done.sig)) === String(+$('input[type=range]', c).value);
@@ -310,7 +319,7 @@ function makeRefMode(cfg) {
     root._setSrc = (src, fresh = true) => {   // src: { id } of a library clip or { file } from the computer; null removes it
       root._src = src || null;
       $('.lm-src', root).hidden = !src; $('.lm-srcname', root).textContent = src ? src.name : '';
-      if (src && fresh) { root._run = Math.random().toString(36).slice(2, 12); $$('.sc', root).forEach(c => { c._dn = { draft: null, final: null }; }); }
+      if (src && fresh) { newRun(); $$('.sc', root).forEach(c => { c._dn = { draft: null, final: null }; }); }
       if (src) setMode('parts');
       $('.lm-mode [data-m="all"]', root).disabled = !!src;
       refreshStates();
@@ -330,7 +339,7 @@ function makeRefMode(cfg) {
       $$('.sc', root).forEach(c => c.remove());
       list.slice(0, 12).forEach(x => addScene(x.prompt, Math.min(15, Math.max(3, Math.round(x.sec) || 10)), !!x.fresh));
       root._sel = 0;
-      root._run = Math.random().toString(36).slice(2, 12); recount(); refreshStates();
+      newRun(); recount(); refreshStates();
     };
     root._partDone = item => {
       const lg = item && item.long; if (!lg || lg.run !== root._run) return;
@@ -361,12 +370,19 @@ function makeRefMode(cfg) {
     function saveNow() {
       try {
         const run = root._run, slotA = $('.rm-auds .slot', root);
-        const proj = { run, t: Date.now(), mode: root._mode, qm: root._q, qBy: { ...(root._qBy || {}), [root._q]: S.q }, snd: root._snd, start: $('.lm-start', root).value, vocals: $('.lm-vocals', root).checked,
+        const proj = { run, project: root._project || window.h3Projects?.active?.() || '', t: Date.now(), mode: root._mode, qm: root._q, qBy: { ...(root._qBy || {}), [root._q]: S.q }, snd: root._snd, start: $('.lm-start', root).value, vocals: $('.lm-vocals', root).checked,
           aspect: S.aspect, q: S.q, cw: S.cw || 0, ch: S.ch || 0, src: root._src ? { id: root._src.id || '', name: root._src.name } : null,
           scenes: $$('.sc', root).map(c => ({ prompt: $('textarea', c).value, sec: +$('input[type=range]', c).value, fresh: !!$('.sc-fresh', c)?.checked, nimg: c._files.length, var: c._var || 0,
             done: c._dn.final ? { sig: c._dn.final.sig, url: c._dn.final.url, id: c._dn.final.id, text: c._dn.final.text } : null,
             draftDone: c._dn.draft ? { sig: c._dn.draft.sig, url: c._dn.draft.url, id: c._dn.draft.id, text: c._dn.draft.text } : null })) };
-        const all = loadAll(); all[run] = proj;
+        const all = loadAll();
+        // An untouched studio is not a film: it starts with two empty scenes, and saving them would
+        // create a record (and a folder) that is later offered as a work to keep. A film that was
+        // saved once keeps being saved even if the scenes are cleared — the record is already there.
+        const hasWork = proj.scenes.some(x => String(x.prompt || '').trim() || x.done || x.draftDone)
+          || $$('.ref.filled', imgsEl).length > 0 || !!(slotA && slotA._file);
+        if (!hasWork && !all[run]) return;
+        all[run] = proj;
         Object.keys(all).sort((a, b) => all[b].t - all[a].t).slice(8).forEach(k => delete all[k]);   // the 8 latest projects
         localStorage.setItem(PKEY, JSON.stringify(all)); localStorage.setItem('h3-long-last', run);
         apiPost('/api/long/project', { run, project: proj }).catch(() => {});
@@ -378,6 +394,7 @@ function makeRefMode(cfg) {
     }
     root._save = () => { clearTimeout(saveT); saveT = setTimeout(saveNow, 700); };
     root._flush = () => { clearTimeout(saveT); saveNow(); };
+    root._cancelSave = () => clearTimeout(saveT);
     root._snap = () => { saveNow(); return JSON.parse(JSON.stringify(loadAll()[root._run] || null)); };   // a stage of the work: the whole project as it is now
     root._openStage = async (proj, sid) => {
       let r = {}; try { r = await apiPost('/api/long/stage', { run: proj.run, id: sid, action: 'restore' }); } catch {}
@@ -390,6 +407,9 @@ function makeRefMode(cfg) {
       try { onDisk = await apiGet('/api/long/project?run=' + run); } catch {}
       if (!p && onDisk && onDisk.project) p = onDisk.project;
       if (!p) return false;
+      // the project the film was made in: an old record without one joins the project that is open
+      root._project = String(p.project || (onDisk && onDisk.project && onDisk.project.project) || '')
+                      || (window.h3Projects?.active?.() || '');
       const getRef = async key => {   // a picture of the project: the browser's memory, else the copy kept by the program (after a stage is opened: the copy first)
         if (!root._diskRefs) { const f = await memFile('get', `long/${run}/${key}`); if (f instanceof File) return f; }
         const nm = ((onDisk && onDisk.refs) || []).find(x => x.startsWith(key + '.')); if (!nm) return null;
@@ -427,11 +447,44 @@ function makeRefMode(cfg) {
       setMode(p.mode || 'parts'); root._restoring = false; recount(); refreshStates(); RM.long?.upd?.();
       return true;
     };
+    /* The film of the project that is open, else a new one. A film never follows the studio into
+       another project: the header's switch brings this project's own film back (or starts one). */
+    const projectFilm = async project => {
+      if (!project) return '';
+      try { const r = await apiGet('/api/long/project?project=' + encodeURIComponent(project)); return (r && r.run) || ''; } catch { return ''; }
+    };
+    /* the header switched the project: what is on the screen goes to the project it was made in, then
+       the studio opens the film of the new project — or starts a new one with empty scenes */
+    root._projectChanged = async () => {
+      const project = window.h3Projects?.active?.() || '';
+      if (project === root._project) return;
+      // a film is saved into the project it was made in — but a project that has just been deleted
+      // takes its film with it, and a save would only recreate the folder
+      if (PROJECTS_VIEW.list.some(p => p.id === root._project)) root._flush();
+      else { root._cancelSave?.(); root._project = ''; }
+      const run = await projectFilm(project);
+      if (run) { await root._openRun(run); return; }
+      $$('.sc', root).forEach(c => c.remove());
+      root._sel = 0; root._setSrc(null, false); newRun();
+      addScene('', 10); addScene('', 10); recount(); refreshStates();
+      const name = (PROJECTS_VIEW.list.find(p => p.id === project) || {}).name;
+      toast(`Проект${name ? ': «' + name + '»' : ''}. Начинаем новый фильм`);
+    };
     root._restoring = true;   // nothing is saved until the last project has been put back
     setTimeout(async () => {
       try {
-        let last = localStorage.getItem('h3-long-last');
-        if (!last) { const r = await apiGet('/api/long/project?last=1'); last = r.run || ''; }
+        // the film of the project that is open first; «h3-long-last» and ?last=1 are the fallback for
+        // the films saved before a film knew its project (a film of another project is never opened)
+        let last = await projectFilm(window.h3Projects?.active?.() || '');
+        if (!last) {
+          last = localStorage.getItem('h3-long-last') || '';
+          if (!last) { const r = await apiGet('/api/long/project?last=1'); last = r.run || ''; }
+          if (last) {
+            const r = await apiGet('/api/long/project?run=' + encodeURIComponent(last)).catch(() => null);
+            const own = (r && r.project && r.project.project) || '';
+            if (own && own !== (window.h3Projects?.active?.() || '')) last = '';
+          }
+        }
         if (last) await root._openRun(last);
       } catch {}
       root._restoring = false; root._save();
@@ -439,7 +492,7 @@ function makeRefMode(cfg) {
 
     const rst = document.createElement('button'); rst.className = 'btn lm-reset'; rst.type = 'button'; rst.hidden = true; rst.textContent = 'Начать заново';
     rst.title = 'Забыть сделанные сцены. Нужно, если меняете изображения героя, размер или звук: следующие сцены не должны продолжать старые.';
-    rst.onclick = () => { root._run = Math.random().toString(36).slice(2, 12); $$('.sc', root).forEach(c => { c._dn = { draft: null, final: null }; }); refreshStates(); toast('Начинаем сначала'); };
+    rst.onclick = () => { newRun(); $$('.sc', root).forEach(c => { c._dn = { draft: null, final: null }; }); refreshStates(); toast('Начинаем сначала'); };
     $('#lmAdd', root).after(rst);
     const addScene = (txt = '', sec = 10, fresh = false) => {
       const c = document.createElement('div'); c.className = 'sc'; c._dn = { draft: null, final: null };
@@ -651,12 +704,12 @@ function makeRefMode(cfg) {
       root._undo = [];
       const refsFiles = () => $$('.ref', imgsEl).map(r => r._file || null);
       root._pushUndo = () => {
-        root._undo.push({ run: root._run, sel: root._sel, refs: refsFiles(), scenes: $$('.sc', root).map(c => ({ prompt: $('textarea', c).value, sec: +$('input[type=range]', c).value, fresh: !!$('.sc-fresh', c)?.checked, files: [...c._files], dn: { ...c._dn }, old: c._old, tests: [...c._tests], var: c._var || 0 })) });
+        root._undo.push({ run: root._run, project: root._project, sel: root._sel, refs: refsFiles(), scenes: $$('.sc', root).map(c => ({ prompt: $('textarea', c).value, sec: +$('input[type=range]', c).value, fresh: !!$('.sc-fresh', c)?.checked, files: [...c._files], dn: { ...c._dn }, old: c._old, tests: [...c._tests], var: c._var || 0 })) });
         if (root._undo.length > 10) root._undo.shift();
       };
       root._doUndo = async () => {
         const u = root._undo.pop(); if (!u) return;
-        $$('.sc', root).forEach(c => c.remove()); root._run = u.run;
+        $$('.sc', root).forEach(c => c.remove()); root._run = u.run; root._project = u.project || root._project;
         u.scenes.forEach(x => { addScene(x.prompt, x.sec, x.fresh); const c = $$('.sc', root).pop(); c._files = x.files; c._paint(); c._dn = x.dn; c._old = x.old; c._tests = x.tests; c._paintTests(); c._var = x.var; });
         const names = a => JSON.stringify(a.map(f => f && f.name));
         if (names(refsFiles()) !== names(u.refs)) { $$('.ref .x', imgsEl).forEach(x => x.click()); for (let i = 0; i < u.refs.length; i++) if (u.refs[i]) await putInto($$('.ref input', imgsEl)[i], u.refs[i]); }
@@ -667,7 +720,7 @@ function makeRefMode(cfg) {
       clr.title = 'Стирает все сцены, изображения и готовые результаты проекта. Библиотека не затрагивается';
       clr.onclick = () => confirmBox('Очистить весь проект?', 'Все сцены, изображения героя и результаты этого проекта будут стёрты со страницы, останутся две пустые сцены. Готовые видео в Библиотеке не удаляются.', 'Очистить', () => {
         root._pushUndo();
-        $$('.sc', root).forEach(c => c.remove()); root._run = Math.random().toString(36).slice(2, 12); root._sel = 0;
+        $$('.sc', root).forEach(c => c.remove()); newRun(); root._sel = 0;
         $$('.ref .x', imgsEl).forEach(x => x.click()); root._setSrc?.(null);
         addScene('', 10); addScene('', 10); recount(); refreshStates(); toast('Проект очищен');
       });
@@ -759,6 +812,7 @@ function makeRefMode(cfg) {
     target: () => $('.ref img', imgsEl),
     meta: () => ({ mode: cfg.mode, prompt: promptEl().value.trim(), sub: '' }),
     onDone: item => { addToLib(item); if (cfg.scenes && root._partDone) root._partDone(item); },
+    onShow: item => { S.shownId = item.id; },   // the stage remembers the clip that was on the screen
     validate: () => cfg.swap ? (!files('.rm-vids .slot').length ? 'Добавьте видео, в котором нужно заменить человека' : !$$('.ref.filled', imgsEl).length ? 'Добавьте изображение нового персонажа' : '')
       : !cfg.scenes && !$$('.ref.filled', imgsEl).length && !(vidsEl && files('.rm-vids .slot').length) ? 'Добавьте хотя бы одно референс-изображение'
       : $$('.ref.filled', imgsEl).length + (vidsEl ? files('.rm-vids .slot').length : 0) + files('.rm-auds .slot').length > 12 ? 'Всего не больше 12 референсов'
@@ -1000,6 +1054,9 @@ const RM = {
   }
 
   window.h3Refs = { modelsChanged };
+  /* the header switched the project: the studio saves the film it was editing and opens the film of
+     the new project (or starts a new one). The page awaits it before restoring a stage there. */
+  window.h3LongProjectChanged = () => RM.long?.root?._projectChanged?.();
 
   function disposeMode(id) {
     const r = RM[id]; if (!r) return;

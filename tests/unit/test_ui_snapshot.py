@@ -11,6 +11,7 @@ import unittest
 import support
 
 from domain.jobs import JobRecord, JobState
+from domain.projects import DEFAULT_PROJECT_ID, DEFAULT_PROJECT_NAME
 
 
 class SnapshotTest(unittest.IsolatedAsyncioTestCase):
@@ -67,6 +68,21 @@ class SnapshotTest(unittest.IsolatedAsyncioTestCase):
         entry = self.app.ui_snapshot()["jobs"][0]
         self.assertEqual(entry["state"], "running")
         self.assertTrue(entry["finalizing"])
+
+    async def test_the_row_says_which_project_the_job_was_submitted_in(self):
+        """The queue is the machine's: a row of another project must say so, and say it by name."""
+        self.app.attach_job(support.job_record("p1"), meta={"mode": "video"})
+        project = self.app.create_project("Второй")
+        self.app.attach_job(support.job_record("p2"), meta={"mode": "video"})
+        rows = {row["prompt_id"]: row for row in self.app.ui_snapshot()["jobs"]}
+        self.assertEqual((rows["p1"]["project"], rows["p1"]["project_name"]),
+                         (DEFAULT_PROJECT_ID, DEFAULT_PROJECT_NAME))
+        self.assertEqual((rows["p2"]["project"], rows["p2"]["project_name"]), (project["id"], "Второй"))
+
+    async def test_a_job_without_a_project_does_not_break_the_row(self):
+        self.app.jobs["p-none"] = support.job("p-none", meta={"mode": "video", "prompt": "старое"})
+        row = self.app.ui_snapshot()["jobs"][0]
+        self.assertEqual((row["project"], row["project_name"]), ("", ""))
 
 
 if __name__ == "__main__":

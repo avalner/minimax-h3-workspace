@@ -142,9 +142,10 @@ body.nosb-on #sbRs{display:none}
 /* RunningHub cloud is switched off in the interface for now (not finished, would mislead) */
 .opt[data-opt="cloud"],#optCloudShow,#mdCloudBox{display:none!important}
 body.cloud-on #mdCloudBox{display:block!important}
-/* the sections are plain links, not buttons: only the text and a thin underline show the current one */
-#modeBar{grid-column:2;grid-row:1;display:flex;align-items:center;gap:2px;min-width:0;overflow-x:auto;white-space:nowrap;scrollbar-width:none;padding:9px clamp(20px,2.2vw,44px) 0 56px}
-.app.nosb #modeBar{grid-column:1/-1}
+/* the sections are plain links, not buttons: only the text and a thin underline show the current one.
+   The row also carries the project switcher on the right; the links scroll, the switcher never does. */
+.tb-row1{grid-column:2;grid-row:1;display:flex;align-items:center;justify-content:flex-end;gap:10px;min-width:0;padding:9px clamp(20px,2.2vw,44px) 0 56px}
+#modeBar{order:1;flex:1 1 auto;display:flex;align-items:center;gap:2px;min-width:0;overflow-x:auto;white-space:nowrap;scrollbar-width:none}
 #modeBar::-webkit-scrollbar{display:none}
 #modeBar .mb{flex:none;display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border:0;background:none;color:var(--muted);font-size:12.5px;font-weight:600;cursor:pointer;text-decoration:none;text-underline-offset:4px}
 #modeBar .mb svg{width:14px;height:14px;opacity:.8}
@@ -177,6 +178,7 @@ body.cloud-on #mdCloudBox{display:block!important}
 .bm-item .bm-x{flex:none;width:18px;height:18px;border-radius:6px;display:grid;place-items:center;color:var(--pink);font-size:15px;line-height:1}
 .bm-item .bm-x:hover{background:rgba(255,80,110,.15)}
 .nav .badge{margin-left:auto;font-size:10.5px;padding:2px 7px;border-radius:99px;background:var(--surface-2);color:var(--dim);font-weight:700}
+.nav .badge i{font-style:normal;opacity:.7;margin-left:2px}
 .nav[disabled]{opacity:.55;cursor:default}
 .nav[disabled]:hover{background:none;color:var(--muted)}
 .side-foot{margin:6px 14px 14px;flex:none;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:11px 13px;display:flex;flex-direction:column;gap:8px}
@@ -249,7 +251,9 @@ body.first-run .pr-first{display:flex}
 .q-row.run{border-color:var(--accent)}
 .q-n{width:34px;height:34px;border-radius:50%;background:var(--surface-2);display:grid;place-items:center;font-weight:800;color:var(--muted)}
 .q-row.run .q-n{background:var(--grad);color:#fff}
-.q-t{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.q-t{display:flex;align-items:center;gap:8px;font-weight:700}
+.q-tt{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.q-proj{flex:0 0 auto;padding:1px 7px;border-radius:99px;background:var(--surface-2);border:1px solid var(--line);font-size:11px;font-weight:600;color:var(--muted);white-space:nowrap}
 .q-s{font-size:12.5px;color:var(--muted);margin-top:2px}
 .q-bar{height:5px;border-radius:9px;background:var(--surface-2);overflow:hidden;margin-top:7px}
 .q-bar i{display:block;height:100%;background:var(--grad);transition:width .4s}
@@ -349,3 +353,77 @@ body.first-run .pr-first{display:flex}
 @media (max-width:1000px){#modeBar{display:none}}
 @media (max-height:760px){.side-foot{gap:6px;padding:9px 11px}.side-foot .stat{font-size:11.5px}}
 @media (max-width:1100px){.grid{grid-template-columns:1fr}.preview{position:static}.gresize{display:none}}
+
+/* ---------- projects: the switcher at the right of the sections row ---------- */
+.tb-proj{order:2;flex:none;display:flex;align-items:center;gap:8px;min-width:0;position:relative;z-index:3}
+.proj-cur{display:flex;align-items:center;gap:6px;max-width:200px;padding:4px 10px;border:1px solid var(--line);border-radius:999px;background:transparent;color:var(--text);font:inherit;font-size:12px;cursor:pointer}
+.proj-cur:hover{background:rgba(var(--surface-rgb),.6)}
+.proj-dot{flex:none;width:8px;height:8px;border-radius:50%;background:var(--accent)}
+.proj-nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.proj-car{flex:none;opacity:.6;font-size:10px}
+.proj-all{flex:none;padding:3px 10px;border:1px solid var(--line);border-radius:999px;background:transparent;color:var(--muted);font:inherit;font-size:11px;cursor:pointer}
+.proj-all.on{color:var(--text);border-color:var(--accent);background:var(--accent-soft)}
+.proj-pop{position:absolute;top:100%;right:0;z-index:60;min-width:280px;max-height:60vh;overflow:auto;background:var(--bg-2);border:1px solid var(--line);border-radius:12px;box-shadow:0 18px 40px rgba(0,0,0,.38);padding:6px}
+.proj-item{display:flex;align-items:center;gap:6px;width:100%;text-align:left;padding:8px 10px;border:0;background:transparent;color:var(--text);font:inherit;font-size:13px;border-radius:8px;cursor:pointer}
+.proj-item:hover{background:rgba(var(--surface-rgb),.7)}
+.proj-item.on{background:var(--accent-soft);font-weight:600}
+.proj-item .pn{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.proj-item .pmark{flex:none;color:var(--accent)}
+/* rename and delete of a project: small buttons that appear on the row under the cursor */
+.proj-item .pact{flex:none;width:20px;height:20px;display:grid;place-items:center;border-radius:6px;font-style:normal;font-size:11px;line-height:1;color:var(--dim);opacity:0;transition:opacity .12s}
+.proj-item:hover .pact,.proj-item .pact:focus{opacity:1}
+.proj-item .pact:hover{background:rgba(var(--surface-rgb),.95);color:var(--text)}
+.proj-item .pact.del:hover{background:#c0303f;color:#fff}
+.proj-sep{height:1px;background:var(--line);margin:6px 4px}
+.proj-new{display:flex;gap:6px;padding:6px 4px 2px}
+.proj-new input{flex:1;min-width:0;padding:6px 8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text);font:inherit;font-size:12px}
+@media (max-width:760px){.tb-row1{grid-column:1/-1;padding:8px 16px 0}}
+.app.nosb .tb-row1{grid-column:1/-1}
+
+
+/* ---------- deleting a draft: the question next to the cursor ---------- */
+.ddp{position:fixed;z-index:200;width:auto;min-width:290px;max-width:calc(100vw - 20px);background:var(--bg-2);border:1px solid var(--line);border-radius:12px;box-shadow:0 18px 40px rgba(0,0,0,.45);padding:12px}
+.ddp[hidden]{display:none}
+.ddp-t{font-weight:700;font-size:12.5px;margin-bottom:6px}
+.ddp-b{display:flex;gap:8px;justify-content:flex-end}
+
+/* ---------- deleting a project: what it holds, and what to keep ---------- */
+.pd{display:flex;flex-direction:column;width:min(720px,100%);max-height:calc(var(--vh,1vh)*100 - 40px);padding:0}
+.pd-h{display:flex;align-items:center;gap:12px;padding:18px 22px 12px;border-bottom:1px solid var(--line)}
+.pd-h h3{flex:1;min-width:0;font-size:17px}
+.pd-h h3{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pd-body{padding:16px 22px;overflow:auto;min-height:80px}
+.pd-foot{display:flex;gap:10px;justify-content:flex-end;align-items:center;flex-wrap:wrap;padding:14px 22px 18px;border-top:1px solid var(--line)}
+.pd-foot .btn[disabled]{opacity:.55;cursor:default}
+.pd-lead{margin:0 0 10px;font-weight:700}
+.pd-note{margin:0;font-size:12.5px;line-height:1.5;color:var(--muted)}
+.pd-counts{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin:0 0 14px}
+.pd-counts>div{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface-2);font-size:12.5px;color:var(--muted)}
+.pd-counts b{font-size:15px;color:var(--text)}
+.pd-tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 10px}
+.pd-chosen{margin-left:auto;font-size:12.5px;color:var(--muted)}
+.pd-chosen b{color:var(--text)}
+.pd-g{margin:0 0 12px}
+.pd-gh{font-size:12px;font-weight:700;color:var(--muted);margin:0 0 6px}
+.pd-gh span{margin-left:6px;padding:0 6px;border-radius:99px;background:var(--surface-2);font-size:11px}
+.pd-list{max-height:46vh;overflow:auto;padding-right:2px}
+/* the picker shows the same thumbnails as «Прошлые изображения»: a tile opens the card, the corner
+   box chooses what stays */
+.pd-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:10px}
+.pd-tile{position:relative;display:flex;flex-direction:column;gap:4px;min-width:0}
+.pd-th{position:relative;display:block;width:100%;aspect-ratio:16/9;padding:0;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--screen);cursor:zoom-in}
+.pd-th img,.pd-th video{display:block;width:100%;height:100%;object-fit:cover}
+.pd-tile.on .pd-th{border-color:var(--accent);box-shadow:0 0 0 2px rgba(var(--accent-rgb),.55)}
+.pd-nopv{display:grid;place-items:center;height:100%;font-size:11.5px;color:var(--dim);font-style:normal}
+.pd-badge{position:absolute;left:6px;bottom:6px;padding:1px 6px;border-radius:6px;background:rgba(0,0,0,.62);color:#fff;font-size:10.5px;pointer-events:none}
+.pd-chk{position:absolute;left:6px;top:6px;z-index:2;width:24px;height:24px;display:grid;place-items:center;border-radius:7px;background:rgba(0,0,0,.6);cursor:pointer}
+.pd-chk input{width:15px;height:15px;margin:0;accent-color:var(--accent);cursor:pointer}
+.pd-cap{font-size:11.5px;line-height:1.35;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:zoom-in}
+.pd-card{display:flex;flex-direction:column;width:min(880px,100%);max-height:calc(var(--vh,1vh)*100 - 40px);padding:0}
+.pc-body{padding:16px 22px;overflow:auto}
+.pc-media{display:block;width:100%;max-height:56vh;object-fit:contain;background:#000;border-radius:12px}
+.pc-nopv{display:grid;place-items:center;min-height:200px;border:1px dashed var(--line-2);border-radius:12px;color:var(--dim);font-size:13px}
+.pc-dl{display:grid;grid-template-columns:max-content 1fr;gap:6px 16px;margin:14px 0 0;font-size:12.5px}
+.pc-dl dt{color:var(--muted)}
+.pc-dl dd{margin:0;min-width:0;overflow-wrap:anywhere}
+

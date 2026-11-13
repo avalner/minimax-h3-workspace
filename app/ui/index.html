@@ -33,6 +33,7 @@ setTimeout(() => document.documentElement.classList.add('booted'), 1500);
       </div>
       <div><div class="brand-name">Minimax H3</div><div class="brand-sub">Workspace · локальная генерация</div><div class="brand-sub" id="appVer" style="opacity:.75"></div></div>
     </div>
+    <div class="tb-row1"><div class="tb-proj" id="tbProj"></div></div>
     <div class="tb-head" id="tbHead"></div>
   </header>
 
@@ -858,6 +859,32 @@ equirements.txt</code><br>
   </div>
 </div>
 
+<!-- Deleting a project is the one place that destroys work, so the dialog first says what the project
+     holds and then lets the user choose what to keep: the kept part only changes its project, the
+     rest goes (files to the Recycle Bin, stages and films from the disk). -->
+<div class="modal" id="projDel" hidden>
+  <div class="box pd" role="dialog" aria-modal="true" aria-labelledby="pdTitle">
+    <div class="pd-h">
+      <h3 id="pdTitle">Удалить проект?</h3>
+      <button class="close" data-close aria-label="Закрыть">✕</button>
+    </div>
+    <div class="pd-body" id="pdBody"></div>
+    <div class="pd-foot" id="pdFoot"></div>
+  </div>
+</div>
+
+<!-- One asset in detail: the picker shows a thumbnail, this shows the clip or the picture itself. -->
+<div class="modal" id="pdCard" hidden>
+  <div class="box pd-card" role="dialog" aria-modal="true" aria-labelledby="pcTitle">
+    <div class="pd-h">
+      <h3 id="pcTitle">Результат</h3>
+      <button class="close" data-close aria-label="Закрыть">✕</button>
+    </div>
+    <div class="pc-body" id="pcBody"></div>
+    <div class="pd-foot" id="pcFoot"></div>
+  </div>
+</div>
+
 <div class="modal" id="qjob" hidden>
   <div class="box qj" role="dialog" aria-modal="true" aria-labelledby="qjTitle">
     <div class="qj-h">
@@ -962,6 +989,14 @@ const afterModules = fn => {
 // a panel registers its own draft list (`DRAFT_HOOKS`) while it is being created
 const DRAFTS = [];
 const DRAFT_HOOKS = [];  // sections that show their own list of drafts (videos, custom workflows, montage)
+// The project the window shows. Every list filters on it, and every new result is stamped with it at
+// submission; `all` is a view switch only — new work always goes to the active project.
+const PROJECTS_VIEW = { list: [], active: '', all: false };
+function projectOk(item) {
+  if (PROJECTS_VIEW.all || !item || !item.project || !PROJECTS_VIEW.active) return true;
+  return item.project === PROJECTS_VIEW.active;
+}
+window.h3Projects = { ok: projectOk, active: () => PROJECTS_VIEW.active, all: () => PROJECTS_VIEW.all };
 const promptHandlers = new Map(), earlyEvents = new Map();
 const previewHandlers = new Map();
 function onPrompt(id, fn) {
@@ -998,6 +1033,7 @@ function onServerMessage(m) {
     qAdd(m.prompt_id, m.mode, m.prompt, { detached: true, agent: true });
     return;
   }
+  if (m.type === 'draft_removed') { dropDraft(m.id); return; }   // another window deleted a draft
   qHandle(m);
   const fn = promptHandlers.get(m.prompt_id);
   if (fn) fn(m);
@@ -1032,7 +1068,7 @@ function setEngine(on) {
 })();
 /* pinned top bar with every video and image section */
 (function () {
-  const bar = document.createElement('div'); bar.id = 'modeBar'; $('.topbar').appendChild(bar);
+  const bar = document.createElement('div'); bar.id = 'modeBar'; $('.tb-row1').appendChild(bar);
   const SHORT = { video: 'Видео', lipsync: 'Lipsync', refs: 'Референсы', actor: 'Актёр', swap: 'Замена', long: 'Видеостудия', action: 'Экшн', krea: 'Изображение', qwen: 'Правка', inpaint: 'Инпейнт', upfile: 'Увеличить' };
   const GROUPS = [['presets'], ['video', 'lipsync', 'refs', 'actor', 'swap', 'long', 'action'], ['krea', 'qwen', 'inpaint'], ['upfile']];
   function paint() {
@@ -1064,7 +1100,7 @@ async function askSavedQueue() {
     confirmBox('Продолжить очередь?', `В прошлый раз осталось ${r.count} незавершённых заданий (программу закрыли или пропало питание). Продолжить их? Задание, которое шло, начнётся заново. Если нажать «Отмена», они будут забыты.`, 'Продолжить', async () => {
       btn.removeEventListener('click', cancel);
       const j = await postJSON('/api/queue/resume');
-      (j.jobs || []).forEach(x => qAdd(x.prompt_id, x.mode, x.prompt));
+      (j.jobs || []).forEach(x => qAdd(x.prompt_id, x.mode, x.prompt, x.project ? { project: x.project } : null));
       if (j.kept) toast(j.error || ('Не удалось восстановить часть заданий: ' + j.kept + ' остались в сохранённой очереди'));
       else toast('Задания вернулись в очередь');
       goTo('queue');
@@ -1246,6 +1282,8 @@ H3C.configure({
   addDraftHook: fn => DRAFT_HOOKS.push(fn),
   removeDraftHook: fn => { const i = DRAFT_HOOKS.indexOf(fn); if (i >= 0) DRAFT_HOOKS.splice(i, 1); },
   keepDraft: it => keepDraftItem(it),
+  deleteClip: (it, at) => deleteClipItem(it, at),
+  projectOk: it => projectOk(it),
   openUpscale: it => openUpscale(it),
   addJob: (id, mode, prompt) => qAdd(id, mode, prompt),
   onPrompt: (id, fn) => onPrompt(id, fn),
@@ -1808,6 +1846,340 @@ function fmtDate(d) {
   const days = Math.floor((new Date(now.toDateString()) - new Date(d.toDateString())) / 864e5);
   return days === 0 ? `сегодня, ${hm}` : days === 1 ? `вчера, ${hm}` : d.toLocaleDateString('ru', { day: 'numeric', month: 'short' }) + `, ${hm}`;
 }
+
+/* ---------- projects: the work every new result belongs to ---------- */
+// A project is a label, not a folder: the switcher chooses what the lists show and where new results
+// go. "Все проекты" is a view switch — the active project stays the one results are stamped with.
+const DEFAULT_PROJECT = 'main';   // «Основное»: created by the migration, never deleted
+let PROJ_RENAME = null;           // the project whose name is being edited in the switcher, or null
+function paintProjects() {
+  const bar = $('#tbProj');
+  if (!bar || !$('#projName')) return;
+  const active = PROJECTS_VIEW.list.find(p => p.id === PROJECTS_VIEW.active);
+  $('#projName').textContent = active ? active.name : 'Основное';
+  $('#projCur').title = 'Проект, в который попадут новые результаты: ' + (active ? active.name : 'Основное');
+  const all = $('#projAll');
+  all.classList.toggle('on', PROJECTS_VIEW.all);
+  all.textContent = PROJECTS_VIEW.all ? 'Все проекты' : 'Этот проект';
+  const renaming = PROJECTS_VIEW.list.find(p => p.id === PROJ_RENAME);
+  $('#projPop').innerHTML =
+    (renaming ? '<div class="proj-new"><input id="projRenameName" maxlength="60" placeholder="Название проекта" '
+      + `value="${esc(renaming.name)}"><button type="button" class="btn mini pri" id="projRenameOk">Сохранить</button>`
+      + '<button type="button" class="btn mini" id="projRenameNo">Отмена</button></div>' : '')
+    + PROJECTS_VIEW.list.map(p =>
+      `<button type="button" class="proj-item${p.id === PROJECTS_VIEW.active ? ' on' : ''}" data-pid="${esc(p.id)}" title="${esc(p.name)}"><span class="pn">${esc(p.name)}</span>`
+      + `<i class="pact ren" data-rename="${esc(p.id)}" role="button" title="Переименовать проект">✎</i>`
+      + (p.id === DEFAULT_PROJECT ? '' : `<i class="pact del" data-delproj="${esc(p.id)}" role="button" title="Удалить проект">✕</i>`)
+      + (p.id === PROJECTS_VIEW.active ? '<span class="pmark">✓</span>' : '') + '</button>').join('')
+    + '<div class="proj-sep"></div>'
+    + '<div class="proj-new"><input id="projNewName" maxlength="60" placeholder="Название нового проекта">'
+    + '<button type="button" class="btn mini pri" id="projNewOk">Создать</button></div>';
+}
+function refreshProjectLists() {
+  renderLib();
+  IMG_PANELS.forEach(f => { try { f(); } catch {} });
+  DRAFT_HOOKS.forEach(f => { try { f(); } catch {} });
+  window.trayFill?.();
+  bmRender?.();
+}
+async function loadProjects() {
+  try {
+    const reply = await apiGet('/api/projects');
+    PROJECTS_VIEW.list = reply.projects || [];
+    PROJECTS_VIEW.active = reply.active || '';
+    paintProjects();
+    refreshProjectLists();
+  } catch (e) {
+    // no project list: the window keeps working and shows everything, like before projects existed
+  }
+}
+async function selectProject(id) {
+  if (!id || id === PROJECTS_VIEW.active) return;
+  try {
+    await apiPost('/api/projects/active', { id });
+    PROJECTS_VIEW.active = id;
+    paintProjects();
+    refreshProjectLists();
+    // a film belongs to a project: the studio switches to this project's film (or starts a new one).
+    // Awaited, because `bmOpen` restores a stage of that project right after the switch.
+    await window.h3LongProjectChanged?.();
+    const project = PROJECTS_VIEW.list.find(p => p.id === id);
+    toast('Проект: ' + (project ? project.name : id));
+  } catch (e) { toast('Не удалось выбрать проект: ' + e.message); }
+}
+async function createProject() {
+  const input = $('#projNewName');
+  if (!input) return;
+  const name = input.value.trim();
+  if (!name) { input.focus(); return; }
+  try {
+    const reply = await apiPost('/api/projects', { name });
+    PROJECTS_VIEW.list = reply.projects || [];
+    PROJECTS_VIEW.active = reply.active || '';
+    paintProjects();
+    refreshProjectLists();
+    await window.h3LongProjectChanged?.();   // a new project is a new film (the studio switches too)
+    $('#projPop').hidden = true;
+    toast('Проект создан: ' + (reply.project ? reply.project.name : name));
+  } catch (e) { toast('Не удалось создать проект: ' + e.message); }
+}
+
+/* ---------- переименование и удаление проекта ---------- */
+// The name is the only editable part: the id never changes, so every result, stage and film keeps
+// pointing at the same work. Deleting is the one operation that destroys work, so the dialog says
+// what the project holds and then lets the user choose what moves to «Основное» instead of going.
+function startProjectRename(id) {
+  PROJ_RENAME = id;
+  paintProjects();
+  const input = $('#projRenameName');
+  if (!input) return;
+  input.focus(); input.select();
+}
+async function renameProject() {
+  const input = $('#projRenameName'), id = PROJ_RENAME;
+  if (!input || !id) return;
+  const name = input.value.trim();
+  if (!name) { input.focus(); return; }
+  try {
+    const reply = await postJSON('/api/projects/' + encodeURIComponent(id) + '/rename', { name });
+    PROJECTS_VIEW.list = reply.projects || PROJECTS_VIEW.list;
+    PROJECTS_VIEW.active = reply.active || PROJECTS_VIEW.active;
+  } catch (e) { toast('Не удалось переименовать проект: ' + e.message); return; }
+  PROJ_RENAME = null;
+  paintProjects();
+  $('#projPop').hidden = true;
+  refreshProjectLists();
+  toast('Проект переименован: «' + (PROJECTS_VIEW.list.find(p => p.id === id) || {}).name + '»');
+}
+
+const PD_GROUPS = [['library', 'Клипы и картинки Библиотеки'], ['drafts', 'Черновики'],
+                   ['stages', 'Этапы'], ['films', 'Фильмы Видеостудии']];
+let PD = null;   // the open delete dialog: { id, project, assets, chosen:Set, step }
+let PD_CARD = null;   // the asset whose card is open over the picker
+const pdItems = () => PD ? PD_GROUPS.flatMap(([group]) =>
+  (PD.assets[group] || []).map(it => ({ group, it, key: group + ':' + (group === 'films' ? it.run : it.id) }))) : [];
+const pdByKey = key => pdItems().find(x => x.key === key) || null;
+/* the badge says what the thing is, not where it is: a draft is a draft because of its group */
+const pdBadge = (group, it) => group === 'stages' ? 'этап' : group === 'films' ? 'фильм'
+  : it.kind === 'image' ? 'картинка' : 'видео';
+function pdCaption(group, it) {
+  if (group === 'stages') return `${MODE_NAME[it.mode] || it.mode || 'раздел'} · ${it.name}`;
+  if (group === 'films') return `сцен ${it.scenes} · готово ${it.done}`;
+  return `${MODE_NAME[it.mode] || it.mode || 'результат'} · ${it.prompt || 'без промпта'}`;
+}
+/* the rows of the picker: the same thumbnails «Прошлые изображения» shows — a picture, a clip with
+   its first frame, or «нет превью» for a stage without images; the tile opens the card, the corner
+   box chooses what to keep */
+function pdTile(group, it, key, on) {
+  const pv = it.preview || null;
+  const media = !pv ? '<span class="pd-nopv">нет превью</span>'
+    : pv.kind === 'image' ? `<img src="${esc(pv.url)}" alt="" loading="lazy">`
+    : `<video src="${esc(pv.url)}#t=0.5" preload="metadata" muted playsinline loop></video>`;
+  return `<div class="pd-tile${on ? ' on' : ''}">
+    <label class="pd-chk" title="Оставить в «Основном»"><input type="checkbox" data-pd="${esc(key)}"${on ? ' checked' : ''}></label>
+    <button type="button" class="pd-th" data-open="${esc(key)}" title="${esc(pdCaption(group, it))}">${media}
+      <span class="pd-badge">${pdBadge(group, it)}</span></button>
+    <div class="pd-cap" data-open="${esc(key)}" title="${esc(pdCaption(group, it))}">${esc(pdCaption(group, it))}</div>
+  </div>`;
+}
+function paintProjectDelete() {
+  if (!PD) return;
+  const a = PD.assets, total = pdItems().length;
+  $('#pdTitle').textContent = 'Удалить проект «' + PD.project.name + '»?';
+  if (PD.step === 'ask') {
+    $('#pdBody').innerHTML = total
+      ? `<p class="pd-lead">В проекте:</p>
+         <div class="pd-counts">${PD_GROUPS.filter(([g]) => (a[g] || []).length).map(([g, label]) =>
+           `<div><span>${esc(label)}</span><b>${a[g].length}</b></div>`).join('')}</div>
+         <p class="pd-note">Что оставите — переедет в «Основное»: файлы останутся на месте, изменится только проект.
+         Остальное будет удалено: файлы уйдут в корзину Windows, этапы и фильмы Видеостудии исчезнут с диска.</p>`
+      : `<p class="pd-lead">Проект пуст.</p><p class="pd-note">Ни клипов, ни черновиков, ни этапов, ни фильмов в нём нет — удаление ничего не стирает.</p>`;
+    $('#pdFoot').innerHTML = '<button class="btn" data-close>Отмена</button>'
+      + (total ? '<button class="btn pri" id="pdPick">Выбрать, что оставить…</button>' : '')
+      + '<button class="btn danger" id="pdAll">Удалить всё</button>';
+    return;
+  }
+  const groups = PD_GROUPS.map(([group, label]) => {
+    const list = a[group] || [];
+    if (!list.length) return '';
+    return `<div class="pd-g"><div class="pd-gh">${esc(label)} <span>${list.length}</span></div>
+      <div class="pd-grid">${list.map(it => {
+        const key = group + ':' + (group === 'films' ? it.run : it.id);
+        return pdTile(group, it, key, PD.chosen.has(key));
+      }).join('')}</div></div>`;
+  }).join('');
+  $('#pdBody').innerHTML = `<p class="pd-lead">Выбранное переедет в «Основное» — файлы останутся на месте. Остальное будет удалено. Нажмите на плитку, чтобы рассмотреть.</p>
+    <div class="pd-tools"><button class="btn mini" id="pdSelAll" type="button">Выбрать все</button>
+      <button class="btn mini" id="pdSelNone" type="button">Снять выбор</button>
+      <span class="pd-chosen">выбрано: <b>${PD.chosen.size}</b> из ${total}</span></div>
+    <div class="pd-list">${groups}</div>`;
+  $('#pdFoot').innerHTML = '<button class="btn" id="pdBack">Назад</button>'
+    + (PD.chosen.size
+      ? `<button class="btn pri" id="pdGo">Перенести выбранное (${PD.chosen.size}) и удалить проект</button>`
+      : '<button class="btn danger" id="pdGo">Удалить проект</button>');
+}
+/* one asset in detail, with its own preview: the picker is small, and a clip or a picture has to be
+   recognisable before it is either kept or lost */
+function paintAssetCard() {
+  const found = PD_CARD && pdByKey(PD_CARD);
+  if (!found) { $('#pdCard').hidden = true; PD_CARD = null; return; }
+  const { group, it, key } = found, pv = it.preview || null, on = PD.chosen.has(key);
+  const pvHtml = !pv ? '<div class="pc-nopv">Превью нет</div>'
+    : pv.kind === 'image' ? `<img class="pc-media" src="${esc(pv.url)}" alt="">`
+    : `<video class="pc-media" src="${esc(pv.url)}" controls loop playsinline></video>`;
+  const rows = [];
+  if (it.prompt) rows.push(['Промпт', it.prompt]);
+  if (it.date) rows.push(['Когда', fmtDate(new Date(it.date))]);
+  if (group === 'stages') {
+    rows.push(['Раздел', MODE_NAME[it.mode] || it.mode || 'раздел']);
+    rows.push(['Этап', it.name + (it.auto ? ' (было до открытия)' : '')]);
+    rows.push(['Файлов', String(it.files)]);
+  } else if (group === 'films') {
+    rows.push(['Сцен', String(it.scenes)]);
+    rows.push(['Готово сцен', String(it.done)]);
+    if (it.saved) rows.push(['Сохранён', fmtDate(new Date(it.saved * 1000))]);
+  } else {
+    rows.push(['Раздел', MODE_NAME[it.mode] || it.mode || 'результат']);
+    rows.push(['Тип', it.kind === 'image' ? 'картинка' : 'клип']);
+    if (it.res) rows.push(['Размер', it.res]);
+    if (it.len) rows.push(['Длина', it.len.toFixed(1).replace('.0', '') + ' с']);
+    rows.push(['Где', it.draft ? 'черновик, в Библиотеке его нет' : 'в Библиотеке']);
+  }
+  const kindName = group === 'films' ? 'Фильм Видеостудии' : group === 'stages' ? 'Этап'
+    : it.kind === 'image' ? 'Картинка' : 'Клип';
+  const modeName = group === 'films' ? '' : (MODE_NAME[it.mode] || it.mode || '');
+  $('#pcTitle').textContent = kindName + (modeName ? ' · ' + modeName : '');
+  $('#pcBody').innerHTML = pvHtml + `<dl class="pc-dl">${rows.map(([k, v]) =>
+    `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>`;
+  $('#pcFoot').innerHTML = '<button class="btn" data-close>Закрыть</button>'
+    + `<button class="btn${on ? '' : ' pri'}" id="pcToggle">${on ? 'Убрать из выбранных' : 'Оставить в «Основном»'}</button>`;
+}
+function openAssetCard(key) {
+  if (!PD || !pdByKey(key)) return;
+  PD_CARD = key;
+  paintAssetCard();
+  $('#pdCard').hidden = false;
+}
+async function openProjectDelete(id) {
+  $('#projPop').hidden = true;
+  $('#pdCard').hidden = true; PD_CARD = null;
+  let assets;
+  try { assets = await apiGet('/api/projects/' + encodeURIComponent(id) + '/assets'); }
+  catch (e) { toast('Не удалось узнать, что в проекте: ' + e.message); return; }
+  PD = { id, project: assets.project || { id, name: id }, assets, chosen: new Set(), step: 'ask' };
+  paintProjectDelete();
+  $('#projDel').hidden = false;
+}
+/* the project is gone: the window drops what was deleted and relabels what moved, in one go */
+async function adoptProjectDelete(reply) {
+  const target = reply.target || DEFAULT_PROJECT;
+  const was = PROJECTS_VIEW.active;
+  PROJECTS_VIEW.list = reply.projects || [];
+  PROJECTS_VIEW.active = reply.active || '';
+  const movedLib = new Set([...(reply.moved.library || []), ...((reply.kept_back || {}).library || [])]);
+  const goneLib = new Set(reply.deleted.library || []);
+  for (let i = LIB.length - 1; i >= 0; i--) {
+    const it = LIB[i];
+    if (goneLib.has(it.id)) LIB.splice(i, 1);
+    else if (movedLib.has(it.id)) it.project = target;
+  }
+  const movedDrafts = new Set([...(reply.moved.drafts || []), ...((reply.kept_back || {}).drafts || [])]);
+  for (const id of reply.deleted.drafts || []) dropDraft(id);
+  DRAFTS.forEach(it => { if (movedDrafts.has(it.id)) it.project = target; });
+  paintProjects();
+  refreshProjectLists();
+  await loadStages();                       // the stages of every section come from the server
+  await window.h3LongProjectChanged?.();    // a film that belonged to this project is gone with it
+  return { was };
+}
+async function deleteProjectNow(all) {
+  if (!PD) return;
+  const keep = { library: [], drafts: [], stages: [], films: [] };
+  if (!all) for (const { group, it, key } of pdItems()) {
+    if (PD.chosen.has(key)) keep[group].push(group === 'films' ? it.run : it.id);
+  }
+  const id = PD.id, name = PD.project.name;
+  const buttons = $$('#pdFoot .btn'); buttons.forEach(b => b.disabled = true);
+  let reply;
+  try { reply = await postJSON('/api/projects/' + encodeURIComponent(id) + '/delete', { keep }); }
+  catch (e) { buttons.forEach(b => b.disabled = false); toast('Не удалось удалить проект: ' + e.message); return; }
+  PD = null;
+  $('#projDel').hidden = true;
+  const moved = PD_GROUPS.reduce((n, [g]) => n + (reply.moved[g] || []).length, 0);
+  const left = ((reply.kept_back || {}).library || []).length + ((reply.kept_back || {}).drafts || []).length;
+  await adoptProjectDelete(reply);
+  toast('Проект «' + name + '» удалён' + (moved ? `. Перенесено в «Основное»: ${moved}` : '')
+    + (left ? `. Не удалось удалить ${left} — остались в «Основном»` : ''));
+}
+(function initProjectAdmin() {
+  $('#projDel').addEventListener('click', e => {
+    if (!PD) return;
+    if (e.target.closest('#pdPick')) { PD.step = 'pick'; paintProjectDelete(); return; }
+    if (e.target.closest('#pdBack')) { PD.step = 'ask'; paintProjectDelete(); return; }
+    if (e.target.closest('#pdAll')) { deleteProjectNow(true); return; }
+    if (e.target.closest('#pdGo')) { deleteProjectNow(false); return; }
+    if (e.target.closest('#pdSelAll')) {
+      PD.chosen = new Set(pdItems().map(x => x.key)); paintProjectDelete(); return;
+    }
+    if (e.target.closest('#pdSelNone')) { PD.chosen.clear(); paintProjectDelete(); return; }
+    if (e.target === e.currentTarget || e.target.closest('[data-close]')) {   // the dialog itself closed
+      $('#pdCard').hidden = true; PD_CARD = null;
+    }
+  });
+  $('#pdBody').addEventListener('click', e => {
+    const open = e.target.closest('[data-open]');
+    if (open) { openAssetCard(open.dataset.open); }
+  });
+  $('#pdBody').addEventListener('change', e => {
+    const box = e.target.closest('[data-pd]');
+    if (!box || !PD) return;
+    if (box.checked) PD.chosen.add(box.dataset.pd); else PD.chosen.delete(box.dataset.pd);
+    paintProjectDelete();
+  });
+  $('#pdCard').addEventListener('click', e => {
+    if (e.target.closest('#pcToggle') && PD_CARD && PD) {
+      if (PD.chosen.has(PD_CARD)) PD.chosen.delete(PD_CARD); else PD.chosen.add(PD_CARD);
+      paintProjectDelete();
+      paintAssetCard();
+      return;
+    }
+    if (e.target === e.currentTarget || e.target.closest('[data-close]')) {
+      PD_CARD = null;
+    }
+  });
+})();
+(function initProjectBar() {
+  const bar = $('#tbProj');
+  if (!bar) return;
+  bar.innerHTML = '<button type="button" class="proj-cur" id="projCur" title="Проект, в который попадут новые результаты">'
+    + '<span class="proj-dot"></span><span class="proj-nm" id="projName">Основное</span><span class="proj-car">▾</span></button>'
+    + '<button type="button" class="proj-all" id="projAll" title="Показать результаты всех проектов. Новые результаты по-прежнему попадут в активный проект">Этот проект</button>'
+    + '<div class="proj-pop" id="projPop" hidden></div>';
+  $('#projCur').onclick = e => { e.stopPropagation(); $('#projPop').hidden = !$('#projPop').hidden; };
+  $('#projAll').onclick = () => { PROJECTS_VIEW.all = !PROJECTS_VIEW.all; paintProjects(); refreshProjectLists(); };
+  $('#projPop').onclick = e => {
+    e.stopPropagation();
+    if (e.target.closest('#projNewOk')) { createProject(); return; }
+    if (e.target.closest('#projRenameOk')) { renameProject(); return; }
+    if (e.target.closest('#projRenameNo')) { PROJ_RENAME = null; paintProjects(); return; }
+    const ren = e.target.closest('[data-rename]');
+    if (ren) { startProjectRename(ren.dataset.rename); return; }
+    const del = e.target.closest('[data-delproj]');
+    if (del) { openProjectDelete(del.dataset.delproj); return; }
+    const item = e.target.closest('.proj-item');
+    if (item) { $('#projPop').hidden = true; selectProject(item.dataset.pid); }
+  };
+  $('#projPop').addEventListener('keydown', e => {
+    if (e.key === 'Escape' && PROJ_RENAME) { PROJ_RENAME = null; paintProjects(); return; }
+    if (e.key !== 'Enter') return;
+    if (e.target.id === 'projNewName') { e.preventDefault(); createProject(); }
+    else if (e.target.id === 'projRenameName') { e.preventDefault(); renameProject(); }
+  });
+  document.addEventListener('click', () => {
+    const pop = $('#projPop'); if (pop) pop.hidden = true;
+    if (PROJ_RENAME) { PROJ_RENAME = null; paintProjects(); }
+  });
+})();
 const fileName = it => `h3_${it.mode}_${it.date.toISOString().slice(0, 16).replace(/[-:T]/g, '')}.${it.ext || 'mp4'}`;
 
 /* ---------- общая очередь заданий: состояние живёт в /ui/js/state.js ---------- */
@@ -1817,7 +2189,10 @@ const fileName = it => `h3_${it.mode}_${it.date.toISOString().slice(0, 16).repla
 const QSTAGE = { queued: 'ждёт своей очереди', load: 'загрузка моделей', encode: 'кодирование', sample: 'генерация', sample2: 'проход 2', upscale: 'апскейл',
   decode: 'сборка видео', save: 'сохранение', cloud_queued: 'в очереди RunningHub', cloud_run: 'считается в облаке', ffmpeg: 'сборка FFmpeg' };
 function qAdd(id, mode, prompt, extra) {
-  const j = window.h3State.addJob({ id, mode, prompt, ...(extra || {}) });
+  // A job belongs to the project it was submitted in — the same rule the server stamps its own
+  // record with. Captured here, once: switching the project later must not relabel the queue.
+  const o = { id, mode, prompt, project: PROJECTS_VIEW.active || '', ...(extra || {}) };
+  const j = window.h3State.addJob(o);
   (earlyEvents.get(id) || []).forEach(qHandle);   // events of this id that came before the panel
   return j;
 }
@@ -1907,7 +2282,10 @@ function qRender() {
     const big = live ? `<div class="q-big ${v.lvl}"><i style="width:${Math.round(v.p * 100)}%"></i></div><div class="pbox-chip ${v.lvl}"><span class="pbox-dot"></span><span>${run ? Math.round(v.p * 100) + '% · ' : ''}${esc(v.txt)}</span></div>` : '';
     const cmpB = j.state === 'done' && j.mode === 'upscale' && j.itemId ? `<button class="btn pri" data-q="cmp" data-id="${j.itemId}">До и после</button>` : '';
     const mn = MODE_NAME[j.mode] || 'Видео', pt = j.prompt.slice(0, 120) || 'без промпта';
-    return `<div class="q-row${cls}" data-id="${j.id}" role="button" tabindex="0" title="Открыть подробности задания" aria-label="${esc(mn + ': подробности')}"><div class="q-n">${n || (j.state === 'done' ? '✓' : '·')}</div><div><div class="q-t">${esc(pt === mn ? mn : mn + ': ' + pt)}</div>`
+    // the queue is the machine's and is shared by every project, so each row says which work it is for
+    const projName = (PROJECTS_VIEW.list.find(p => p.id === j.project) || {}).name || '';
+    const projBadge = projName ? `<span class="q-proj" title="Проект задания: ${esc(projName)}">${esc(projName)}</span>` : '';
+    return `<div class="q-row${cls}" data-id="${j.id}" role="button" tabindex="0" title="Открыть подробности задания" aria-label="${esc(mn + ': подробности')}"><div class="q-n">${n || (j.state === 'done' ? '✓' : '·')}</div><div><div class="q-t"><span class="q-tt">${esc(pt === mn ? mn : mn + ': ' + pt)}</span>${projBadge}</div>`
       + `<div class="q-s">${esc(st)}</div>${big}</div><div class="q-btns">${det}${cmpB || btn}</div></div>`;
   };
   box.innerHTML = window.h3State.count() ? act.map((j, i) => row(j, i + 1)).join('') + fin.map(j => row(j, 0)).join('')
@@ -2264,9 +2642,94 @@ async function keepDraftItem(it) {
   toast(kept.kind === 'image' ? 'Картинка добавлена в Библиотеку' : 'Клип добавлен в Библиотеку');
   return kept;
 }
+/* a clip goes away for good: the server deletes the records and the files (to the Recycle Bin) */
+function dropDraft(id) {
+  const i = DRAFTS.findIndex(x => x.id === id);
+  if (i >= 0) DRAFTS.splice(i, 1);
+  IMG_PANELS.forEach(f => { try { f(); } catch {} });
+  DRAFT_HOOKS.forEach(f => { try { f(); } catch {} });
+  window.trayFill?.();
+}
+function dropLib(id) {
+  const i = LIB.findIndex(x => x.id === id);
+  if (i >= 0) LIB.splice(i, 1);
+  renderLib();
+  IMG_PANELS.forEach(f => { try { f(); } catch {} });
+  DRAFT_HOOKS.forEach(f => { try { f(); } catch {} });
+  window.trayFill?.();
+}
+/* the delete cross in «Прошлые клипы» does not fire at once: a small popover at the cursor asks,
+   and names what is about to go — a draft or a clip that is already in the Library. Cancelled with
+   Escape, a click outside or «Отмена». */
+let draftDelPop = null;
+function askDeleteClip(it, draft, at) {
+  return new Promise(resolve => {
+    if (!draftDelPop) {
+      draftDelPop = document.createElement('div');
+      draftDelPop.className = 'ddp';
+      draftDelPop.id = 'draftDelPop';
+      document.body.appendChild(draftDelPop);
+    }
+    const pop = draftDelPop;
+    pop.innerHTML = `<div class="ddp-t">${draft ? 'Удалить черновик?' : 'Удалить клип из Библиотеки?'}</div>`
+      + '<div class="ddp-b"><button type="button" class="btn" data-ddp="no">Отмена</button>'
+      + '<button type="button" class="btn pri" data-ddp="yes">Удалить в корзину</button></div>';
+    pop.hidden = false;
+    // The window can be zoomed (Ctrl+wheel): a CSS `left` is multiplied by that zoom when painted,
+    // while the click and innerWidth are in screen pixels. Work out the place in layout pixels, or
+    // the popover drifts away from the cursor the farther from the top-left corner it was clicked.
+    const zoom = parseFloat(document.documentElement.style.zoom) || 1;
+    const vw = innerWidth / zoom, vh = innerHeight / zoom;
+    const w = pop.offsetWidth, h = pop.offsetHeight;
+    let x = ((at && at.x != null) ? at.x / zoom : vw / 2) + 14;
+    let y = ((at && at.y != null) ? at.y / zoom : vh / 2) + 14;
+    if (x + w > vw - 10) x = Math.max(10, vw - w - 10);
+    if (y + h > vh - 10) y = Math.max(10, y - h - 26);
+    pop.style.left = x + 'px';
+    pop.style.top = y + 'px';
+    const close = ok => {
+      pop.hidden = true;
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('mousedown', onDoc, true);
+      resolve(ok);
+    };
+    const onKey = e => { if (e.key === 'Escape') { e.preventDefault(); close(false); } };
+    const onDoc = e => { if (!pop.contains(e.target)) close(false); };
+    pop.onclick = e => {
+      const b = e.target.closest('[data-ddp]');
+      if (b) close(b.dataset.ddp === 'yes');
+    };
+    document.addEventListener('keydown', onKey);
+    setTimeout(() => document.addEventListener('mousedown', onDoc, true), 0);   // this click must not close it
+    pop.querySelector('[data-ddp="yes"]')?.focus();
+  });
+}
+async function deleteClipItem(it, at) {
+  if (!it) return false;
+  const inLibrary = !!byId(it.id);
+  const draft = !!it.preview && !inLibrary;
+  if (!draft && !inLibrary) { toast('Этот клип уже удалён'); return false; }
+  if (!(await askDeleteClip(it, draft, at))) return false;
+  try {
+    if (draft) await apiSend('/api/preview/' + encodeURIComponent(it.id), { method: 'DELETE' });
+    else await apiSend('/api/library/' + encodeURIComponent(it.id), { method: 'DELETE' });
+  } catch (e) { toast('Не удалось удалить: ' + e.message); return false; }
+  if (draft) dropDraft(it.id); else dropLib(it.id);
+  toast(draft ? 'Черновик удалён' : 'Клип удалён из Библиотеки');
+  return true;
+}
+window.deleteClipItem = deleteClipItem;
+window.dropDraft = dropDraft;
+window.dropLib = dropLib;
 function renderLib() {
-  $('#libBadge').textContent = LIB.length;
-  const items = LIB.filter(it => libFilter === 'all' || (libFilter === 'fav' ? it.fav : libFilter === 'images' ? it.kind === 'image' : libFilter === 'videos' ? it.kind !== 'image' : it.mode === libFilter));
+  // the badge follows the project filter: how many results are shown now, and how many live elsewhere
+  const shown = LIB.filter(projectOk).length, others = LIB.length - shown;
+  const badge = $('#libBadge');
+  badge.innerHTML = PROJECTS_VIEW.all || !others ? String(LIB.length) : `${shown} <i>+${others}</i>`;
+  const project = PROJECTS_VIEW.list.find(p => p.id === PROJECTS_VIEW.active);
+  badge.title = PROJECTS_VIEW.all ? `Все проекты: ${LIB.length}`
+    : `${shown} в проекте «${project ? project.name : 'Основное'}» · всего в Библиотеке ${LIB.length}`;
+  const items = LIB.filter(it => projectOk(it) && (libFilter === 'all' || (libFilter === 'fav' ? it.fav : libFilter === 'images' ? it.kind === 'image' : libFilter === 'videos' ? it.kind !== 'image' : it.mode === libFilter)));
   const lib = $('#lib');
   lib.classList.toggle('selecting', selecting);
   lib.innerHTML = items.length ? items.map(it => `
@@ -2288,7 +2751,9 @@ function renderLib() {
       </div>
       <div class="li-b"><p>${esc(it.prompt) || '<span style="color:var(--dim)">без промпта</span>'}</p><small>${[it.res, it.aspect, fmtDate(it.date)].filter(Boolean).join(' · ')}</small></div>
     </div>`).join('')
-    : `<div class="empty" style="grid-column:1/-1">${LIB.length ? 'В этом разделе пока пусто' : 'Здесь появятся ваши видео после первой генерации'}</div>`;
+    : `<div class="empty" style="grid-column:1/-1">${!LIB.length ? 'Здесь появятся ваши видео после первой генерации'
+        : !LIB.some(projectOk) ? 'В этом проекте пока пусто. Все проекты — кнопкой в шапке'
+        : 'В этом разделе пока пусто'}</div>`;
   $('#selCount').hidden = $('#bulkSave').hidden = $('#bulkDel').hidden = $('#selAll').hidden = !selecting;
   $('#selCount').textContent = `выбрано: ${selected.size}`;
   $('#selAll').textContent = items.length && items.every(it => selected.has(it.id)) ? 'Снять выбор' : `Выбрать все (${items.length})`;
@@ -3001,61 +3466,155 @@ setInterval(memSave, 2000);
 addEventListener('beforeunload', memSave);
 afterModules(memRestore);
 
-/* ---------- закладки: сохранить состояние раздела и вернуться к нему позже ---------- */
-const BM = { KEY: 'h3-bookmarks', MODES: ['video', 'lipsync', 'refs', 'actor', 'action', 'long'], MAX: 15 };
-const bmLoad = () => { try { const a = JSON.parse(localStorage.getItem(BM.KEY) || '[]'); return Array.isArray(a) ? a : []; } catch { return []; } };
-const bmStore = list => { try { localStorage.setItem(BM.KEY, JSON.stringify(list)); } catch { toast('Не удалось сохранить закладку: нет места в браузере'); } };
+/* ---------- этапы: сохранённая точка раздела, часть проекта ---------- */
+// The records live in the database (migration 0004) and belong to the project, so the same project
+// shows the same stages after a restart, in another window and on another day. The files a stage was
+// made from stay in this browser's IndexedDB, keyed by the stage id.
+// «Замена персонажа» is a section of the refs family (`window.RM.swap`), so its state and its slots
+// (`swap/img*`, `swap/vid*`) are already covered by `memStates()` and `memSlots()`.
+const BM = { MODES: ['video', 'lipsync', 'refs', 'actor', 'swap', 'action', 'long'], MAX: 15, list: [], loaded: false };
 function bmRender() {
-  const all = bmLoad();
+  const all = BM.list;
   BM.MODES.forEach(m => {
     const bar = $(`#view-${m} .st-bar`); if (!bar) return;
-    const mine = all.filter(b => b.mode === m).sort((x, y) => (y.auto ? 1 : 0) - (x.auto ? 1 : 0) || new Date(y.date) - new Date(x.date));
+    const mine = all.filter(b => b.mode === m && (PROJECTS_VIEW.all || !b.project || b.project === PROJECTS_VIEW.active))
+      .sort((x, y) => (y.auto ? 1 : 0) - (x.auto ? 1 : 0) || new Date(y.date) - new Date(x.date));
     $('.st-n', bar).textContent = mine.length;
     $('.st-pop', bar).innerHTML = mine.length ? mine.map(b =>
       `<div class="st-i${b.auto ? ' auto' : ''}" data-id="${esc(b.id)}" title="${esc(b.title || '')}"><span class="t">${b.auto ? '↶ ' : ''}${esc(b.name)}</span><small>${fmtDate(new Date(b.date))}</small><i class="x" data-del title="Удалить этап">✕</i></div>`).join('')
       : '<div class="st-empty">Пока нет этапов. Нажмите «Сохранить этап», когда результат вас устраивает: потом к нему можно вернуться.<br><br>Этап запоминает проект целиком: тексты, настройки, референсы и готовые сцены. Не удаляйте клипы из Библиотеки, пока работаете над проектом.</div>';
   });
 }
+async function loadStages() {
+  try { const reply = await apiGet('/api/stages'); BM.list = reply.stages || []; }
+  catch { BM.list = []; }
+  BM.loaded = true;
+  bmRender();
+  await importLegacyStages();
+}
+async function postStage(stage) {
+  const before = BM.list;
+  const reply = await apiPost('/api/stages', stage);
+  BM.list = reply.stages || BM.list;
+  // a stage the server dropped (the ceiling, or the replaced «Было до открытия этапа») takes its
+  // files with it: the server removes its folder, the page removes the copies it still has locally
+  const alive = new Set(BM.list.map(x => x.id));
+  before.filter(x => !alive.has(x.id)).forEach(x => (x.files || []).forEach(k => memFile('delete', `bm/${x.id}/${k}`)));
+  bmRender();
+  return reply.stage;
+}
+/* the files of a stage live next to the database now; the browser keeps them only until they are up */
+async function uploadStageFile(stageId, key, file) {
+  const fd = new FormData();
+  fd.append('file', file, file.name || key.split('/').pop());
+  await apiSend('/api/stages/' + encodeURIComponent(stageId) + '/file?key=' + encodeURIComponent(key),
+                { method: 'POST', body: fd, timeout: 600000 });
+  await memFile('delete', `bm/${stageId}/${key}`);   // the server copy replaces the local one
+}
+async function uploadStageFiles(stageId, uploads) {
+  let failed = 0;
+  for (const { key, file } of uploads) {
+    try { await uploadStageFile(stageId, key, file); } catch { failed++; }
+  }
+  if (failed) toast('Файлы этапа: ' + failed + ' не загрузились и остались в браузере');
+  return failed === 0;
+}
+async function stageFileFromServer(stage, key) {
+  try {
+    const blob = await apiGet('/api/stages/' + encodeURIComponent(stage.id) + '/file?key='
+                              + encodeURIComponent(key), { raw: 'blob', timeout: 600000 });
+    if (!blob || !blob.size) return null;
+    const name = (stage.names || {})[key] || key.split('/').pop();
+    return new File([blob], name, { type: blob.type || 'application/octet-stream' });
+  } catch { return null; }
+}
+/* the file of a stage: the server's copy first; an older stage keeps it in this browser's IndexedDB,
+   and the page hands it to the server — the next open needs no browser copy */
+async function openStageFile(stage, key) {
+  const remote = await stageFileFromServer(stage, key);
+  if (remote) return remote;
+  const local = await memFile('get', `bm/${stage.id}/${key}`);
+  if (local instanceof File) {
+    uploadStageFile(stage.id, key, local).catch(() => {});
+    return local;
+  }
+  return null;
+}
+/* Older versions kept the stages in localStorage, with their files in IndexedDB under the stage id:
+   upload the records once, then stop reading the browser copy. The files keep working by the same id. */
+async function importLegacyStages() {
+  let old = [];
+  try { old = JSON.parse(localStorage.getItem('h3-bookmarks') || '[]'); } catch {}
+  if (!Array.isArray(old) || !old.length) return;
+  let failed = 0;
+  for (const b of old) {
+    if (!b || !b.mode) continue;
+    try {
+      await postStage({ id: b.id, mode: b.mode, name: b.name, auto: !!b.auto, title: b.title || '',
+                        date: b.date, s: b.s || {}, prompt: b.prompt || '', files: b.files || [],
+                        ...(b.run ? { run: b.run } : {}), ...(b.project ? { project: b.project } : {}) });
+      const uploads = [];
+      for (const key of (b.files || [])) {
+        const file = await memFile('get', `bm/${b.id}/${key}`);
+        if (file instanceof File) uploads.push({ key, file });
+      }
+      if (uploads.length) await uploadStageFiles(b.id, uploads);   // the files move with the records
+    } catch { failed++; }
+  }
+  if (failed) { toast('Не удалось перенести этапы: ' + failed + '. Записи остались в браузере'); return; }
+  try { localStorage.removeItem('h3-bookmarks'); } catch {}
+  toast('Этапы перенесены в проект');
+  bmRender();
+}
 async function bmSave(mode, opt = {}) {
   if (mode === 'long') return bmSaveLong(opt);
   const st = memStates()[mode]; if (!st) return;
   const [state, prompt] = st, o = {};
   Object.keys(state).forEach(p => { if (!MEM.skip.has(p) && typeof state[p] !== 'function') o[p] = state[p]; });
-  const id = Math.random().toString(36).slice(2, 10), files = [];
+  const id = Math.random().toString(36).slice(2, 10), files = [], uploads = [];
   for (const [key, el] of memSlots()) {
     if (!key.startsWith(mode + '/') || !el._file) continue;
-    await memFile('put', `bm/${id}/${key}`, el._file); files.push(key);
+    await memFile('put', `bm/${id}/${key}`, el._file); files.push(key); uploads.push({ key, file: el._file });
   }
-  if (mode === 'lipsync' && MEM.audio) { await memFile('put', `bm/${id}/lipsync/audio`, MEM.audio); files.push('lipsync/audio'); }
+  if (mode === 'lipsync' && MEM.audio) {
+    await memFile('put', `bm/${id}/lipsync/audio`, MEM.audio); files.push('lipsync/audio');
+    uploads.push({ key: 'lipsync/audio', file: MEM.audio });
+  }
   const text = prompt ? prompt.value.trim() : '';
   const name = opt.auto ? 'Было до открытия этапа' : stageName(text);
-  let list = bmLoad();
-  if (opt.auto) list.filter(b => b.mode === mode && b.auto).forEach(old => { (old.files || []).forEach(k => memFile('delete', `bm/${old.id}/${k}`)); list = list.filter(x => x !== old); });
-  const mine = list.filter(b => b.mode === mode && !b.auto);
-  if (!opt.auto && mine.length >= BM.MAX) { const old = mine[0]; list = list.filter(b => b !== old); (old.files || []).forEach(k => memFile('delete', `bm/${old.id}/${k}`)); }
-  list.push({ id, mode, name, auto: !!opt.auto, title: text.slice(0, 200), date: new Date().toISOString(), s: JSON.parse(JSON.stringify(o)), prompt: text, files });
-  bmStore(list); bmRender(); if (!opt.auto) toast('Этап сохранён: «' + name + '». Он лежит в списке «Этапы» вверху раздела');
+  const names = {};
+  uploads.forEach(({ key, file }) => { names[key] = file.name || key.split('/').pop(); });
+  // the server replaces the previous «Было до открытия этапа» and keeps the list at its ceiling
+  try {
+    await postStage({ id, mode, name, auto: !!opt.auto, project: PROJECTS_VIEW.active || undefined,
+                      title: text.slice(0, 200), date: new Date().toISOString(),
+                      s: JSON.parse(JSON.stringify(o)), prompt: text, files, names });
+  } catch (e) { toast('Не удалось сохранить этап: ' + e.message); return; }
+  if (uploads.length) await uploadStageFiles(id, uploads);
+  if (!opt.auto) toast('Этап сохранён: «' + name + '». Он лежит в списке «Этапы» вверху раздела');
 }
 const stageDrop = b => { if (b && b.mode === 'long' && b.run) apiPost('/api/long/stage', { run: b.run, id: b.id, action: 'delete' }).catch(() => {}); };
 const stageName = text => new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) + ' · ' + ((text || '').replace(/\s+/g, ' ').slice(0, 26) || 'без текста') + ((text || '').length > 26 ? '…' : '');
 async function bmSaveLong(opt = {}) {
   const root = $('#view-long'), proj = root && root._snap && root._snap(); if (!proj || !(proj.scenes || []).length) { if (!opt.auto) toast('В проекте пока нет сцен'); return; }
-  let list = bmLoad();
-  const drop = b => { stageDrop(b); list = list.filter(x => x !== b); };
-  if (opt.auto) list.filter(b => b.mode === 'long' && b.auto).forEach(drop);
-  const mine = list.filter(b => b.mode === 'long' && !b.auto); if (!opt.auto && mine.length >= BM.MAX) drop(mine[0]);
   const first = (proj.scenes.find(x => x.prompt && x.prompt.trim()) || {}).prompt || '';
   const done = proj.scenes.filter(x => x.done || x.draftDone).length;
   const name = opt.auto ? 'Было до открытия этапа' : stageName(first) + ` · сцен ${proj.scenes.length}, готово ${done}`;
   const sid = Math.random().toString(36).slice(2, 10);
   try { await apiPost('/api/long/stage', { run: proj.run, id: sid, action: 'save' }); } catch {}   // the continuation points and pictures are copied on the disk
-  list.push({ id: sid, mode: 'long', run: proj.run, name, auto: !!opt.auto, title: first.slice(0, 200), date: new Date().toISOString(), s: proj, prompt: first, files: [] });
-  bmStore(list); bmRender(); if (!opt.auto) toast('Этап сохранён: «' + name + '»');
+  try {
+    await postStage({ id: sid, mode: 'long', run: proj.run, name, auto: !!opt.auto,
+                      project: PROJECTS_VIEW.active || undefined, title: first.slice(0, 200),
+                      date: new Date().toISOString(), s: proj, prompt: first, files: [] });
+  } catch (e) { toast('Не удалось сохранить этап: ' + e.message); return; }
+  if (!opt.auto) toast('Этап сохранён: «' + name + '»');
 }
 async function bmOpen(id) {
-  const b = bmLoad().find(x => x.id === id); if (!b) return;
+  const b = BM.list.find(x => x.id === id); if (!b) return;
   goTo(b.mode);
   if (!b.auto) await bmSave(b.mode, { auto: true });   // what is on the screen now is kept too: the opening can be undone with «↶ Было до открытия этапа»
+  // a stage belongs to its project: opening it brings that project (and its lists) back first
+  if (b.project && b.project !== PROJECTS_VIEW.active) await selectProject(b.project);
   if (b.mode === 'long') { const r = await $('#view-long')._openStage(b.s, b.id); toast(!r.ok ? 'Не удалось открыть этап' : r.files ? 'Этап открыт: «' + b.name + '»' : 'Этап открыт: «' + b.name + '». Это старое сохранение: тексты и настройки вернулись, а готовые сцены, возможно, придётся сделать заново'); return; }
   const apply = () => {
     const st = memStates()[b.mode]; if (!st) return;
@@ -3068,22 +3627,31 @@ async function bmOpen(id) {
   for (const [key, el] of memSlots()) {
     if (!key.startsWith(b.mode + '/')) continue;
     if (!(b.files || []).includes(key)) { if (el._file) $('.x', el)?.click(); continue; }
-    const f = await memFile('get', `bm/${b.id}/${key}`); if (!(f instanceof File)) continue;
+    const f = await openStageFile(b, key); if (!(f instanceof File)) continue;
     const input = $('input', el); if (!input) continue;
     const dt = new DataTransfer(); dt.items.add(f); input.files = dt.files; input.dispatchEvent(new Event('change'));
   }
   if (b.mode === 'lipsync' && (b.files || []).includes('lipsync/audio')) {
-    const au = await memFile('get', `bm/${b.id}/lipsync/audio`);
+    const au = await openStageFile(b, 'lipsync/audio');
     if (au instanceof File) { await window.h3Lipsync.loadAudio(au); MEM.audio = au; }
   }
   setTimeout(apply, 800);  // adding a picture re-fits the format: put the saved choice back after that
+  // the stage remembers the clip it was saved with: show it again, so the result is visible at once.
+  // `previewPanel` falls back to the newest clip of the project if that one has been deleted.
+  if (b.mode === 'video') window.h3Video?.showItem?.(b.s && b.s.shownId);
+  else if (b.mode === 'lipsync') window.h3Lipsync?.showItem?.(b.s && b.s.shownId);
+  else if (window.RM && window.RM[b.mode] && window.RM[b.mode].prev) window.RM[b.mode].prev.show?.(b.s && b.s.shownId);
   toast('Этап открыт: «' + b.name + '»');
 }
-function bmDelete(id) {
-  const list = bmLoad(), b = list.find(x => x.id === id); if (!b) return;
+async function bmDelete(id) {
+  const b = BM.list.find(x => x.id === id); if (!b) return;
   (b.files || []).forEach(k => memFile('delete', `bm/${id}/${k}`));
   stageDrop(b);
-  bmStore(list.filter(x => x.id !== id)); bmRender();
+  try {
+    const reply = await apiSend('/api/stages/' + encodeURIComponent(id), { method: 'DELETE' });
+    BM.list = reply.stages || BM.list.filter(x => x.id !== id);
+  } catch (e) { toast('Не удалось удалить этап: ' + e.message); return; }
+  bmRender();
 }
 BM.MODES.forEach(m => {
   const view = $('#view-' + m); if (!view) return;
@@ -3188,7 +3756,7 @@ function picSourceStep() {
 }
 function picLibraryStep() {
   const el = PIC.el; if (!el) return;
-  const items = LIB.filter(it => !it.missing && it.url).sort((a, b) => b.date - a.date);
+  const items = LIB.filter(it => projectOk(it) && !it.missing && it.url).sort((a, b) => b.date - a.date);
   el.className = 'picmenu pm-lib';
   el.innerHTML = `<div class="pm-lib-h"><button class="pm-back" type="button" data-s="back" title="Назад — выбор источника" aria-label="Назад">${PIC_IC.back}</button><b>Из Библиотеки</b><span class="pm-count"></span>`
     + (items.length > 9 ? '<input class="pm-search" type="search" placeholder="Поиск" aria-label="Поиск по Библиотеке">' : '') + '</div><div class="pm-grid"></div>';
@@ -3363,7 +3931,7 @@ function useMenu(it) {
   document.head.append(st);
   const body = $('.lt-body', tray);
   const fill = () => {
-    const items = LIB.filter(it => !it.missing && it.url).sort((a, b) => b.date - a.date).slice(0, 12);
+    const items = LIB.filter(it => projectOk(it) && !it.missing && it.url).sort((a, b) => b.date - a.date).slice(0, 12);
     body.innerHTML = items.length ? items.map(it => it.kind === 'image' ? `<img src="${it.url}" draggable="true" data-id="${it.id}" alt="">` : `<video src="${it.url}#t=0.5" preload="metadata" muted draggable="true" data-id="${it.id}"></video>`).join('') : '<div class="hint">Пока пусто</div>';
   };
   $('.lt-tab', tray).onclick = () => { body.hidden = !body.hidden; if (!body.hidden) fill(); };
@@ -3490,7 +4058,7 @@ function disposeView(id) {
 });
 
 if (API) afterModules(() => {
-  connectEvents(); loadStatus(); loadCloud(); pollSystem();
+  connectEvents(); loadStatus(); loadCloud(); pollSystem(); loadProjects(); loadStages();
   apiGet('/api/status').then(s => {
     firstRun(!s.configured || !localStorage.getItem('h3-seen-settings'));
     if (!s.configured) { setNavLocked(true); goTo('models'); return; }
@@ -3500,7 +4068,7 @@ if (API) afterModules(() => {
       if (n && !n.hidden && !n.disabled && v !== 'models') goTo(v); else if (!v) goTo('presets');   // a first start opens the start page
     }, 700);
   });
-  apiGet('/api/library').then(items => { items.forEach(it => LIB.push(normItem(it))); renderLib(); });
+  apiGet('/api/library').then(items => { items.forEach(it => LIB.push(normItem(it))); refreshProjectLists(); });
 }); else
 // demo items so the library isn't empty in the mockup
 [
@@ -3724,3 +4292,4 @@ requestAnimationFrame(() => document.documentElement.classList.add('booted'));
 <script src="/ui/js/modes/refs.js"></script>
 </body>
 </html>
+

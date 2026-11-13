@@ -108,8 +108,9 @@ def main():
         storage = payload.get("storage") or {}
         migration = storage.get("migration") or {}
         check("the database is created and the empty folder is imported once",
-              storage.get("schema_version") == 2 and migration.get("applied") == [
-                  "0001-schema", "1000-import-library", "1001-import-queue", "0002-drafts"] and not migration.get("problems"),
+              storage.get("schema_version") == 4 and migration.get("applied") == [
+                  "0001-schema", "1000-import-library", "1001-import-queue", "0002-drafts",
+                  "0003-projects", "0004-stages"] and not migration.get("problems"),
               str(storage)[:300])
         check("a fresh folder has nothing waiting in the queue", storage.get("waiting") == 0, str(storage)[:200])
         check("the database file is where the data folder is", (data / "h3studio.db").exists())
@@ -123,6 +124,12 @@ def main():
 
         status, body = get(base + "/api/library")
         check("an empty library is served as []", json.loads(body) == [], body[:200])
+
+        status, body = get(base + "/api/projects")
+        projects = json.loads(body)
+        check("a fresh folder has one project, and it is the active one",
+              [project["name"] for project in projects.get("projects", [])] == ["Основное"]
+              and projects.get("active") == projects["projects"][0]["id"], body[:300])
 
         status, body = get(base + "/")
         check("the window itself is served", status == 200 and b"<" in body and len(body) > 10000, str(len(body)))

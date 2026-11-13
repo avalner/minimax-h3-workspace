@@ -174,25 +174,29 @@ class JobRoutes:
         """Resume one job of an earlier run; True when it may leave the waiting list, False to keep it."""
         meta = job.get("meta") or {}
         mode, prompt = meta.get("mode"), (meta.get("prompt") or "")[:80]
+        project = str(meta.get("project") or "")
         pid = job.get("prompt_id")
+
+        def note(state, prompt_id=pid, **extra):
+            """One row of the answer: the window puts it back into the queue with its project."""
+            out.append({"prompt_id": prompt_id, "mode": mode, "prompt": prompt,
+                        "state": state, "project": project, **extra})
         record = job.get("record")
         if record is not None and record.state in (JobState.CREATED, JobState.SUBMITTING, JobState.UNCERTAIN):
-            out.append({"prompt_id": pid, "mode": mode, "prompt": prompt, "state": "kept",
-                        "reason": "Исход отправки неизвестен: проверьте очередь движка перед повторным запуском"})
+            note("kept", reason="Исход отправки неизвестен: проверьте очередь движка перед повторным запуском")
             return False
         if record is not None and record.backend_id and record.backend_id != self.backend_identity():
             # the settings now point at another engine: this job belongs to the one that had it, and
             # sending it to a different server would generate a different clip behind the user's back
             self.note_error(f"Задание {pid} ждёт прежний движок ({record.backend_id}), а сейчас выбран другой")
-            out.append({"prompt_id": pid, "mode": mode, "prompt": prompt, "state": "kept",
-                        "reason": "задание принадлежит другому движку"})
+            note("kept", reason="задание принадлежит другому движку")
             return False
         live = ("running" if pid in running else "queued" if pid in pending else None) if pid else None
         if live:  # ComfyUI still has it (or is running it): watch it instead of sending it twice
             if pid not in self.jobs:
                 self.jobs[pid] = job
                 self.set_job_state(job, JobState.RUNNING if live == "running" else JobState.QUEUED)
-            out.append({"prompt_id": pid, "mode": mode, "prompt": prompt, "state": live})
+            note(live)
             return True
         if not backend_ok:
             return False  # an engine that does not answer has not lost anything: keep the record as it is
@@ -205,23 +209,23 @@ class JobRoutes:
                     # the result could not be registered (e.g. the disk refused the Library write):
                     # the record stays in the waiting list, which is what the next start retries from
                     self.jobs.pop(pid, None)
-                    out.append({"prompt_id": pid, "mode": mode, "prompt": prompt, "state": "queued"})
+                    note("queued")
                     return False
-                out.append({"prompt_id": pid, "mode": mode, "prompt": prompt, "state": "done"})
+                note("done")
                 return True
             if done == "failed":
                 message = "ComfyUI закончил это задание с ошибкой, пока окно было закрыто"
                 self.try_set_job_state(job, JobState.FAILED, error=message)
                 if record is not None:
                     self.jobs_repo.note_message(pid, message)
-                out.append({"prompt_id": pid, "mode": mode, "prompt": prompt, "state": "error"})
+                note("error")
                 return True
         resp = await self.queue(job["graph"], job.get("stages") or {}, meta, job.get("last_output", False),
                                 job.get("titles"), job.get("preview", False))
         body = json.loads(resp.text)
         if resp.status != 200 or not body.get("prompt_id"):
             raise RuntimeError(body.get("error") or f"ComfyUI отклонил задание ({resp.status})")
-        out.append({"prompt_id": body["prompt_id"], "mode": mode, "prompt": prompt, "state": "queued"})
+        note("queued", prompt_id=body["prompt_id"])
         return True
 
     async def h_queue_resume(self, _req):
@@ -306,6 +310,7 @@ class JobRoutes:
         raise web.HTTPNotFound()
 
     async def queue_cloud(self, rh, graph, stages, meta, preview=False, spec=None):
+        meta = self.submission_meta(meta)
         if not self.config.get("rh_workflow_id"):
             return web.json_response({"error": "Укажите ID любого вашего workflow на RunningHub (раздел «Настройки» → «Облако»)"},
                                      status=400)

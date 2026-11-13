@@ -365,6 +365,8 @@ class MontageRoutes:
         if record is not None:
             record.apply(JobState.RUNNING, now=datetime.now().timestamp())
             self.jobs_repo.save(record)
+        # the project the montage was asked in: the record keeps it, the item carries it
+        project = ((record.legacy or {}).get("meta") or {}).get("project") if record is not None else None
         rendered = False
 
         def prog(pct, _text):
@@ -392,6 +394,7 @@ class MontageRoutes:
                     "q": "", "len": round(float((info or {}).get("duration") or 0), 1), "res": res,
                     "seed": 0, "prompt_id": pid, "date": datetime.now().isoformat(timespec="seconds"),
                     "file": {"type": "local", "path": str(dest), "filename": dest.name},
+                    "project": project or self.active_project(),
                     "origin": {"kind": "ffmpeg"}}
             if record is not None:
                 record.legacy["local_item"] = item

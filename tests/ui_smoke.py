@@ -215,6 +215,477 @@ async def run_page(base: str, browser: str, shots: Path):
                     "document.querySelectorAll('.view.active').length === 1")
                 check("exactly one section is active", one_view)
 
+                project_ready = await cdp.wait_for(
+                    "document.querySelector('#projName')?.textContent === 'Основное'", timeout=10)
+                project_bar = await cdp.evaluate(
+                    "(() => ({ bar: !!document.querySelector('#tbProj .proj-cur'),"
+                    " all: !!document.querySelector('#projAll'),"
+                    " pop: !!document.querySelector('#projPop') }))()")
+                check("the header shows which project new results belong to",
+                      project_ready and project_bar["bar"] and project_bar["all"] and project_bar["pop"],
+                      str(project_bar))
+                toggled = await cdp.evaluate(
+                    "(() => { const b = document.querySelector('#projAll'); b.click();"
+                    " const on = b.classList.contains('on'); b.click();"
+                    " return on && !b.classList.contains('on'); })()")
+                check("the project filter switches to all projects and back", toggled)
+                created = await cdp.evaluate(
+                    "(async () => { document.querySelector('#projCur').click();"
+                    " document.querySelector('#projNewName').value = 'Тестовый проект';"
+                    " document.querySelector('#projNewOk').click();"
+                    " await new Promise(r => setTimeout(r, 500));"
+                    " const active = (await (await fetch('/api/projects')).json()).active;"
+                    " return { name: document.querySelector('#projName').textContent, active }; })()",
+                    await_promise=True)
+                check("a project can be created from the header and becomes active",
+                      created["name"] == "Тестовый проект" and created["active"] != "main", str(created))
+                restored = await cdp.evaluate(
+                    "(async () => { document.querySelector('#projCur').click();"
+                    " const item = [...document.querySelectorAll('.proj-item')].find(b => b.textContent.includes('Основное'));"
+                    " item.click(); await new Promise(r => setTimeout(r, 400));"
+                    " const active = (await (await fetch('/api/projects')).json()).active;"
+                    " return { name: document.querySelector('#projName').textContent, active }; })()",
+                    await_promise=True)
+                check("choosing another project in the header switches it back",
+                      restored["name"] == "Основное" and restored["active"] == "main", str(restored))
+
+                # A project can be renamed (the id stays, so results, stages and films keep pointing at
+                # the same work) and deleted. Deleting asks with the numbers, starts with nothing chosen,
+                # «Выбрать все» marks everything, and what stays moves to «Основное» instead of going.
+                admin = await cdp.evaluate("""
+                    (async () => {
+                      const wait = ms => new Promise(r => setTimeout(r, ms));
+                      const until = async (fn, ms = 6000) => { const t0 = Date.now();
+                        while (Date.now() - t0 < ms) { if (fn()) return true; await wait(60); } return false; };
+                      const projectRow = name => [...document.querySelectorAll('.proj-item')]
+                        .find(b => b.textContent.includes(name));
+                      const out = {};
+                      await postJSON('/api/projects', { name: 'Удаляемый проект' });
+                      await loadProjects();
+                      document.querySelector('#projCur').click(); await wait(80);
+                      projectRow('Удаляемый проект').querySelector('[data-rename]').click(); await wait(80);
+                      out.renameInput = !!document.querySelector('#projRenameName');
+                      document.querySelector('#projRenameName').value = 'Проект для проверки';
+                      document.querySelector('#projRenameOk').click();
+                      await until(() => document.querySelector('#projName').textContent === 'Проект для проверки');
+                      out.renamed = document.querySelector('#projName').textContent;
+                      out.savedName = ((await (await fetch('/api/projects')).json()).projects
+                                       .find(p => p.id === window.h3Projects.active()) || {}).name || '';
+                      out.mainHasTrash = !!projectRow('Основное')
+                        && !!projectRow('Основное').querySelector('[data-delproj]');
+                      // what the project holds: a stage with its frame and a film with a made scene
+                      const pid = window.h3Projects.active();
+                      await window.postStage({ id: 'uiddelstage', mode: 'video', name: 'Этап удаляемого',
+                                               s: {}, files: ['video/first'],
+                                               names: { 'video/first': 'frame.png' },
+                                               date: new Date().toISOString() });
+                      await window.uploadStageFile('uiddelstage', 'video/first',
+                        new File([new Uint8Array([137, 80, 78, 71])], 'frame.png', { type: 'image/png' }));
+                      await fetch('/api/long/project', { method: 'POST', body: JSON.stringify({
+                        run: 'uidelfilm', project: { run: 'uidelfilm', project: pid,
+                          scenes: [{ prompt: 'сцена', sec: 10,
+                                     done: { id: 'uidelframescene', url: '/ui/previews/video.mp4', sig: 's' } }] } }) });
+                      document.querySelector('#projCur').click(); await wait(80);
+                      projectRow('Проект для проверки').querySelector('[data-delproj]').click();
+                      await until(() => !document.querySelector('#projDel').hidden);
+                      out.title = document.querySelector('#pdTitle').textContent;
+                      out.counts = [...document.querySelectorAll('.pd-counts > div')].map(d => d.textContent);
+                      out.askButtons = [...document.querySelectorAll('#pdFoot .btn')].map(b => b.textContent);
+                      document.querySelector('#pdPick').click(); await wait(80);
+                      out.byDefault = document.querySelectorAll('#pdBody [data-pd]:checked').length;
+                      out.rows = document.querySelectorAll('#pdBody [data-pd]').length;
+                      out.tiles = document.querySelectorAll('#pdBody .pd-tile').length;
+                      out.thumbs = { img: document.querySelectorAll('#pdBody .pd-tile img').length,
+                                     video: document.querySelectorAll('#pdBody .pd-tile video').length };
+                      out.goNone = document.querySelector('#pdGo').textContent;
+                      // a tile opens the card: the clip itself, its details, and «Оставить» right there
+                      document.querySelector('#pdBody [data-open="films:uidelfilm"]').click();
+                      await wait(120);
+                      out.card = { open: !document.querySelector('#pdCard').hidden,
+                                   video: !!document.querySelector('#pcBody video'),
+                                   title: (document.querySelector('#pcTitle') || {}).textContent || '',
+                                   text: (document.querySelector('#pcBody') || {}).textContent || '',
+                                   toggle: (document.querySelector('#pcToggle') || {}).textContent || '' };
+                      document.querySelector('#pcToggle').click(); await wait(120);
+                      out.cardAfter = { toggle: document.querySelector('#pcToggle').textContent,
+                                        tileOn: !!document.querySelector('#pdBody .pd-tile.on'),
+                                        go: document.querySelector('#pdGo').textContent };
+                      document.querySelector('#pdCard [data-close]').click(); await wait(80);
+                      out.cardClosed = document.querySelector('#pdCard').hidden;
+                      document.querySelector('#pdSelAll').click(); await wait(80);
+                      out.allChosen = document.querySelectorAll('#pdBody [data-pd]:checked').length;
+                      out.goAll = document.querySelector('#pdGo').textContent;
+                      document.querySelector('#pdBody [data-pd="films:uidelfilm"]').click(); await wait(80);
+                      out.oneChosen = document.querySelectorAll('#pdBody [data-pd]:checked').length;
+                      document.querySelector('#pdGo').click();
+                      await until(() => document.querySelector('#projDel').hidden);
+                      await wait(400);
+                      const projects = await (await fetch('/api/projects')).json();
+                      out.active = projects.active;
+                      out.stillThere = projects.projects.some(p => p.name === 'Проект для проверки');
+                      out.header = document.querySelector('#projName').textContent;
+                      const stage = ((await (await fetch('/api/stages')).json()).stages || [])
+                        .find(s => s.id === 'uiddelstage');
+                      out.stageKept = !!stage && stage.project === out.active;
+                      out.filmGone = Object.keys(await (await fetch('/api/long/project?run=uidelfilm')).json()).length === 0;
+                      out.toast = document.querySelector('#toast').textContent;
+                      await window.bmDelete('uiddelstage');
+                      return out;
+                    })()
+                """, await_promise=True)
+                check("a project is renamed in the switcher and the new name is saved",
+                      admin["renameInput"] and admin["renamed"] == "Проект для проверки"
+                      and admin["savedName"] == "Проект для проверки", str(admin))
+                check("the delete question names the project and counts what it holds",
+                      "Проект для проверки" in admin["title"] and len(admin["counts"]) == 2
+                      and "Выбрать, что оставить…" in admin["askButtons"]
+                      and "Удалить всё" in admin["askButtons"], str(admin))
+                check("«Основное» cannot be deleted: it is where a deleted project's work goes",
+                      admin["mainHasTrash"] is False, str(admin))
+                check("nothing is chosen in the picker until the user asks, «Выбрать все» marks all of it",
+                      admin["rows"] == 2 and admin["byDefault"] == 0 and admin["allChosen"] == 2
+                      and "Перенести выбранное (2)" in admin["goAll"], str(admin))
+                check("the picker shows the assets as thumbnails, a stage by its frame and a film by its scene",
+                      admin["tiles"] == 2 and admin["thumbs"]["img"] == 1
+                      and admin["thumbs"]["video"] == 1, str(admin))
+                check("a tile opens the card with the clip itself and its details",
+                      admin["card"]["open"] and admin["card"]["video"]
+                      and "Фильм Видеостудии" in admin["card"]["title"]
+                      and "Готово сцен" in admin["card"]["text"]
+                      and "Оставить в «Основном»" in admin["card"]["toggle"], str(admin["card"]))
+                check("the card can put the asset into «Основное» without going back to the list",
+                      admin["cardClosed"] and "Убрать из выбранных" in admin["cardAfter"]["toggle"]
+                      and admin["cardAfter"]["tileOn"] and "Перенести выбранное (1)" in admin["cardAfter"]["go"],
+                      str(admin["cardAfter"]))
+                check("the chosen part moves to «Основное» and the rest is deleted with the project",
+                      admin["oneChosen"] == 1 and not admin["stillThere"]
+                      and admin["active"] == "main" and admin["header"] == "Основное"
+                      and admin["stageKept"] and admin["filmGone"], str(admin))
+                check("the window says what happened to the deleted project's work",
+                      "удалён" in admin["toast"] and "Перенесено" in admin["toast"], str(admin["toast"]))
+
+                empty_project = await cdp.evaluate("""
+                    (async () => {
+                      const wait = ms => new Promise(r => setTimeout(r, ms));
+                      const until = async (fn, ms = 6000) => { const t0 = Date.now();
+                        while (Date.now() - t0 < ms) { if (fn()) return true; await wait(60); } return false; };
+                      const out = {};
+                      await postJSON('/api/projects', { name: 'Пустой проект' });
+                      await loadProjects();
+                      document.querySelector('#projCur').click(); await wait(80);
+                      [...document.querySelectorAll('.proj-item')].find(b => b.textContent.includes('Пустой проект'))
+                        .querySelector('[data-delproj]').click();
+                      await until(() => !document.querySelector('#projDel').hidden);
+                      out.lead = (document.querySelector('.pd-lead') || {}).textContent || '';
+                      out.pick = !!document.querySelector('#pdPick');
+                      document.querySelector('#pdAll').click();
+                      await until(() => document.querySelector('#projDel').hidden);
+                      await wait(300);
+                      const projects = await (await fetch('/api/projects')).json();
+                      out.gone = !projects.projects.some(p => p.name === 'Пустой проект');
+                      out.active = projects.active;
+                      return out;
+                    })()
+                """, await_promise=True)
+                check("an empty project is deleted at once, without a picker",
+                      empty_project["lead"].startswith("Проект пуст") and not empty_project["pick"]
+                      and empty_project["gone"] and empty_project["active"] == "main", str(empty_project))
+
+                # Deleting a draft asks first, right at the cursor: two variants of one shot look
+                # the same as thumbnails, and the question must not jump to the middle of the screen.
+                popover = await cdp.evaluate(
+                    "(async () => {"
+                    " const p = window.deleteClipItem({ id: 'ui-pop', prompt: 'Промпт для проверки',"
+                    "   preview: true, mode: 'video', res: '1280×736', date: new Date() }, { x: 420, y: 300 });"
+                    " await new Promise(r => setTimeout(r, 80));"
+                    " const pop = document.querySelector('#draftDelPop');"
+                    " const box = pop && !pop.hidden ? pop.getBoundingClientRect() : null;"
+                    " const text = pop ? pop.textContent : '';"
+                    " pop?.querySelector('[data-ddp=\"no\"]')?.click();"
+                    " const result = await p;"
+                    " return { shown: !!box, text, result, hidden: !!pop && pop.hidden,"
+                    "   left: box ? box.left : -1, top: box ? box.top : -1,"
+                    "   inside: !!box && box.left >= 0 && box.top >= 0"
+                    "     && box.right <= innerWidth && box.bottom <= innerHeight }; })()",
+                    await_promise=True)
+                check("the delete cross asks at the cursor, with a title and buttons only",
+                      popover["shown"] and "Удалить черновик?" in popover["text"]
+                      and "Промпт для проверки" not in popover["text"]
+                      and popover["inside"]
+                      and abs(popover["left"] - 434) <= 25 and abs(popover["top"] - 314) <= 25
+                      and popover["result"] is False and popover["hidden"], str(popover))
+
+                # the interface can be zoomed (Ctrl+wheel): CSS offsets are multiplied by the zoom,
+                # so a naive position drifts farther from the cursor the farther right it is clicked
+                zoomed = await cdp.evaluate(
+                    "(async () => {"
+                    " document.documentElement.style.zoom = '1.1';"
+                    " const p = window.deleteClipItem({ id: 'ui-pop2', preview: true, mode: 'video',"
+                    "   date: new Date() }, { x: 420, y: 300 });"
+                    " await new Promise(r => setTimeout(r, 80));"
+                    " const pop = document.querySelector('#draftDelPop');"
+                    " const b = pop.getBoundingClientRect();"
+                    " const out = { left: b.left, top: b.top, right: b.right, bottom: b.bottom };"
+                    " pop.querySelector('[data-ddp=\"no\"]').click();"
+                    " await p;"
+                    " document.documentElement.style.zoom = '';"
+                    " return out; })()", await_promise=True)
+                check("the question stays at the cursor when the interface is zoomed",
+                      abs(zoomed["left"] - 434) <= 25 and abs(zoomed["top"] - 314) <= 25
+                      and zoomed["right"] <= 1440 and zoomed["bottom"] <= 900, str(zoomed))
+
+                # a clip that already reached the Library can be deleted from the same cross; the
+                # question changes, because the record leaves the Library as well as the file
+                lib_pop = await cdp.evaluate("""
+                    (async () => {
+                      window.eval('LIB.push({ id: "lib-ui", mode: "video", kind: "video", preview: false,'
+                        + ' project: "main", date: new Date(), file: { type: "local", path: "C:/nope.mp4",'
+                        + ' filename: "nope.mp4" } }); renderLib();');
+                      const p = window.deleteClipItem(
+                        { id: 'lib-ui', preview: false, mode: 'video', date: new Date() }, { x: 300, y: 300 });
+                      await new Promise(r => setTimeout(r, 80));
+                      const pop = document.querySelector('#draftDelPop');
+                      const text = pop ? pop.textContent : '';
+                      pop?.querySelector('[data-ddp="no"]')?.click();
+                      const result = await p;
+                      window.eval('(() => { const i = LIB.findIndex(x => x.id === "lib-ui");'
+                        + ' if (i >= 0) LIB.splice(i, 1); renderLib(); })()');
+                      return { text, result };
+                    })()
+                """, await_promise=True)
+                check("a clip that is already in the Library asks with its own wording",
+                      "Удалить клип из Библиотеки?" in lib_pop["text"]
+                      and lib_pop["result"] is False, str(lib_pop))
+
+                # a stage is a record of the project now, not of this browser: it is saved through
+                # the server, its attached file is uploaded there, and the section paints the answer
+                stage = await cdp.evaluate("""
+                    (async () => {
+                      const saved = await window.postStage({ id: 'ui-stage', mode: 'video',
+                        name: 'Проверка', s: { q: '720p' }, prompt: 'тест',
+                        date: new Date().toISOString(), files: ['video/first'],
+                        names: { 'video/first': 'frame.png' } });
+                      const file = new File([new Uint8Array([1, 2, 3])], 'frame.png', { type: 'image/png' });
+                      await window.uploadStageFile('ui-stage', 'video/first', file);
+                      const served = await fetch('/api/stages/ui-stage/file?key=video/first');
+                      const bytes = served.ok ? [...new Uint8Array(await served.arrayBuffer())] : [];
+                      const type = served.headers.get('content-type');
+                      const shown = document.querySelector('#view-video .st-bar .st-n')?.textContent;
+                      const listed = (await (await fetch('/api/stages')).json()).stages.length;
+                      await window.bmDelete('ui-stage');
+                      const after = document.querySelector('#view-video .st-bar .st-n')?.textContent;
+                      const gone = (await fetch('/api/stages/ui-stage/file?key=video/first')).status;
+                      return { saved: saved && saved.id, shown, listed, after, bytes, type, gone };
+                    })()
+                """, await_promise=True)
+                check("a stage and its file are saved to the project, served, and deleted with it",
+                      stage["saved"] == "ui-stage" and stage["shown"] == "1"
+                      and stage["listed"] >= 1 and stage["after"] == "0"
+                      and stage["bytes"] == [1, 2, 3] and stage["type"] == "image/png"
+                      and stage["gone"] == 404, str(stage))
+
+                # «Замена персонажа» used to have no stages at all: its state and slots are already in
+                # the refs family's maps, so the section only had to join the list of sections with a bar
+                swap_stage = await cdp.evaluate("""
+                    (async () => {
+                      const wait = ms => new Promise(r => setTimeout(r, ms));
+                      document.querySelector('.nav[data-view="swap"]').click();
+                      await wait(300);
+                      const bar = document.querySelector('#view-swap .st-bar');
+                      const out = { bar: !!bar, save: !!(bar && bar.querySelector('.st-save')),
+                                    n0: bar ? bar.querySelector('.st-n').textContent : null };
+                      bar.querySelector('.st-save').click();      // the section's own button, not postStage
+                      await wait(1000);
+                      const mine = (await (await fetch('/api/stages')).json()).stages.filter(s => s.mode === 'swap');
+                      out.mode = mine.length ? mine[0].mode : '';
+                      out.n1 = document.querySelector('#view-swap .st-bar .st-n')?.textContent;
+                      out.item = (document.querySelector('#view-swap .st-bar .st-i') || {}).textContent || '';
+                      if (mine.length) await window.bmDelete(mine[0].id);
+                      out.n2 = document.querySelector('#view-swap .st-bar .st-n')?.textContent;
+                      return out;
+                    })()
+                """, await_promise=True)
+                check("«Замена персонажа» has stages of its own: save, list, delete",
+                      swap_stage["bar"] and swap_stage["save"] and swap_stage["mode"] == "swap"
+                      and swap_stage["n0"] == "0" and swap_stage["n1"] == "1"
+                      and swap_stage["n2"] == "0" and swap_stage["item"].strip() != "", str(swap_stage))
+
+                # A stage remembers the clip that was on the screen, and opening it brings the clip back
+                # (only the video section did that). The player is the same shared panel everywhere,
+                # so each section keeps the id its own `onShow` wrote and the page asks it to show again.
+                restored_clip = await cdp.evaluate("""
+                    (async () => {
+                      const wait = ms => new Promise(r => setTimeout(r, ms));
+                      addDraft({ id: 'ls-ui-clip', kind: 'video', mode: 'lipsync', preview: true,
+                                 date: new Date(), url: '/ui/previews/lipsync.mp4', len: 3, prompt: 'губы' });
+                      addDraft({ id: 'rf-ui-clip', kind: 'video', mode: 'refs', preview: true,
+                                 date: new Date(), url: '/ui/previews/refs.mp4', len: 5, prompt: 'рефы' });
+                      const stage = await window.postStage({ id: 'ui-ls-stage', mode: 'lipsync', name: 'Губы',
+                        s: { aspect: '9:16', shownId: 'ls-ui-clip' }, prompt: 'губы',
+                        date: new Date().toISOString() });
+                      await window.postStage({ id: 'ui-rf-stage', mode: 'refs', name: 'Рефы',
+                        s: { aspect: '16:9', shownId: 'rf-ui-clip' }, prompt: 'рефы',
+                        date: new Date().toISOString() });
+                      // the clip of this stage is gone: the newest clip of the project takes its place
+                      await window.postStage({ id: 'ui-rf-gone', mode: 'refs', name: 'Без клипа',
+                        s: { shownId: 'no-such-clip' }, date: new Date().toISOString() });
+                      const out = { saved: (stage.s || {}).shownId };
+                      await window.bmOpen('ui-ls-stage'); await wait(500);
+                      const lv = document.querySelector('#lPreview .result');
+                      out.ls = { hidden: !!(lv && lv.hidden), src: lv ? lv.getAttribute('src') : '',
+                                 id: window.h3Lipsync.state.shownId };
+                      await window.bmOpen('ui-rf-stage'); await wait(500);
+                      const rv = document.querySelector('#view-refs .rm-preview .result');
+                      out.rf = { hidden: !!(rv && rv.hidden), src: rv ? rv.getAttribute('src') : '',
+                                 id: window.RM.refs.S.shownId };
+                      await window.bmOpen('ui-rf-gone'); await wait(500);
+                      out.fallback = { src: rv.getAttribute('src'), hidden: rv.hidden,
+                                       id: window.RM.refs.S.shownId };
+                      // the video section did this before: the clip must also survive the delayed
+                      // apply() of the stage (it fires ~0,8 s later and used to empty the player)
+                      addDraft({ id: 'vd-ui-clip', kind: 'video', mode: 'video', preview: true,
+                                 date: new Date(), url: '/ui/previews/video.mp4', len: 5, prompt: 'видео' });
+                      await window.postStage({ id: 'ui-vd-stage', mode: 'video', name: 'Видео',
+                        s: { shownId: 'vd-ui-clip' }, date: new Date().toISOString() });
+                      await window.bmOpen('ui-vd-stage'); await wait(1100);
+                      const vv = document.querySelector('#vPreview .result');
+                      out.vd = { hidden: vv.hidden, src: vv.getAttribute('src'),
+                                 id: window.h3Video.state.shownId };
+                      const rest = (await (await fetch('/api/stages')).json()).stages
+                        .filter(s => ['lipsync', 'refs', 'video'].includes(s.mode));
+                      for (const s of rest) await window.bmDelete(s.id);
+                      dropDraft('ls-ui-clip'); dropDraft('rf-ui-clip'); dropDraft('vd-ui-clip');
+                      return out;
+                    })()
+                """, await_promise=True)
+                check("a stage keeps the id of the clip it was saved with",
+                      restored_clip["saved"] == "ls-ui-clip", str(restored_clip["saved"]))
+                check("opening a lipsync stage brings its clip back into the player",
+                      not restored_clip["ls"]["hidden"] and "lipsync.mp4" in restored_clip["ls"]["src"]
+                      and restored_clip["ls"]["id"] == "ls-ui-clip", str(restored_clip["ls"]))
+                check("opening a refs stage brings its clip back into the player",
+                      not restored_clip["rf"]["hidden"] and "refs.mp4" in restored_clip["rf"]["src"]
+                      and restored_clip["rf"]["id"] == "rf-ui-clip", str(restored_clip["rf"]))
+                check("a stage whose clip was deleted shows the newest one instead of an empty player",
+                      not restored_clip["fallback"]["hidden"]
+                      and "refs.mp4" in restored_clip["fallback"]["src"]
+                      and restored_clip["fallback"]["id"] == "rf-ui-clip", str(restored_clip["fallback"]))
+                check("the clip a video stage brings back stays after the stage finishes opening",
+                      not restored_clip["vd"]["hidden"] and "video.mp4" in restored_clip["vd"]["src"]
+                      and restored_clip["vd"]["id"] == "vd-ui-clip", str(restored_clip["vd"]))
+
+                # A film of the studio belongs to a project: the studio used to load whichever film
+                # was saved last, so a project could continue another project's film. Now the header
+                # switch takes the studio to that project's own film (or starts a new one).
+                film = await cdp.evaluate("""
+                    (async () => {
+                      const wait = ms => new Promise(r => setTimeout(r, ms));
+                      const until = async (fn, ms = 6000) => { const t0 = Date.now();
+                        while (Date.now() - t0 < ms) { if (fn()) return true; await wait(60); } return false; };
+                      document.querySelector('.nav[data-view="long"]').click();
+                      await wait(400);
+                      const root = window.RM.long.root;
+                      const pA = window.h3Projects.active(), runA = root._run, out = { pA, runA };
+                      const first = document.querySelector('#view-long .sc textarea');
+                      first.value = 'ФИЛЬМ А'; first.dispatchEvent(new Event('input', { bubbles: true }));
+                      root._flush();                       // the studio's own save, into its project
+                      let got = {};
+                      for (let i = 0; i < 50; i++) {
+                        got = await (await fetch('/api/long/project?project=' + encodeURIComponent(pA))).json();
+                        if (got.run === runA) break;
+                        await wait(100);
+                      }
+                      out.saved = { run: got.run || '', project: (got.project || {}).project || '',
+                                    text: ((got.project || {}).scenes || [{}])[0].prompt || '' };
+                      // a new project in the header: the studio must not keep editing project A's film
+                      document.querySelector('#projCur').click();
+                      document.querySelector('#projNewName').value = 'Фильм Б';
+                      document.querySelector('#projNewOk').click();
+                      await until(() => window.h3Projects.active() !== pA);
+                      await until(() => root._run !== runA);
+                      out.b = { project: window.h3Projects.active(), run: root._run,
+                                own: root._project, newFilm: root._run !== runA,
+                                scenes: [...document.querySelectorAll('#view-long .sc textarea')]
+                                  .map(t => t.value) };
+                      // a studio that was only opened is not a film: nothing for the delete dialog to offer
+                      await wait(1100);
+                      out.b.filmRecord = Object.keys(await (await fetch(
+                        '/api/long/project?project=' + out.b.project)).json()).length;
+                      out.b.offered = ((await (await fetch(
+                        '/api/projects/' + out.b.project + '/assets')).json()).films || []).length;
+                      // and back: the film of this project opens again with its text
+                      document.querySelector('#projCur').click();
+                      const back = [...document.querySelectorAll('.proj-item')]
+                        .find(b => b.textContent.includes('Основное'));
+                      back.click();
+                      await until(() => window.h3Projects.active() === pA);
+                      await until(() => root._run === runA);
+                      out.back = { run: root._run, own: root._project,
+                                   scenes: [...document.querySelectorAll('#view-long .sc textarea')]
+                                     .map(t => t.value) };
+                      // a stage of the film opened while another project is chosen: bmOpen switches the
+                      // project (and the studio) first and only then restores the stage
+                      document.querySelector('#view-long .st-bar .st-save').click();
+                      await wait(1000);
+                      const mine = (await (await fetch('/api/stages')).json()).stages.filter(s => s.mode === 'long');
+                      out.stage = mine.length ? { id: mine[0].id, project: mine[0].project, run: mine[0].run } : null;
+                      document.querySelector('#projCur').click();
+                      [...document.querySelectorAll('.proj-item')]
+                        .find(b => b.textContent.includes('Фильм Б')).click();
+                      await until(() => window.h3Projects.active() === out.b.project);
+                      await until(() => root._run !== runA);
+                      await window.bmOpen(out.stage.id);
+                      await wait(900);
+                      out.reopen = { project: window.h3Projects.active(), run: root._run,
+                                     scenes: [...document.querySelectorAll('#view-long .sc textarea')]
+                                       .map(t => t.value) };
+                      for (const s of (await (await fetch('/api/stages')).json()).stages
+                                       .filter(s => s.mode === 'long')) await window.bmDelete(s.id);
+                      return out;
+                    })()
+                """, await_promise=True)
+                check("the studio saves its film into the project that is open",
+                      film["saved"]["run"] == film["runA"] and film["saved"]["project"] == film["pA"]
+                      and film["saved"]["text"] == "ФИЛЬМ А", str(film["saved"]))
+                check("another project starts its own film instead of continuing this one",
+                      film["b"]["newFilm"] and film["b"]["project"] != film["pA"]
+                      and film["b"]["own"] == film["b"]["project"]
+                      and [s for s in film["b"]["scenes"] if s.strip()] == [], str(film["b"]))
+                check("an opened but untouched studio is not a film to keep",
+                      film["b"]["filmRecord"] == 0 and film["b"]["offered"] == 0, str(film["b"]))
+                check("coming back to a project opens its film again, with its scenes",
+                      film["back"]["run"] == film["runA"] and film["back"]["own"] == film["pA"]
+                      and (film["back"]["scenes"] or [""])[0] == "ФИЛЬМ А", str(film["back"]))
+                check("a stage of a film opened from another project brings that project and the film back",
+                      film["stage"] and film["stage"]["project"] == film["pA"]
+                      and film["reopen"]["project"] == film["pA"]
+                      and film["reopen"]["run"] == film["stage"]["run"]
+                      and (film["reopen"]["scenes"] or [""])[0] == "ФИЛЬМ А", str(film["reopen"]))
+
+                # the previous version kept stages in localStorage: on the first start of this one
+                # they are uploaded to the active project and the browser copy is dropped
+                await cdp.evaluate(
+                    "localStorage.setItem('h3-bookmarks', JSON.stringify([{"
+                    " id: 'legacy-stage', mode: 'video', name: 'Старый этап', auto: false,"
+                    " title: 'старый', date: '2026-11-01T10:00:00', s: { q: '480p' },"
+                    " prompt: 'старый', files: [] }])); true")
+                await cdp.call("Page.reload")
+                await cdp.wait_for("document.readyState === 'complete' && !!window.h3Video", timeout=40)
+                listed = []
+                for _ in range(40):
+                    listed = await cdp.evaluate(
+                        "(async () => (await (await fetch('/api/stages')).json()).stages.map(s => s.id))()",
+                        await_promise=True)
+                    if "legacy-stage" in listed:
+                        break
+                    await asyncio.sleep(0.2)
+                left = await cdp.evaluate("localStorage.getItem('h3-bookmarks')")
+                count = await cdp.evaluate("document.querySelector('#view-video .st-bar .st-n')?.textContent")
+                check("stages of the previous version move into the project on first start",
+                      "legacy-stage" in listed and left is None and count == "1",
+                      str({"ids": listed, "left": left, "count": count}))
+                await cdp.evaluate("window.bmDelete('legacy-stage')", await_promise=True)
+
                 empty_queue = await cdp.evaluate(
                     "(() => { const q = document.querySelector('#qList'); return !!q && /Очередь пуста/.test(q.textContent); })()")
                 check("the queue starts empty with its own message", empty_queue)
@@ -356,14 +827,20 @@ async def run_page(base: str, browser: str, shots: Path):
                 # its result. This is the one-owner contract seen from the window: one row, one
                 # library card even if the event is repeated, and the finished row can be cleared.
                 snap = await cdp.evaluate(
-                    "(() => { onServerMessage({type: 'hello', engine: true,"
-                    " jobs: [{prompt_id: 'ui-job-1', mode: 'video', state: 'running', stage: 'sample', step: 2, max: 10}],"
+                    "(() => { const p = window.h3Projects.active();"
+                    " onServerMessage({type: 'hello', engine: true,"
+                    " jobs: [{prompt_id: 'ui-job-1', mode: 'video', state: 'running', stage: 'sample', step: 2, max: 10, project: p}],"
                     " recent: [], results: []});"
+                    " const row = document.querySelector('#qList .q-row');"
                     " return {rows: document.querySelectorAll('#qList .q-row').length,"
                     " badge: document.querySelector('#qBadge').textContent,"
-                    " state: (window.h3State.get('ui-job-1') || {}).state}; })()")
+                    " proj: (row && row.querySelector('.q-proj') || {}).textContent || '',"
+                    " projName: (PROJECTS_VIEW.list.find(x => x.id === p) || {}).name || '',"
+                    " state: (window.h3State.get('ui-job-1') || {}).state, active: p}; })()")
                 check("a snapshot puts the running job in the queue",
                       snap and snap["rows"] == 1 and snap["badge"] == "1" and snap["state"] == "running", str(snap))
+                check("a job that came back in a snapshot keeps its project in the row",
+                      snap["projName"] and snap["proj"] == snap["projName"], str(snap))
 
                 done = await cdp.evaluate(
                     "(() => { const item = {id: 'ui-media-1', url: '/ui/previews/video.mp4',"
@@ -385,6 +862,40 @@ async def run_page(base: str, browser: str, shots: Path):
                     " text: document.querySelector('#qList').textContent}; })()")
                 check("finished rows can be cleared and the empty message comes back",
                       cleared and cleared["rows"] == 0 and "Очередь пуста" in cleared["text"], str(cleared))
+
+                # The queue is the machine's and stays shared, but a row says which project its job was
+                # submitted in: the page's one door (`qAdd`) stamps the active project, and a job of
+                # another project is labelled with that project's name.
+                queue_proj = await cdp.evaluate("""
+                    (() => {
+                      const active = window.h3Projects.active();
+                      const other = PROJECTS_VIEW.list.find(p => p.id !== active);
+                      const nameOf = id => (PROJECTS_VIEW.list.find(p => p.id === id) || {}).name || '';
+                      qAdd('ui-job-3', 'video', 'из панели');                       // the door a panel uses
+                      qAdd('ui-job-4', 'video', 'другой проект', { project: other.id });
+                      const badge = id => {
+                        const row = document.querySelector('#qList .q-row[data-id="' + id + '"]');
+                        const b = row && row.querySelector('.q-proj');
+                        return b ? b.textContent : '';
+                      };
+                      const out = { active, otherId: other.id, otherName: other.name,
+                                    activeName: nameOf(active),
+                                    own: (window.h3State.get('ui-job-3') || {}).project,
+                                    badgeOwn: badge('ui-job-3'), badgeOther: badge('ui-job-4'),
+                                    rows: document.querySelectorAll('#qList .q-row').length };
+                      for (const id of ['ui-job-3', 'ui-job-4']) window.h3State.handle({ prompt_id: id,
+                        type: 'done', item: { id: 'm-' + id, url: '/ui/previews/video.mp4', mode: 'video',
+                          kind: 'video', date: new Date().toISOString(), prompt: 'очередь' } });
+                      window.h3State.removeFinished();
+                      return out;
+                    })()
+                """)
+                check("a job is put into the queue with the project it was submitted in",
+                      queue_proj["own"] == queue_proj["active"]
+                      and queue_proj["badgeOwn"] == queue_proj["activeName"], str(queue_proj))
+                check("a row of another project carries that project's name in the shared queue",
+                      queue_proj["rows"] == 2 and queue_proj["badgeOther"] == queue_proj["otherName"]
+                      and queue_proj["otherName"], str(queue_proj))
 
                 # Own workflows: a section that used to be wired while the page was parsed, now a
                 # module with a lazy mount. The form is built from the server's report; a stub stands
@@ -457,6 +968,89 @@ async def run_page(base: str, browser: str, shots: Path):
                       and form["before"] == "старый промпт", str(form))
                 check("a size typed into the paired fields is rounded to a multiple of 32",
                       form and form["width"] == "800", str(form))
+
+                # The delete cross is not only in «Прошлые клипы»: the picture sections, the own
+                # workflow's history and the clip cards of «Монтаж» ask the same question at the
+                # cursor through the page's one `deleteClipItem`, and the section keeps nothing of a
+                # picture it deleted. The server call is stood in for here (the list is what is tested).
+                deleted = await cdp.evaluate("""
+                    (async () => {
+                      const calls = [];
+                      const orig = window.deleteClipItem;
+                      window.deleteClipItem = async (it, at) => {
+                        calls.push({ id: it.id, x: at && at.x, y: at && at.y });
+                        if (it.preview) dropDraft(it.id); else dropLib(it.id);
+                        return true;
+                      };
+                      const wait = ms => new Promise(r => setTimeout(r, ms));
+                      const pic = '/ui/previews/krea.jpg', out = {};
+                      try {
+                        addDraft({ id: 'pic-a', kind: 'image', mode: 'krea', preview: true,
+                                   date: new Date(Date.now() - 5000), url: pic, prompt: 'первая' });
+                        addDraft({ id: 'pic-b', kind: 'image', mode: 'krea', preview: true,
+                                   date: new Date(), url: pic, prompt: 'вторая' });
+                        const ph = document.querySelector('#view-krea .ip-hist');
+                        ph.querySelector('.cw-th[data-id="pic-b"]').click();
+                        await wait(80);
+                        const px = ph.querySelector('.cw-th[data-id="pic-b"] .cw-x');
+                        out.pic = { cross: !!px, title: px ? px.title : '',
+                                    shown: !document.querySelector('#view-krea .ip-res').hidden };
+                        px.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 321, clientY: 234 }));
+                        await wait(200);
+                        out.pic.on = (ph.querySelector('.cw-th.on') || {}).dataset?.id || '';
+                        out.pic.left = [...ph.querySelectorAll('.cw-th')].map(t => t.dataset.id);
+                        out.pic.calls = calls.splice(0);
+
+                        addDraft({ id: 'cw-a', kind: 'image', mode: 'custom', wf: 'demo', preview: true,
+                                   date: new Date(Date.now() - 5000), url: pic, prompt: 'раз' });
+                        addDraft({ id: 'cw-b', kind: 'image', mode: 'custom', wf: 'demo', preview: true,
+                                   date: new Date(), url: pic, prompt: 'два' });
+                        const ch = document.querySelector('#cwHist');
+                        ch.querySelector('.cw-th[data-id="cw-b"]').click();
+                        await wait(80);
+                        const cx = ch.querySelector('.cw-th[data-id="cw-b"] .cw-x');
+                        out.cw = { cross: !!cx, on: (ch.querySelector('.cw-th.on') || {}).dataset?.id || '' };
+                        cx.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 333, clientY: 222 }));
+                        await wait(220);
+                        out.cw.after = (ch.querySelector('.cw-th.on') || {}).dataset?.id || '';
+                        out.cw.left = [...ch.querySelectorAll('.cw-th')].map(t => t.dataset.id);
+                        out.cw.calls = calls.splice(0);
+
+                        addDraft({ id: 'mt-a', kind: 'video', mode: 'video', preview: true, date: new Date(),
+                                   url: '/ui/previews/video.mp4', len: 5, prompt: 'в монтаже' });
+                        await wait(150);
+                        const box = document.querySelector('#view-montage .mt-lib');
+                        const card = box.querySelector('.mt-card[data-id="mt-a"]');
+                        const mx = card && card.querySelector('.mt-del');
+                        out.mt = { card: !!card, del: !!mx, icon: !!(mx && mx.querySelector('svg')),
+                                   hide: !!(card && card.querySelector('.mt-x')) };
+                        mx.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 355, clientY: 244 }));
+                        await wait(300);
+                        out.mt.left = [...box.querySelectorAll('.mt-card')].map(c => c.dataset.id);
+                        out.mt.strip = document.querySelectorAll('#view-montage .mt-item').length;
+                        out.mt.calls = calls.splice(0);
+                      } finally {
+                        window.deleteClipItem = orig;
+                        ['pic-a', 'pic-b', 'cw-a', 'cw-b', 'mt-a'].forEach(id => dropDraft(id));
+                      }
+                      return out;
+                    })()
+                """, await_promise=True)
+                check("a picture in «Прошлые изображения» has a delete cross at the cursor",
+                      deleted["pic"]["cross"] and "Удалить черновик" in deleted["pic"]["title"]
+                      and deleted["pic"]["calls"] == [{"id": "pic-b", "x": 321, "y": 234}], str(deleted["pic"]))
+                check("the picture on the screen gives way to the next one when it is deleted",
+                      deleted["pic"]["on"] == "pic-a" and "pic-b" not in deleted["pic"]["left"], str(deleted["pic"]))
+                check("a result of an own workflow can be deleted from its history",
+                      deleted["cw"]["cross"] and deleted["cw"]["on"] == "cw-b"
+                      and deleted["cw"]["after"] == "cw-a" and deleted["cw"]["calls"][0]["x"] == 333,
+                      str(deleted["cw"]))
+                check("a clip card of «Монтаж» has its own delete, apart from «убрать из списка»",
+                      deleted["mt"]["card"] and deleted["mt"]["del"] and deleted["mt"]["icon"]
+                      and deleted["mt"]["hide"] and "mt-a" not in deleted["mt"]["left"]
+                      and deleted["mt"]["strip"] == 0
+                      and deleted["mt"]["calls"] == [{"id": "mt-a", "x": 355, "y": 244}],
+                      str(deleted["mt"]))
                 await asyncio.sleep(0.3)
                 await cdp.screenshot(shots / "custom.png")
 
@@ -625,4 +1219,5 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+
 

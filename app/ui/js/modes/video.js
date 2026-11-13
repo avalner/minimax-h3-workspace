@@ -15,7 +15,8 @@
   const $ = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 
-  const V = { aspect: '16:9', q: '720p', dur: 5, first: false, last: false, unet: 'fast', len: () => V.dur };
+  const V = { aspect: '16:9', q: '720p', dur: 5, first: false, last: false, unet: 'fast', len: () => V.dur,
+              shownId: null };   // the clip in the player: a stage saves it and brings it back
   let ui = null;   // the built panel: null until the section is opened for the first time
 
   function mount(scope) {
@@ -44,6 +45,7 @@
     },
     meta: () => ({ mode: 'video', prompt: $('#vPrompt').value.trim(), sub: ($('#vLoop').checked && V.first ? 'Зацикленное видео' : V.first && V.last ? 'Кадр → кадр' : V.first ? 'Изображение → видео' : 'Текст → видео') + (V.unet === 'fused' ? ' · Fused Turbo' : '') }),
     onDone: item => addToLib(item),
+    onShow: item => { V.shownId = item.id; },
   });
   $('#vLoop').onchange = () => { $('#dLast').style.opacity = $('#vLoop').checked ? .4 : ''; vPrev(); };
   const vUpd = paramsCard($('#vParams'), V, { n: 3, duration: true, onChange: () => { vPrev(); vMode(); },
@@ -157,10 +159,12 @@
 
   function update() { if (ui) ui.update(); }
   function refresh() { if (ui) ui.refresh(); }
+  /* the clip of a saved stage: the page asks for it when the stage is opened */
+  function showItem(id) { return ui && ui.refresh.show ? ui.refresh.show(id) : false; }
 
   window.h3Video = {
     get state() { return V; },
-    update, refresh, edit, repeat, modelsChanged,
+    update, refresh, edit, repeat, modelsChanged, showItem,
   };
 
   window.h3Modes.register("video", {

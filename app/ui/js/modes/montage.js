@@ -72,10 +72,11 @@
     const hid = hidden();
     const seen = new Set(), all = [...DRAFTS.filter(it => it.kind !== 'image' && !it.missing && it.url),
                                  ...LIB.filter(it => it.kind !== 'image' && !it.missing && it.url)]
+      .filter(it => !window.h3Projects || window.h3Projects.ok(it))
       .filter(it => !seen.has(it.id) && seen.add(it.id));
     const vids = all.filter(it => !hid.includes(it.id)), nh = all.length - vids.length;
     $('.mt-hid', root).innerHTML = nh ? `Убрано из списка: ${nh} · <button type="button" class="a-change" data-showall>Вернуть все</button>` : '';
-    $('.mt-lib', root).innerHTML = vids.length ? vids.map(it => `<button type="button" class="mt-card" data-id="${it.id}" title="${esc(it.prompt || '')}"><video src="${it.url}#t=0.5" preload="metadata" muted playsinline></video><span class="mt-plus">+</span><span class="mt-x" data-hide="${it.id}" role="button" title="Убрать из этого списка (в Библиотеке клип останется)">✕</span><span class="mt-len">${lenTxt(it)}</span><small>${esc(it.prompt || MODE_NAME[it.mode] || '')}${it.preview ? ' · черновик' : ''}</small></button>`).join('')
+    $('.mt-lib', root).innerHTML = vids.length ? vids.map(it => `<button type="button" class="mt-card" data-id="${it.id}" title="${esc(it.prompt || '')}"><video src="${it.url}#t=0.5" preload="metadata" muted playsinline></video><span class="mt-plus">+</span><span class="mt-x" data-hide="${it.id}" role="button" title="Убрать из этого списка (в Библиотеке клип останется)">✕</span><span class="mt-del" data-del="${it.id}" role="button" title="${it.preview ? 'Удалить черновик: файл уйдёт в корзину, из списка он тоже исчезнет' : 'Удалить клип из Библиотеки: файл уйдёт в корзину'}">${ICON.del}</span><span class="mt-len">${lenTxt(it)}</span><small>${esc(it.prompt || MODE_NAME[it.mode] || '')}${it.preview ? ' · черновик' : ''}</small></button>`).join('')
       : '<div class="hint">Видео пока нет: сгенерируйте клипы в любом видеоразделе — готовые появятся здесь.</div>';
     $('.mt-strip', root).innerHTML = MT.ids.length ? MT.ids.map((id, i) => { const it = get(id), d = durOf(i); return `<div class="mt-item" draggable="true" data-i="${i}" style="width:${wOf(d)}px"><video src="${it.url}#t=0.5" preload="metadata" muted playsinline></video><span class="mt-n">${i + 1}</span>${window.mtPipeDone && window.mtPipeDone(id) ? '<span class="mt-ok" title="Клип обработан">✓</span>' : ''}<span class="mt-len">${d.toFixed(1).replace('.0', '')} с${MT.cuts[i] != null ? ' ✂' : ''}</span><div class="mt-b"><button type="button" data-mv="-1" title="Влево">◀</button><button type="button" data-rm title="Убрать">✕</button><button type="button" data-mv="1" title="Вправо">▶</button></div><i class="mt-rh" title="Потяните, чтобы сделать клип короче или длиннее (длиннее оригинала нельзя)"></i></div>`; }).join('')
       : '<div class="hint">Пока пусто: нажмите на клипы сверху.</div>';
@@ -173,6 +174,15 @@
     if (e.target.closest('[data-showall]')) { hideSet([]); render(); return; }
     const zb = e.target.closest('[data-z]'); if (zb) { const k = +zb.dataset.z; setPx(k > 0 ? MT.px * 1.25 : k < 0 ? MT.px * 0.8 : fitPx()); return; }
     const tb = e.target.closest('[data-pv]'); if (tb) { showMode(tb.dataset.pv); return; }
+    // the trash can on a clip card deletes the clip itself (the file goes to the Recycle Bin), which is
+    // not the same as the ✕ that only takes it out of this list: that one leaves the clip in the Library
+    const d = e.target.closest('[data-del]');
+    if (d) {
+      e.stopPropagation();
+      const it = byId(d.dataset.del) || draftById(d.dataset.del);
+      if (it) deleteClipItem(it, { x: e.clientX, y: e.clientY }).then(ok => { if (ok) render(); });
+      return;
+    }
     const x = e.target.closest('[data-hide]'); if (x) { e.stopPropagation(); const id = x.dataset.hide; hideSet([...hidden(), id]); const k2 = MT.ids.map(v => v !== id); MT.cuts = MT.cuts.filter((_, i) => k2[i]); MT.ids = MT.ids.filter((_, i) => k2[i]); render(); return; }
     const c = e.target.closest('.mt-card'); if (c) { MT.ids.push(c.dataset.id); MT.cuts.push(null); render(); return; }
     const it = e.target.closest('.mt-item'); if (!it) return; const i = +it.dataset.i;

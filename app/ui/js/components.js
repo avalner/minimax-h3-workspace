@@ -32,6 +32,8 @@
     addDraftHook() {},
     removeDraftHook() {},
     keepDraft: async it => it,
+    deleteClip: async () => false,
+    projectOk: () => true,
     openUpscale() {},
     addJob() {},
     onPrompt() {},
@@ -387,44 +389,76 @@ function previewPanel(el, st, opts) {
     const head = draft
       ? (took ? `Готово за ${took} — черновик, в Библиотеку не добавлен.` : 'Черновик, в Библиотеку не добавлен.')
       : (took ? `Готово за ${took} — видео в Библиотеке.` : 'Видео в Библиотеке.');
-    status.innerHTML = `${head} Seed: <b style="font-family:var(--mono)">${esc(String(it.seed ?? '—'))}</b> `;
-    if (draft) status.insertAdjacentHTML('beforeend', '<button class="btn pri" id="vKeepBtn" type="button" style="padding:4px 12px;font-size:12px">Добавить в библиотеку</button> ');
-    if (it.seed != null) status.insertAdjacentHTML('beforeend', '<button class="btn" id="keepSeed" type="button" style="padding:4px 10px;font-size:12px">Зафиксировать</button> ');
-    status.insertAdjacentHTML('beforeend', ' <button class="btn pri" id="upBtn" type="button" style="padding:4px 12px;font-size:12px" title="Увеличить разрешение и добавить чёткости (SeedVR2)">Увеличить видео</button>');
+    // the text and the buttons are one wrapping row with even gaps: no stray spaces, nothing crowds
+    status.innerHTML = `<div class="v-status"><span class="v-head">${head} Seed: `
+      + `<b style="font-family:var(--mono)">${esc(String(it.seed ?? '—'))}</b></span>`
+      + '<span class="v-actions" id="vActions"></span></div>';
+    const acts = $('#vActions', el);
+    const add = (id, label, { pri = false, title = '' } = {}) => acts.insertAdjacentHTML(
+      'beforeend', `<button class="btn${pri ? ' pri' : ''} v-act" id="${id}" type="button"`
+      + `${title ? ` title="${title}"` : ''}>${label}</button>`);
+    if (draft) add('vKeepBtn', 'Добавить в библиотеку', { pri: true });
+    // any clip can be deleted from here, a Library one included: the file goes to the Recycle Bin
+    add('vDelBtn', 'Удалить', { title: draft
+      ? 'Удалить черновик: файл уйдёт в корзину, Библиотека не изменится'
+      : 'Удалить клип из Библиотеки: файл уйдёт в корзину' });
+    if (it.seed != null) add('keepSeed', 'Зафиксировать');
+    add('upBtn', 'Увеличить видео', { pri: true, title: 'Увеличить разрешение и добавить чёткости (SeedVR2)' });
     $('#upBtn', el).onclick = () => deps.openUpscale(deps.byId(it.id) || normalize(it));
     $('#keepSeed', el)?.addEventListener('click', () => useSeed(st, it.seed));
+    $('#vDelBtn', el)?.addEventListener('click', ev => deleteClipFlow(it, ev));
     $('#vKeepBtn', el)?.addEventListener('click', async () => {
       const b = $('#vKeepBtn', el); b.disabled = true;
       const kept = await deps.keepDraft(it);
       if (!kept) { b.disabled = false; return; }
       shown = kept; result.dataset.dragid = kept.id; resultActions(kept, took, fresh); refreshHist();
+      opts.onShow?.(kept);
     });
     // beginner flow: try another variant, or redo this very one (same seed) in a better size
     if (!fresh) return;
-    status.insertAdjacentHTML('beforeend', ' <button class="btn" id="otherBtn" type="button" style="padding:4px 12px;font-size:12px" title="Новый вариант с другим seed, настройки те же">Другой вариант</button>');
+    add('otherBtn', 'Другой вариант', { title: 'Новый вариант с другим seed, настройки те же' });
     $('#otherBtn', el).addEventListener('click', () => { st.seedFixed = false; st._upd?.(); go.onclick(); });
     const curQ = QUALITY_ALL.find(x => x.id === st.q), goodQ = QUALITY_ALL.find(x => x.id === '720p');
     if (it.seed != null && curQ && !(st.cw && st.ch) && curQ.px < goodQ.px) {
-      status.insertAdjacentHTML('beforeend', ' <button class="btn" id="goodBtn" type="button" style="padding:4px 12px;font-size:12px" title="Тот же вариант (seed сохранится), размер 1280×736. Результат будет похож, но не пиксель в пиксель">В хорошем качестве</button>');
+      add('goodBtn', 'В хорошем качестве', { title: 'Тот же вариант (seed сохранится), размер 1280×736. '
+        + 'Результат будет похож, но не пиксель в пиксель' });
       $('#goodBtn', el).addEventListener('click', () => { st.seedFixed = true; st.seed = String(it.seed); st.q = '720p'; st._upd?.(); go.onclick(); });
     }
   }
   // the clips of this section that are not in the Library yet: they would otherwise be lost when the next one is made
+  function historyItems() {
+    const mode = opts.meta && opts.meta().mode;
+    return [...deps.drafts().filter(x => x.kind !== 'image' && x.mode === mode && !x.missing && x.url),
+            ...deps.library().filter(x => x.kind !== 'image' && x.mode === mode && !x.missing && x.url)]
+      .filter((x, i, a) => a.findIndex(y => y.id === x.id) === i)
+      .filter(x => deps.projectOk(x))      // one work at a time: the project switch shows the rest
+      .sort((a, b) => b.date - a.date);
+  }
   function refreshHist() {
     if (opts.history === false) { vhHh.hidden = true; vhHist.innerHTML = ''; return; }
-    const mode = opts.meta && opts.meta().mode;
-    const mine = [...deps.drafts().filter(x => x.kind !== 'image' && x.mode === mode && !x.missing && x.url),
-                  ...deps.library().filter(x => x.kind !== 'image' && x.mode === mode && !x.missing && x.url)]
-      .filter((x, i, a) => a.findIndex(y => y.id === x.id) === i)
-      .sort((a, b) => b.date - a.date)
-      .filter((it, i) => it.preview || i < 12);
-    vhHh.hidden = !mine.length;
-    vhHist.innerHTML = mine.map(x => `<button draggable="true" class="cw-th${x.preview ? ' draft' : ''}${shown && shown.id === x.id ? ' on' : ''}" data-id="${x.id}" type="button" title="${esc((x.preview ? 'Черновик, не в Библиотеке · ' : '') + (x.prompt || x.sub || 'клип') + ' · ' + deps.fmtDate(x.date))}"><video src="${x.url}#t=0.5" preload="metadata" muted playsinline></video></button>`).join('');
+    // a clip deleted in another window must not stay in the player
+    if (shown && !deps.byId(shown.id) && !deps.draftById(shown.id)) {
+      shown = null;
+      resetFrame();
+      status.textContent = '';
+    }
+    const mine = historyItems().filter((it, i) => it.preview || i < 12);
+    if (!mine.length) {
+      // say why the list is empty instead of looking broken: there may be clips in other projects
+      const mode = opts.meta && opts.meta().mode;
+      const elsewhere = [...deps.drafts(), ...deps.library()].some(x => x.kind !== 'image' && x.mode === mode
+        && !x.missing && x.url && !deps.projectOk(x));
+      vhHh.hidden = !elsewhere;
+      vhHh.textContent = elsewhere ? 'В этом проекте клипов нет. Все проекты — кнопкой «Этот проект» в шапке' : '';
+      vhHist.innerHTML = '';
+      return;
+    }
+    vhHh.hidden = false;
+    vhHh.textContent = 'Прошлые клипы — нажмите, чтобы открыть';
+    vhHist.innerHTML = mine.map(x => `<button draggable="true" class="cw-th${x.preview ? ' draft' : ''}${shown && shown.id === x.id ? ' on' : ''}" data-id="${x.id}" type="button" title="${esc((x.preview ? 'Черновик, не в Библиотеке · ' : '') + (x.prompt || x.sub || 'клип') + ' · ' + deps.fmtDate(x.date))}"><i class="cw-x" data-del="${x.id}" title="${x.preview ? 'Удалить черновик' : 'Удалить клип из Библиотеки'}" role="button">✕</i><video src="${x.url}#t=0.5" preload="metadata" muted playsinline></video></button>`).join('');
   }
-  deps.addDraftHook(refreshHist);
-  vhHist.onclick = e => {
-    const b = e.target.closest('.cw-th'); const it = b && (deps.byId(b.dataset.id) || deps.draftById(b.dataset.id));
-    if (!it || run) return;
+  function showItem(it) {
+    if (!it || it.missing) return false;
     shown = it;
     [liveImg, liveVid, wait].forEach(x => x.hidden = true);
     $('.res', frame).hidden = true;
@@ -432,6 +466,31 @@ function previewPanel(el, st, opts) {
     playWithSound(result);
     frame.classList.add('done'); $('.hud-t', el).textContent = 'Готово'; $('.hud-s', el).textContent = '';
     resultActions(it, '', false); refreshHist();
+    opts.onShow?.(it);
+    return true;
+  }
+  async function deleteClipFlow(it, ev) {
+    const wasShown = !!(shown && shown.id === it.id);
+    const at = ev && ev.clientX != null ? { x: ev.clientX, y: ev.clientY } : null;
+    if (!(await deps.deleteClip(it, at))) return;
+    if (wasShown) {
+      shown = null;
+      const next = historyItems()[0];
+      if (next) showItem(next); else { resetFrame(); status.textContent = 'Клип удалён.'; }
+    }
+    refreshHist();
+  }
+  deps.addDraftHook(refreshHist);
+  vhHist.onclick = e => {
+    const del = e.target.closest('[data-del]');
+    if (del) {
+      const it = deps.byId(del.dataset.del) || deps.draftById(del.dataset.del);
+      if (it) deleteClipFlow(it, e);
+      return;
+    }
+    const b = e.target.closest('.cw-th'); const it = b && (deps.byId(b.dataset.id) || deps.draftById(b.dataset.id));
+    if (!it || run) return;
+    showItem(it);
   };
 
   /* ----- real generation through the local server ----- */
@@ -555,6 +614,7 @@ function previewPanel(el, st, opts) {
       frame.classList.add('done'); $('.hud-t', el).textContent = 'Готово'; $('.hud-s', el).textContent = took;
       resultActions(shown, took, true);
       refreshHist();
+      opts.onShow?.(shown);
     } else {
       resetFrame();
       status.textContent = kind === 'error' ? 'Ошибка ComfyUI: ' + data : 'Генерация остановлена. Поправьте промпт или настройки и запустите снова';
@@ -612,7 +672,9 @@ function previewPanel(el, st, opts) {
 
   queueMicrotask(refreshHist);   // LIB is declared later in the script: the history is filled once everything is ready
   const update = () => {
-    if (!run && $('.res', frame).hidden) resetFrame();
+    // a clip on the screen stays there: a parameter change (or the delayed apply of a stage) must not
+    // wipe it — the frame is reset only when there is nothing to show
+    if (!run && !shown && $('.res', frame).hidden) resetFrame();
     const effQ = st.effQ ? st.effQ() : st.q, [w, h] = resFor(st.aspect, effQ);
     if (!run) go.lastChild.textContent = goText();
     frame.style.aspectRatio = `${w}/${h}`;
@@ -642,6 +704,18 @@ function previewPanel(el, st, opts) {
     URL.revokeObjectURL(liveImg.dataset.url || "");
     delete liveImg.dataset.url;
     deps.removeDraftHook(refreshHist);
+  };
+  /* show a clip by its id: a stage remembers the clip it was saved with and brings it back.
+     If that clip is gone, the newest clip of the project is shown instead — an empty player with no
+     explanation looks like a broken stage. */
+  update.show = id => {
+    const it = id && (deps.byId(id) || deps.draftById(id));
+    if (it && !it.missing && showItem(it)) return true;
+    const first = historyItems()[0];
+    return first ? showItem(first) : false;
+  };
+  update.clear = () => {
+    shown = null; resetFrame(); status.textContent = ''; refreshHist();
   };
   return update;
 }

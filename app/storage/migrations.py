@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from domain.jobs import JobRecord, JobState, new_job_id
+from domain.projects import DEFAULT_PROJECT_ID, DEFAULT_PROJECT_NAME
 from storage.repositories import JobRepository, LibraryRepository
 
 # The tables. A step that changes them gets the next version number; importing data does not change
@@ -183,11 +184,59 @@ def _drafts(db, data_dir, report):
         db.execute("DELETE FROM library WHERE id=?", (row["id"],))
 
 
+def _projects(db, data_dir, report):
+    """Projects: one workspace per film, and every existing record moved into the default one.
+
+    The Library, the drafts and (from the moment they are created) the jobs carry the id of the
+    project they belong to. Nothing is deleted or moved on the disk: the project is a label.
+    """
+    db.execute("CREATE TABLE IF NOT EXISTS projects ("
+               "id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at REAL NOT NULL)")
+    db.execute("INSERT OR IGNORE INTO projects(id, name, created_at) VALUES(?,?,?)",
+               (DEFAULT_PROJECT_ID, DEFAULT_PROJECT_NAME, time.time()))
+    columns = {row["name"] for row in db.query("PRAGMA table_info(library)")}
+    if "project" not in columns:
+        db.execute("ALTER TABLE library ADD COLUMN project TEXT NOT NULL DEFAULT ''")
+    db.execute("CREATE INDEX IF NOT EXISTS library_by_project ON library(project)")
+    db.execute("UPDATE library SET project=? WHERE project IS NULL OR project=''", (DEFAULT_PROJECT_ID,))
+    # the payload is what the window receives: the id must be in it, not only in the column
+    for row in db.query("SELECT id, payload FROM library"):
+        item = json.loads(row["payload"])
+        if item.get("project"):
+            continue
+        item["project"] = DEFAULT_PROJECT_ID
+        db.execute("UPDATE library SET payload=? WHERE id=?",
+                   (json.dumps(item, ensure_ascii=False), row["id"]))
+    if db.one("SELECT 1 FROM sqlite_master WHERE type='table' AND name='drafts'") is not None:
+        for row in db.query("SELECT id, payload FROM drafts"):
+            item = json.loads(row["payload"])
+            if item.get("project"):
+                continue
+            item["project"] = DEFAULT_PROJECT_ID
+            db.execute("UPDATE drafts SET payload=? WHERE id=?",
+                       (json.dumps(item, ensure_ascii=False), row["id"]))
+
+
+def _stages(db, data_dir, report):
+    """Stages (save points of the sections) belong to a project and live in the database.
+
+    The records of older versions were kept in the browser's localStorage; the window imports them
+    itself on the first start (it is the only side that can read them), so there is nothing to move
+    here — only the table. The files a stage was made from stay in the browser, keyed by the stage id.
+    """
+    db.execute("CREATE TABLE IF NOT EXISTS stages ("
+               "id TEXT PRIMARY KEY, project TEXT NOT NULL DEFAULT '', mode TEXT NOT NULL DEFAULT '', "
+               "auto INTEGER NOT NULL DEFAULT 0, created_at REAL NOT NULL DEFAULT 0, payload TEXT NOT NULL)")
+    db.execute("CREATE INDEX IF NOT EXISTS stages_by_project ON stages(project, mode, created_at)")
+
+
 STEPS = (
     ("0001-schema", 1, _schema, "таблицы"),
     ("1000-import-library", 1, _import_library, "библиотека из library.json"),
     ("1001-import-queue", 1, _import_queue, "очередь из queue.json"),
     ("0002-drafts", 2, _drafts, "долговечные черновики вне Библиотеки"),
+    ("0003-projects", 3, _projects, "проекты: рабочее пространство каждой записи"),
+    ("0004-stages", 4, _stages, "этапы разделов: часть проекта, а не браузера"),
 )
 
 

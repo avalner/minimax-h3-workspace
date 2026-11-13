@@ -8,8 +8,8 @@ in one place, `server.build_app`.
 """
 
 from webcommon import (
-    CLIENT_ID, LONG_DIR, WORKFLOWS_DIR, comfy_error_text, http_refusal, lora_strength, media_input,
-    round_size, split_frames
+    CLIENT_ID, LONG_DIR, WORKFLOWS_DIR, comfy_error_text, freshest_long_run, http_refusal,
+    lora_strength, media_input, round_size, split_frames
 )
 
 import asyncio
@@ -668,17 +668,31 @@ class GenerateRoutes:
                 (d / (key + ext)).write_bytes(raw)
 
     async def h_long_project(self, req):
-        """The project of a long video (scenes, settings) is kept on disk too, so it survives anything that happens to the browser storage."""
+        """The project of a long video (scenes, settings) is kept on disk too, so it survives anything that happens to the browser storage.
+
+        A film belongs to a project, exactly like a clip: the record carries `project`, and a GET
+        without a run id answers with the freshest film of that project, so the studio never opens
+        another project's work. `?last=1` stays for the films saved before a film knew its project.
+        """
         if req.method == "POST":
             body = await req.json()
             run = re.sub(r"[^A-Za-z0-9]", "", str(body.get("run", "")))[:32]
-            if not run or not isinstance(body.get("project"), dict):
+            project = body.get("project")
+            if not run or not isinstance(project, dict):
                 raise web.HTTPBadRequest(text="bad project")
+            # stamped here and never moved afterwards: the project the film was started in
+            wanted = str(body.get("project_id") or project.get("project") or "")[:40]
+            if not wanted or not self.projects_repo.exists(wanted):
+                wanted = self.active_project()
+            project["project"] = wanted
             d = LONG_DIR / run
             d.mkdir(parents=True, exist_ok=True)
-            atomic_write_json(d / "project.json", body["project"])
-            return web.json_response({"ok": True})
+            atomic_write_json(d / "project.json", project)
+            return web.json_response({"ok": True, "project": wanted})
         run = re.sub(r"[^A-Za-z0-9]", "", req.query.get("run", ""))[:32]
+        wanted = str(req.query.get("project") or "")[:40]
+        if not run and wanted:   # the freshest film of this project
+            run = freshest_long_run(wanted)
         if not run and req.query.get("last"):   # the most recently saved project
             files = sorted(LONG_DIR.glob("*/project.json"), key=lambda f: f.stat().st_mtime, reverse=True) if LONG_DIR.is_dir() else []
             run = files[0].parent.name if files else ""

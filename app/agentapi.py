@@ -472,6 +472,12 @@ class AgentAPI:
             return body.get(key, params.get(key, default))
 
         key = str(body.get("idempotency_key") or "").strip()[:120]
+        # an agent may name the project explicitly; without it the job goes where the window works
+        project = str(body.get("project") or "").strip()
+        if project and not app.projects_repo.exists(project):
+            raise AgentError(400, "PROJECT_UNKNOWN", f"Нет проекта «{project}»",
+                             "Список проектов — GET " + PREFIX + "projects. Без параметра задание идёт "
+                             "в активный проект окна.")
 
         mode = str(body.get("mode") or "video").strip().lower()
         if mode != "video":
@@ -567,6 +573,7 @@ class AgentAPI:
                     "prompt": spec.prompt, "aspect": spec.aspect, "q": spec.quality, "len": spec.seconds,
                     "res": f"{spec.width}×{spec.height}", "seed": spec.seed, "inputs": inputs,
                     "model": spec.model, "acceleration": spec.acceleration,
+                    "project": project or app.active_project(),
                     "origin": {"kind": "agent", "client": str(body.get("client") or "")[:40] or None,
                                "idempotency_key": key or None}}
             record, deduplicated = await app.start_video_job(
@@ -714,7 +721,7 @@ class AgentAPI:
                     "phase": record.state.value if record is not None else None,
                     "finalizing": bool(job.get("finalizing")),
                     "mode": meta.get("mode"), "prompt": meta.get("prompt"), "seed": meta.get("seed"),
-                    "origin": meta.get("origin"),
+                    "origin": meta.get("origin"), "project": meta.get("project"),
                     "progress": {"stage": stage, "step": job.get("step"), "total": job.get("step_max"),
                                  "scene": scene, "scenes": scenes,
                                  "percent": percent(stage, job.get("step"), job.get("step_max"), scene, scenes)},
@@ -733,7 +740,7 @@ class AgentAPI:
             meta = (pending.legacy or {}).get("meta") or {}
             return {"job": job_id, "state": "queued", "phase": pending.state.value, "recovering": True,
                     "mode": meta.get("mode"), "prompt": meta.get("prompt"), "seed": meta.get("seed"),
-                    "origin": meta.get("origin"),
+                    "origin": meta.get("origin"), "project": meta.get("project"),
                     "progress": {"stage": "recovering", "step": None, "total": None, "scene": None,
                                  "scenes": None, "percent": 0.0},
                     "queue_position": None, "elapsed": None, "results": []}
@@ -753,7 +760,9 @@ class AgentAPI:
         if items:
             first = items[0]
             view.update(mode=first.get("mode"), prompt=first.get("prompt"), seed=first.get("seed"),
-                        origin=first.get("origin"))
+                        origin=first.get("origin"), project=first.get("project"))
+        elif recent:
+            view["project"] = (recent.get("meta") or {}).get("project")
         if recent and recent.get("message"):
             view["error"] = {"code": "JOB_FAILED", "message": recent["message"]}
         return view
@@ -762,7 +771,8 @@ class AgentAPI:
         path = self.app.file_path(item)
         return {"library_id": item["id"], "kind": item.get("kind", "video"), "mode": item.get("mode"),
                 "prompt": item.get("prompt"), "res": item.get("res"), "seconds": item.get("len"),
-                "date": item.get("date"), "path": str(path) if path else None,
+                "date": item.get("date"), "project": item.get("project"),
+                "path": str(path) if path else None,
                 "url": self._url(f"/api/file/{item['id']}")}
 
     async def h_jobs(self, _request):
@@ -798,11 +808,21 @@ class AgentAPI:
 
     # ---------- library ----------
 
+    async def h_projects(self, _request):
+        """The workspaces an agent may name in `POST jobs`: the same list the window shows."""
+        active = self.app.active_project()
+        return web.json_response({"active": active, "projects": [
+            {"id": p["id"], "name": p["name"], "active": p["id"] == active}
+            for p in self.app.projects()]})
+
     async def h_library(self, request):
         raw = request.query.get("limit", "20")
         limit = min(100, int(raw)) if raw.isdigit() else 20
         mode = request.query.get("mode")
-        items = [it for it in self.app.library.items if not mode or it.get("mode") == mode][:limit]
+        project = (request.query.get("project") or "").strip()
+        items = [it for it in self.app.library.items
+                 if (not mode or it.get("mode") == mode)
+                 and (not project or it.get("project") == project)][:limit]
         return web.json_response({"items": [self._result(it) for it in items],
                                   "total": len(self.app.library.items)})
 
@@ -824,4 +844,5 @@ class AgentAPI:
             web.get(PREFIX + "jobs/{jid}/wait", self.h_job_wait),
             web.post(PREFIX + "jobs/{jid}/cancel", self.h_job_cancel),
             web.get(PREFIX + "library", self.h_library),
+            web.get(PREFIX + "projects", self.h_projects),
         ]

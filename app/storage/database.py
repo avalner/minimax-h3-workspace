@@ -25,7 +25,7 @@ from pathlib import Path
 
 from domain.errors import SchemaVersionError
 
-SCHEMA_VERSION = 2   # durable drafts, separate from the Library
+SCHEMA_VERSION = 4   # 2: durable drafts, 3: projects, 4: stages in the database
 
 
 class Database:

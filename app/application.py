@@ -6,7 +6,8 @@ Everything here works without aiohttp routes and without the window.
 
 from webcommon import (
     BIN_PREVIEW, BIN_PREVIEW_META, CLIENT_ID, DATA_DIR, ENGINE_STOP_TIMEOUT, JobStore, LONG_DIR,
-    Library, ROOT, SHUTDOWN_BUDGET, STATE_DB, STORE_ERRORS, _ssl_context, comfy_error_text
+    Library, ROOT, SHUTDOWN_BUDGET, STATE_DB, STORE_ERRORS, _ssl_context, comfy_error_text,
+    drop_long_film, long_film_has_work, long_films, set_long_project
 )
 
 import asyncio
@@ -41,6 +42,7 @@ from backends.base import BackendUnavailable
 from backends.comfy import ComfyBackend
 from domain.errors import InvalidTransition, SchemaVersionError
 from domain.jobs import JobRecord, JobState, MAX_SECONDS, new_job_id, public_state
+from domain.projects import DEFAULT_PROJECT_ID, clean_name
 from runtime.events import EventHub
 from runtime.tasks import TaskSupervisor
 from services.engines import EngineManager
@@ -50,7 +52,8 @@ from storage.atomic import atomic_write_json
 from storage.database import Database
 from storage.migrations import migrate
 from storage.repositories import (
-    DraftRepository, IdempotencyRepository, JobRepository, MediaRepository, ResultRepository
+    DraftRepository, IdempotencyRepository, JobRepository, MediaRepository, ProjectRepository,
+    ResultRepository, StageRepository
 )
 
 from routes.status import StatusRoutes
@@ -61,9 +64,12 @@ from routes.lora import LoraRoutes
 from routes.agent import AgentRoutes
 from routes.generate import GenerateRoutes
 from routes.montage import MontageRoutes
+from routes.projects import ProjectRoutes
+from routes.stages import StageRoutes
 
 
-class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, AgentRoutes, GenerateRoutes, MontageRoutes):
+class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, AgentRoutes, GenerateRoutes,
+          MontageRoutes, ProjectRoutes, StageRoutes):
     def __init__(self, comfy_override=None, port=None):
         self.config = engine.Config(DATA_DIR / "config.json")
         # a share or a synchronised folder is a poor home for the queue, the library and (stage 3) the
@@ -88,6 +94,8 @@ class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, Agent
         self.jobs_repo = JobRepository(self.db)
         self.media_repo = MediaRepository(self.db)
         self.results_repo = ResultRepository(self.db)
+        self.projects_repo = ProjectRepository(self.db)
+        self.stages_repo = StageRepository(self.db)
         self.queue_save_error = None   # the last failure to persist the queue, shown in the window instead of a silent loss
         self.pending_resume = self.load_resume_queue()  # unfinished jobs of an earlier run (asked about at start)
         self.jobs = JobStore(self.save_queue)  # prompt_id -> job dict
@@ -153,6 +161,214 @@ class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, Agent
             note_error=self.note_error, on_outputs=self.keep_scene_state,
             drafts=self.drafts_repo, draft_dir=lambda: DATA_DIR / "drafts",
             extra_folders=lambda: [DATA_DIR / "cloud", DATA_DIR / "cache"])
+
+    # ---------- projects ----------
+
+    def projects(self):
+        """The workspaces to choose from. The default one is created by the migration, so the
+        window always has a project to show, even for a user who never made one."""
+        return self.projects_repo.all()
+
+    def active_project(self):
+        """The project new results are stamped with: the chosen one, else the default.
+
+        A project deleted behind the window's back must not stop generation: an unknown id in the
+        settings falls back to the default instead of failing a submit.
+        """
+        project_id = str(self.config.get("active_project") or "")
+        if project_id and self.projects_repo.exists(project_id):
+            return project_id
+        return DEFAULT_PROJECT_ID
+
+    def set_active_project(self, project_id):
+        project_id = str(project_id or "").strip()
+        if not project_id or not self.projects_repo.exists(project_id):
+            raise KeyError(project_id)
+        self.config.update(active_project=project_id)
+        return project_id
+
+    def create_project(self, name):
+        """A new workspace, selected at once: a project is created to work in it."""
+        name = clean_name(name)
+        if not name:
+            raise ValueError("Название проекта не может быть пустым")
+        project = self.projects_repo.create(name, now=time.time())
+        self.config.update(active_project=project["id"])
+        return project
+
+    def rename_project(self, project_id, name):
+        """Only the name changes: the id stays, so every result, stage and film keeps pointing at the
+        same work after a rename (a project is a label, not a folder)."""
+        project = self.projects_repo.get(str(project_id or ""))
+        if project is None:
+            raise KeyError(project_id)
+        name = clean_name(name)
+        if not name:
+            raise ValueError("Название проекта не может быть пустым")
+        return self.projects_repo.rename(project["id"], name)
+
+    def project_assets(self, project_id):
+        """What a project holds — the counts and the list the window's delete dialog offers to keep.
+
+        Everything that carries a project is here: Library items, drafts, stages and the studio's
+        films. The dialog starts with nothing chosen, so this list is also the only place the user
+        sees what is about to be deleted.
+        """
+        project = self.projects_repo.get(str(project_id or ""))
+        if project is None:
+            raise KeyError(project_id)
+        pid = project["id"]
+        return {
+            "project": project,
+            "library": [self.asset_row(x) for x in self.library.items if x.get("project") == pid],
+            "drafts": [self.asset_row(x) for x in self.pending.values() if x.get("project") == pid],
+            "stages": [{"id": s["id"], "mode": s.get("mode") or "", "name": s.get("name") or "",
+                        "date": str(s.get("date") or ""), "auto": bool(s.get("auto")),
+                        "files": len(s.get("files") or []), "preview": self.stage_preview(s)}
+                       for s in self.stages_repo.load() if s.get("project") == pid],
+            "films": [{"run": f["run"], "scenes": len(f.get("scenes") or []),
+                       "done": sum(1 for scene in (f.get("scenes") or [])
+                                   if scene.get("done") or scene.get("draftDone")),
+                       "saved": f.get("saved"), "preview": self.film_preview(f)}
+                      for f in long_films()
+                      if str(f.get("project") or "") == pid and long_film_has_work(f)],
+        }
+
+    def asset_row(self, item):
+        """One line of the delete dialog: what it is, and the picture to recognise it by.
+
+        The dialog shows the same thumbnails «Прошлые изображения» shows, so a line carries the URL
+        the window already uses for the item (a file that is gone simply has no preview).
+        """
+        row = {"id": item["id"], "kind": item.get("kind") or "", "mode": item.get("mode") or "",
+               "prompt": str(item.get("prompt") or "")[:140], "date": str(item.get("date") or "")}
+        for key in ("res", "len"):
+            if item.get(key):
+                row[key] = item[key]
+        if item.get("preview") and self.library.get(item["id"]) is None:
+            row["draft"] = True
+        path = self.file_path(item)
+        if path is not None and path.exists():
+            row["preview"] = {"url": f"/api/file/{item['id']}", "kind": row["kind"] or "video"}
+        return row
+
+    IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".avif")
+
+    def stage_preview(self, stage):
+        """A stage has no clip of its own: its first image (a frame, a reference) is what shows it."""
+        names = stage.get("names") if isinstance(stage.get("names"), dict) else {}
+        for key in stage.get("files") or []:
+            name = str(names.get(str(key)) or key)
+            if Path(name).suffix.lower() not in self.IMAGE_SUFFIXES:
+                continue
+            try:
+                if not self.stages_repo.file_path(stage["id"], str(key)).is_file():
+                    continue
+            except (OSError, ValueError):
+                continue
+            return {"url": f"/api/stages/{stage['id']}/file?key={urllib.parse.quote(str(key))}",
+                    "kind": "image"}
+        return None
+
+    @staticmethod
+    def film_preview(film):
+        """The newest finished scene of the film is its picture: the film itself has no file."""
+        for scene in film.get("scenes") or []:
+            for key in ("done", "draftDone"):
+                clip = (scene or {}).get(key) or {}
+                if isinstance(clip, dict) and clip.get("url"):
+                    return {"url": str(clip["url"]), "kind": "video"}
+        return None
+
+    async def delete_project(self, project_id, keep=None):
+        """Delete a project; what the user asked to keep moves to «Основное».
+
+        Keeping is only a new label — no file is copied or moved, because a project is not a folder.
+        The rest goes for good: the files of Library items and drafts to the Recycle Bin, stages and
+        films from the disk. A file that would not go into the bin is not lost with the project: its
+        record stays and moves to «Основное», so the user can delete it there and try again.
+        """
+        project = self.projects_repo.get(str(project_id or ""))
+        if project is None:
+            raise KeyError(project_id)
+        if project["id"] == DEFAULT_PROJECT_ID:
+            raise ValueError("Проект «Основное» удалить нельзя: в него можно перенести работу "
+                             "остальных проектов")
+        pid, target = project["id"], DEFAULT_PROJECT_ID
+        keep = keep if isinstance(keep, dict) else {}
+        chosen = {name: {str(x) for x in (keep.get(name) or []) if isinstance(x, str)}
+                  for name in ("library", "drafts", "stages", "films")}
+        library = [x for x in self.library.items if x.get("project") == pid]
+        drafts = [x for x in self.pending.values() if x.get("project") == pid]
+        stages = [s for s in self.stages_repo.load() if s.get("project") == pid]
+        films = [f for f in long_films() if str(f.get("project") or "") == pid]
+        moved = {"library": [], "drafts": [], "stages": [], "films": []}
+        deleted = {"library": [], "drafts": [], "stages": [], "films": []}
+        kept_back = {"library": [], "drafts": []}   # a file that would not go: the record stays
+
+        def relabel(item, group):
+            item["project"] = target
+            return moved[group].append(item["id"])
+
+        for item in library:                     # the chosen work keeps its files and changes its label
+            if item["id"] in chosen["library"]:
+                relabel(item, "library")
+                self.library.save(item)
+        for item in drafts:
+            if item["id"] in chosen["drafts"]:
+                relabel(item, "drafts")
+                self.drafts_repo.save(item)
+        for stage in stages:
+            if stage["id"] in chosen["stages"]:
+                stage["project"] = target
+                self.stages_repo.save(stage)
+                moved["stages"].append(stage["id"])
+        for film in films:
+            if film["run"] in chosen["films"] and set_long_project(film["run"], target):
+                moved["films"].append(film["run"])
+
+        drop_library = [x for x in library if x["id"] not in chosen["library"]]
+        if drop_library:
+            result = await self.delete_items(drop_library)
+            deleted["library"] = list(result["done"])
+            for item_id in result["failed"]:     # the file is still there: keep the item, under «Основное»
+                item = self.library.get(item_id)
+                if item is not None:
+                    item["project"] = target
+                    self.library.save(item)
+                    kept_back["library"].append(item_id)
+        gone_drafts = []
+        for item in (x for x in drafts if x["id"] not in chosen["drafts"]):
+            if await self.recycle_draft(item):
+                deleted["drafts"].append(item["id"])
+                gone_drafts.append(item["id"])
+            else:
+                item["project"] = target
+                self.drafts_repo.save(item)
+                kept_back["drafts"].append(item["id"])
+        for stage in (s for s in stages if s["id"] not in chosen["stages"]):
+            self.stages_repo.delete(stage["id"])
+            deleted["stages"].append(stage["id"])
+        for film in (f for f in films if f["run"] not in chosen["films"]):
+            if drop_long_film(film["run"]):
+                deleted["films"].append(film["run"])
+        with self.db.transaction():
+            self.projects_repo.delete(pid)
+            if self.config.get("active_project") == pid:
+                self.config.update(active_project=target)
+        for item_id in gone_drafts:              # another window must not keep showing this draft
+            await self.broadcast({"type": "draft_removed", "id": item_id})
+        return {"project": project, "target": target, "projects": self.projects(),
+                "active": self.active_project(), "moved": moved, "deleted": deleted,
+                "kept_back": kept_back}
+
+    def submission_meta(self, meta):
+        """A job's meta carries the project it was submitted in — the active one unless the caller
+        named another (the agent API may). Stamped at submission, not at completion: a clip that
+        finishes after the user switched projects still belongs to the one it was asked in."""
+        meta = dict(meta or {})
+        meta.setdefault("project", self.active_project())
+        return meta
 
     async def outputs_for_media(self, pid):
         """The engine's outputs, asked through the App every time: the media service must not keep a
@@ -741,6 +957,7 @@ class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, Agent
         The record is the truth; this dict is what the window, the engine events and the agent view
         have always used. One place builds it, whether the job came through the service or not.
         """
+        meta = self.submission_meta(meta)
         pid = record.prompt_id or record.backend_job_id
         if not pid:
             raise InvalidTransition("У задания нет идентификатора: показывать в очереди нечего")
@@ -966,12 +1183,17 @@ class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, Agent
         that follow as updates, so a repeated or a missed event cannot leave it with a wrong state.
         """
         jobs = []
+        names = None
         for pid, job in list(self.jobs.items()):
             meta = job.get("meta") or {}
+            project = str(meta.get("project") or "")
+            if names is None:   # the queue is the machine's; each row still says which work it is for
+                names = {str(p["id"]): str(p["name"]) for p in self.projects()}
             jobs.append({"prompt_id": pid, "state": job.get("state") or "queued",
                          "stage": job.get("stage"), "step": job.get("step"), "max": job.get("step_max"),
                          "mode": meta.get("mode"), "finalizing": bool(job.get("finalizing")),
                          "prompt": str(meta.get("sub") or meta.get("prompt") or "")[:140],
+                         "project": project, "project_name": names.get(project, ""),
                          "agent": (meta.get("origin") or {}).get("kind") == "agent"})
         recent = self.recent_outcomes(limit=100)
         wanted = {rec["prompt_id"] for rec in recent}
@@ -1015,6 +1237,7 @@ class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, Agent
     def hold_preview(self, item):
         """A picture is not added to the Library by itself: it waits until the user presses «Добавить в библиотеку»."""
         item["preview"] = True
+        item.setdefault("project", self.active_project())
         self.drafts_repo.save(item)
         self.note_preview_committed(item)
 
@@ -1179,6 +1402,7 @@ class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, Agent
     def begin_submission(self, spec, graph, stages, meta, preview=False, last_output=False, titles=None,
                          backend=None, backend_id=None):
         """Write intent before any backend POST, including modes without a typed video spec."""
+        meta = self.submission_meta(meta)
         now = time.time()
         job_id = new_job_id()
         record = JobRecord(job_id=job_id, prompt_id="pending-" + job_id, spec=spec,

@@ -65,6 +65,8 @@ class StatusRoutes:
                 "queue_save_error": self.queue_save_error,
                 "data_dir": {"path": str(DATA_DIR), "warning": self.data_dir_warning},
                 "storage": self.storage_state(),
+                # the window paints the project switcher from the first status call, before /api/projects
+                "projects": self.projects(), "active_project": self.active_project(),
                 # what a closing run could not finish in its budget: the next start may have work to do
                 "shutdown": self.last_shutdown}
         try:
