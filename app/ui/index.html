@@ -1864,6 +1864,9 @@ async function selectProject(id) {
     PROJECTS_VIEW.active = id;
     paintProjects();
     refreshProjectLists();
+    // a film belongs to a project: the studio switches to this project's film (or starts a new one).
+    // Awaited, because `bmOpen` restores a stage of that project right after the switch.
+    await window.h3LongProjectChanged?.();
     const project = PROJECTS_VIEW.list.find(p => p.id === id);
     toast('Проект: ' + (project ? project.name : id));
   } catch (e) { toast('Не удалось выбрать проект: ' + e.message); }
@@ -1879,6 +1882,7 @@ async function createProject() {
     PROJECTS_VIEW.active = reply.active || '';
     paintProjects();
     refreshProjectLists();
+    await window.h3LongProjectChanged?.();   // a new project is a new film (the studio switches too)
     $('#projPop').hidden = true;
     toast('Проект создан: ' + (reply.project ? reply.project.name : name));
   } catch (e) { toast('Не удалось создать проект: ' + e.message); }

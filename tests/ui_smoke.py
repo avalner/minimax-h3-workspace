@@ -432,6 +432,86 @@ async def run_page(base: str, browser: str, shots: Path):
                       not restored_clip["vd"]["hidden"] and "video.mp4" in restored_clip["vd"]["src"]
                       and restored_clip["vd"]["id"] == "vd-ui-clip", str(restored_clip["vd"]))
 
+                # A film of the studio belongs to a project: the studio used to load whichever film
+                # was saved last, so a project could continue another project's film. Now the header
+                # switch takes the studio to that project's own film (or starts a new one).
+                film = await cdp.evaluate("""
+                    (async () => {
+                      const wait = ms => new Promise(r => setTimeout(r, ms));
+                      const until = async (fn, ms = 6000) => { const t0 = Date.now();
+                        while (Date.now() - t0 < ms) { if (fn()) return true; await wait(60); } return false; };
+                      document.querySelector('.nav[data-view="long"]').click();
+                      await wait(400);
+                      const root = window.RM.long.root;
+                      const pA = window.h3Projects.active(), runA = root._run, out = { pA, runA };
+                      const first = document.querySelector('#view-long .sc textarea');
+                      first.value = 'ФИЛЬМ А'; first.dispatchEvent(new Event('input', { bubbles: true }));
+                      root._flush();                       // the studio's own save, into its project
+                      let got = {};
+                      for (let i = 0; i < 50; i++) {
+                        got = await (await fetch('/api/long/project?project=' + encodeURIComponent(pA))).json();
+                        if (got.run === runA) break;
+                        await wait(100);
+                      }
+                      out.saved = { run: got.run || '', project: (got.project || {}).project || '',
+                                    text: ((got.project || {}).scenes || [{}])[0].prompt || '' };
+                      // a new project in the header: the studio must not keep editing project A's film
+                      document.querySelector('#projCur').click();
+                      document.querySelector('#projNewName').value = 'Фильм Б';
+                      document.querySelector('#projNewOk').click();
+                      await until(() => window.h3Projects.active() !== pA);
+                      await until(() => root._run !== runA);
+                      out.b = { project: window.h3Projects.active(), run: root._run,
+                                own: root._project, newFilm: root._run !== runA,
+                                scenes: [...document.querySelectorAll('#view-long .sc textarea')]
+                                  .map(t => t.value) };
+                      // and back: the film of this project opens again with its text
+                      document.querySelector('#projCur').click();
+                      const back = [...document.querySelectorAll('.proj-item')]
+                        .find(b => b.textContent.includes('Основное'));
+                      back.click();
+                      await until(() => window.h3Projects.active() === pA);
+                      await until(() => root._run === runA);
+                      out.back = { run: root._run, own: root._project,
+                                   scenes: [...document.querySelectorAll('#view-long .sc textarea')]
+                                     .map(t => t.value) };
+                      // a stage of the film opened while another project is chosen: bmOpen switches the
+                      // project (and the studio) first and only then restores the stage
+                      document.querySelector('#view-long .st-bar .st-save').click();
+                      await wait(1000);
+                      const mine = (await (await fetch('/api/stages')).json()).stages.filter(s => s.mode === 'long');
+                      out.stage = mine.length ? { id: mine[0].id, project: mine[0].project, run: mine[0].run } : null;
+                      document.querySelector('#projCur').click();
+                      [...document.querySelectorAll('.proj-item')]
+                        .find(b => b.textContent.includes('Фильм Б')).click();
+                      await until(() => window.h3Projects.active() === out.b.project);
+                      await until(() => root._run !== runA);
+                      await window.bmOpen(out.stage.id);
+                      await wait(900);
+                      out.reopen = { project: window.h3Projects.active(), run: root._run,
+                                     scenes: [...document.querySelectorAll('#view-long .sc textarea')]
+                                       .map(t => t.value) };
+                      for (const s of (await (await fetch('/api/stages')).json()).stages
+                                       .filter(s => s.mode === 'long')) await window.bmDelete(s.id);
+                      return out;
+                    })()
+                """, await_promise=True)
+                check("the studio saves its film into the project that is open",
+                      film["saved"]["run"] == film["runA"] and film["saved"]["project"] == film["pA"]
+                      and film["saved"]["text"] == "ФИЛЬМ А", str(film["saved"]))
+                check("another project starts its own film instead of continuing this one",
+                      film["b"]["newFilm"] and film["b"]["project"] != film["pA"]
+                      and film["b"]["own"] == film["b"]["project"]
+                      and [s for s in film["b"]["scenes"] if s.strip()] == [], str(film["b"]))
+                check("coming back to a project opens its film again, with its scenes",
+                      film["back"]["run"] == film["runA"] and film["back"]["own"] == film["pA"]
+                      and (film["back"]["scenes"] or [""])[0] == "ФИЛЬМ А", str(film["back"]))
+                check("a stage of a film opened from another project brings that project and the film back",
+                      film["stage"] and film["stage"]["project"] == film["pA"]
+                      and film["reopen"]["project"] == film["pA"]
+                      and film["reopen"]["run"] == film["stage"]["run"]
+                      and (film["reopen"]["scenes"] or [""])[0] == "ФИЛЬМ А", str(film["reopen"]))
+
                 # the previous version kept stages in localStorage: on the first start of this one
                 # they are uploaded to the active project and the browser copy is dropped
                 await cdp.evaluate(

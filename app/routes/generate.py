@@ -668,17 +668,31 @@ class GenerateRoutes:
                 (d / (key + ext)).write_bytes(raw)
 
     async def h_long_project(self, req):
-        """The project of a long video (scenes, settings) is kept on disk too, so it survives anything that happens to the browser storage."""
+        """The project of a long video (scenes, settings) is kept on disk too, so it survives anything that happens to the browser storage.
+
+        A film belongs to a project, exactly like a clip: the record carries `project`, and a GET
+        without a run id answers with the freshest film of that project, so the studio never opens
+        another project's work. `?last=1` stays for the films saved before a film knew its project.
+        """
         if req.method == "POST":
             body = await req.json()
             run = re.sub(r"[^A-Za-z0-9]", "", str(body.get("run", "")))[:32]
-            if not run or not isinstance(body.get("project"), dict):
+            project = body.get("project")
+            if not run or not isinstance(project, dict):
                 raise web.HTTPBadRequest(text="bad project")
+            # stamped here and never moved afterwards: the project the film was started in
+            wanted = str(body.get("project_id") or project.get("project") or "")[:40]
+            if not wanted or not self.projects_repo.exists(wanted):
+                wanted = self.active_project()
+            project["project"] = wanted
             d = LONG_DIR / run
             d.mkdir(parents=True, exist_ok=True)
-            atomic_write_json(d / "project.json", body["project"])
-            return web.json_response({"ok": True})
+            atomic_write_json(d / "project.json", project)
+            return web.json_response({"ok": True, "project": wanted})
         run = re.sub(r"[^A-Za-z0-9]", "", req.query.get("run", ""))[:32]
+        wanted = str(req.query.get("project") or "")[:40]
+        if not run and wanted:   # the freshest film of this project
+            run = self.freshest_long_run(wanted)
         if not run and req.query.get("last"):   # the most recently saved project
             files = sorted(LONG_DIR.glob("*/project.json"), key=lambda f: f.stat().st_mtime, reverse=True) if LONG_DIR.is_dir() else []
             run = files[0].parent.name if files else ""
@@ -687,6 +701,24 @@ class GenerateRoutes:
             return web.json_response({})
         refs = sorted(p.name for p in (LONG_DIR / run / "refs").glob("*")) if (LONG_DIR / run / "refs").is_dir() else []
         return web.json_response({"run": run, "project": json.loads(f.read_text(encoding="utf-8")), "refs": refs})
+
+    @staticmethod
+    def freshest_long_run(project):
+        """The film of this project that was saved last (its own folder is what makes a film one)."""
+        best, best_t = "", None
+        if not LONG_DIR.is_dir():
+            return best
+        for path in LONG_DIR.glob("*/project.json"):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                stamp = path.stat().st_mtime
+            except (OSError, ValueError):
+                continue
+            if str((data or {}).get("project") or "") != project:
+                continue
+            if best_t is None or stamp > best_t:
+                best, best_t = path.parent.name, stamp
+        return best
 
     async def h_long_stage(self, req):
         """A saved stage of a long video: the scene continuation points and the reference pictures are copied aside, so redoing a
