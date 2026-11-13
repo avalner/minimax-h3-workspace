@@ -1009,6 +1009,38 @@ async def run_page(base: str, browser: str, shots: Path):
                     label: view.querySelector('.ip-fullb').textContent.trim() }; })()""", await_promise=True)
                 check("the full-screen layer is taken away when the section is left",
                       stale and stale["on"] and not stale["after"] and stale["label"] == "На весь экран", str(stale))
+                # The outline of the selection is a screen-space line: zooming the picture must not turn it into a
+                # thick band or a hairline, so its on-screen width stays the same while its size in picture pixels
+                # shrinks as the picture grows (that is what the canvas holds).
+                ants = await cdp.evaluate("""(async () => {
+                  const sleep = ms => new Promise(r => setTimeout(r, ms));
+                  const view = document.querySelector('#view-inpaint');
+                  const over = view.querySelector('.ip-over');
+                  view.querySelector('.ip-mode button[data-m="select"]').click();
+                  view.querySelector('.ip-selshape button[data-s="rect"]').click();
+                  const sr = over.getBoundingClientRect();
+                  const at = (fx, fy) => ({ clientX: sr.left + sr.width * fx, clientY: sr.top + sr.height * fy });
+                  const ev = (type, extra) => over.dispatchEvent(new PointerEvent(type, Object.assign({ bubbles: true,
+                    cancelable: true, pointerId: 1, isPrimary: true, button: 0 }, extra)));
+                  ev('pointerdown', at(0.25, 0.25));
+                  ev('pointermove', at(0.6, 0.65));
+                  ev('pointerup', at(0.6, 0.65));
+                  await sleep(60);
+                  const zoom = view.querySelector('.ip-zoom');
+                  const setZ = async v => { zoom.value = String(v); zoom.dispatchEvent(new Event('input', { bubbles: true })); await sleep(60); };
+                  const fit = view._antsWidth();
+                  await setZ(250); const big = view._antsWidth();
+                  await setZ(40); const small = view._antsWidth();
+                  await setZ(100);
+                  return { fit, big, small }; })()""", await_promise=True)
+                ok_line = lambda a: a and abs(a["screen"] - 1.6) < 0.35
+                check("the selection outline keeps its on-screen width at any zoom",
+                      ants and ok_line(ants["fit"]) and ok_line(ants["small"])
+                      and ants["big"] and 1.25 <= ants["big"]["screen"] <= 2.2, str(ants))
+                check("in picture pixels the outline gets thinner as the picture grows",
+                      ants and ants["big"]["canvas"] < ants["fit"]["canvas"] < ants["small"]["canvas"], str(ants))
+                await asyncio.sleep(0.2)
+                await cdp.screenshot(shots / "inpaint-select.png")
 
                 # The page's own event entry, without a ComfyUI: a snapshot of a running job, then
                 # its result. This is the one-owner contract seen from the window: one row, one

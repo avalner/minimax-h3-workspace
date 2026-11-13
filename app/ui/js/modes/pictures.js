@@ -958,7 +958,7 @@ function buildInpaint(scope) {
     }
     cursorNow();
   };
-  scope.listen(window, 'resize', () => { ringCal = null; paintRing(); });
+  scope.listen(window, 'resize', () => { ringCal = null; paintRing(); paintSel(); });
   scope.listen(window, 'scroll', () => { if (hoverPt) { hoverPt = null; paintRing(); } }, true);
   scope.listen(document, 'keydown', e => { if (e.key === 'Alt') { altHeld = true; cursorNow(); paintRing(); } });
   scope.listen(document, 'keyup', e => { if (e.key === 'Alt') { altHeld = false; cursorNow(); paintRing(); } });
@@ -975,6 +975,7 @@ function buildInpaint(scope) {
     zoomV.textContent = zoom + '%';
     if (!keep) { try { localStorage.setItem('h3-ip-zoom', String(zoom)); } catch {} }
     hoverPt = null; paintRing();   // the picture moved under the pointer: the ring comes back on the next move
+    paintSel();                    // ...and the outline of the selection is redrawn at the new on-screen scale
   };
   const fitZoom = () => {   // the biggest canvas that still shows the whole picture without scrolling
     if (!drop._file || !imgC.height) return 100;
@@ -1095,23 +1096,32 @@ function buildInpaint(scope) {
     const y1 = Math.max(a.box.y + a.box.h, b.box.y + b.box.h);
     return { path: p, box: { x: x0, y: y0, w: x1 - x0, h: y1 - y0 } };
   };
-  const paintSel = () => {   // marching ants over the mask (and the shape being dragged)
+  /* The outline of the selection is a SCREEN-space line: the canvas holds picture pixels, so a line of 1.4 of them
+     would grow into a thick blurry band at 300 % and shrink into a hairline at 20 %. The width, the dashes and their
+     offset are therefore divided by the on-screen scale of the canvas, and the line stays the same on screen at any
+     zoom — the same trick the brush ring uses. `root._antsWidth` reports what was actually drawn (a test reads it). */
+  let antsDrawn = { canvas: 0, screen: 0 };
+  root._antsWidth = () => antsDrawn;
+  function paintSel() {   // marching ants over the mask (and the shape being dragged)
     sctx.clearRect(0, 0, selC.width, selC.height);
     const drag = selDrag && shapeOf(selDrag);
-    if (!sel && !drag) return;
+    if (!sel && !drag) { antsDrawn = { canvas: 0, screen: 0 }; return; }
     const p = new Path2D();
     if (sel) p.addPath(sel.path);
     if (drag) p.addPath(drag.path);
+    const k = (selC.getBoundingClientRect().width / selC.width) || 1;   // canvas pixels -> screen pixels
+    const w = Math.max(0.5, 1.6 / k);   // 0.5 px is the thinnest that still survives the canvas raster
     sctx.save();
-    sctx.lineWidth = 1.4;
-    sctx.setLineDash([5, 4]);
+    sctx.lineWidth = w;
+    sctx.setLineDash([5 / k, 4 / k]);
     sctx.strokeStyle = 'rgba(0,0,0,.85)';
     sctx.stroke(p);
-    sctx.lineDashOffset = 4.5;
+    sctx.lineDashOffset = 4.5 / k;
     sctx.strokeStyle = 'rgba(255,255,255,.95)';
     sctx.stroke(p);
     sctx.restore();
-  };
+    antsDrawn = { canvas: w, screen: w * k };
+  }
   const selSet = s => { sel = s; selMask = null; unselB.disabled = !s; cursorNow(); paintSel(); };
   const selCommit = s => {   // a change of the selection is a step of the same history as the strokes
     selSet(s);
