@@ -191,40 +191,19 @@
 
 | файл | строка | код |
 | --- | --- | --- |
-| server.py | 935 | self.jobs.pop(pid, None) |
-| server.py | 940 | self.jobs.pop(pid, None) |
-| server.py | 1060 | self.try_set_job_state(self.jobs[jid], JobState.CANCELED if kind == "interrupted" else JobState.FAILED, |
-| server.py | 1063 | self.jobs.pop(jid, None) |
-| server.py | 1182 | self.jobs.pop(pid, None) |
-| server.py | 1187 | self.jobs.pop(pid, None) |
-| server.py | 1257 | self.jobs[pid] = job |
-| server.py | 1282 | job["state"] = public_state(target) |
-| server.py | 1285 | changed = record.apply(target, now=datetime.now().timestamp(), error=error) |
-| server.py | 1286 | job["state"] = public_state(record.state) |
-| server.py | 1346 | self.jobs.pop(pid, None)   # there is nothing to wait for any more |
-| server.py | 1352 | self.jobs.pop(pid, None)   # the result is registered: only now the job leaves the queue |
-| server.py | 1412 | jobs.append({"prompt_id": pid, "state": job.get("state") or "queued", |
-| server.py | 2155 | self.jobs[pid] = job |
-| server.py | 2188 | self.jobs[pid] = job |
-| server.py | 2197 | self.jobs[pid] = job |
-| server.py | 2202 | self.jobs.pop(pid, None) |
-| server.py | 2269 | out.update(state=job.get("state") or "queued", stage=job.get("stage"), step=job.get("step"), |
-| server.py | 2460 | self.jobs[pid] = {"prompt_id": pid, "state": "queued", "stages": {}, "stage": None, |
-| server.py | 2463 | self.set_job_state(self.jobs[pid], JobState.QUEUED) |
-| server.py | 2509 | self.jobs.pop(pid, None) |
-| server.py | 2542 | self.jobs.pop(pid, None) |
-| server.py | 4394 | self.jobs.pop(pid, None) |
-| server.py | 4405 | self.jobs.pop(pid, None) |
-| server.py | 4414 | if job["state"] == "queued": |
-| server.py | 4418 | self.jobs.pop(pid, None) |
-| server.py | 4477 | self.jobs.pop(pid, None) |
-| server.py | 4502 | if job["state"] == "running" and silent > 600: |
-| server.py | 4513 | self.jobs.pop(pid, None) |
-| server.py | 4524 | if job["state"] == "queued" and age > 240: |
-| server.py | 4530 | self.jobs.pop(pid, None) |
-| server.py | 4535 | elif job["state"] == "running" and silent > 900: |
-| server.py | 4541 | self.jobs.pop(pid, None) |
-| server.py | 4552 | self.jobs.pop(pid, None) |
+| application.py | 454 | self.jobs.pop(pid, None) |
+| application.py | 459 | self.jobs.pop(pid, None) |
+| application.py | 572 | self.try_set_job_state(self.jobs[jid], JobState.CANCELED if kind == "interrupted" else JobState.FAILED, |
+| application.py | 575 | self.jobs.pop(jid, None) |
+| application.py | 672 | self.jobs.pop(pid, None) |
+| application.py | 677 | self.jobs.pop(pid, None) |
+| application.py | 745 | self.jobs[pid] = job |
+| application.py | 770 | job["state"] = public_state(target) |
+| application.py | 773 | changed = record.apply(target, now=datetime.now().timestamp(), error=error) |
+| application.py | 774 | job["state"] = public_state(record.state) |
+| application.py | 834 | self.jobs.pop(pid, None)   # there is nothing to wait for any more |
+| application.py | 840 | self.jobs.pop(pid, None)   # the result is registered: only now the job leaves the queue |
+| application.py | 900 | jobs.append({"prompt_id": pid, "state": job.get("state") or "queued", |
 | agentapi.py | 673 | running = job.get("state") == "running" |
 | services/jobs.py | 72 | record.apply(JobState.SUBMITTING, now=self._clock()) |
 | services/jobs.py | 77 | record.fail(str(e), now=self._clock()) |
@@ -238,94 +217,85 @@
 | services/jobs.py | 195 | record.cancel_confirmed(now=self._clock()) |
 | services/jobs.py | 210 | record.cancel_confirmed(now=self._clock())   # a queued job is removed at once |
 | services/media.py | 410 | record.succeed(now=self._clock()) |
+| routes/jobs.py | 137 | self.jobs[pid] = job |
+| routes/jobs.py | 170 | self.jobs[pid] = job |
+| routes/jobs.py | 179 | self.jobs[pid] = job |
+| routes/jobs.py | 184 | self.jobs.pop(pid, None) |
+| routes/jobs.py | 251 | out.update(state=job.get("state") or "queued", stage=job.get("stage"), step=job.get("step"), |
+| routes/jobs.py | 292 | self.jobs[pid] = {"prompt_id": pid, "state": "queued", "stages": {}, "stage": None, |
+| routes/jobs.py | 295 | self.set_job_state(self.jobs[pid], JobState.QUEUED) |
+| routes/jobs.py | 341 | self.jobs.pop(pid, None) |
+| routes/jobs.py | 374 | self.jobs.pop(pid, None) |
+| routes/jobs.py | 423 | self.jobs.pop(pid, None) |
+| routes/jobs.py | 434 | self.jobs.pop(pid, None) |
+| routes/jobs.py | 443 | if job["state"] == "queued": |
+| routes/jobs.py | 447 | self.jobs.pop(pid, None) |
+| routes/jobs.py | 506 | self.jobs.pop(pid, None) |
+| routes/jobs.py | 531 | if job["state"] == "running" and silent > 600: |
+| routes/jobs.py | 542 | self.jobs.pop(pid, None) |
+| routes/jobs.py | 553 | if job["state"] == "queued" and age > 240: |
+| routes/jobs.py | 559 | self.jobs.pop(pid, None) |
+| routes/jobs.py | 564 | elif job["state"] == "running" and silent > 900: |
+| routes/jobs.py | 570 | self.jobs.pop(pid, None) |
+| routes/jobs.py | 581 | self.jobs.pop(pid, None) |
 
 ## Черновики и Библиотека: 27
 
 | файл | строка | код |
 | --- | --- | --- |
-| server.py | 546 | self.pending = {}  # item id -> item; memory only, so a restart forgets them |
-| server.py | 1420 | for item in (*self.library.items, *self.pending.values()): |
-| server.py | 1458 | return self.library.get(item_id) or self.pending.get(item_id) |
-| server.py | 1463 | self.pending[item["id"]] = item |
-| server.py | 1464 | while len(self.pending) > PREVIEW_LIMIT: |
-| server.py | 1465 | self.pending.pop(next(iter(self.pending))) |
-| server.py | 2274 | items = [self.public(x) for x in (*self.library.items, *self.pending.values()) if x.get("prompt_id") == pid] |
-| server.py | 2519 | self.library.add(item) |
-| server.py | 4111 | self.library.add(item) |
-| server.py | 4565 | item = self.pending.get(iid) |
-| server.py | 4567 | known = self.library.get(iid) |
-| server.py | 4571 | if self.library.get(iid) is not None:   # the list was written, the draft was not dropped yet |
-| server.py | 4572 | self.pending.pop(iid, None) |
-| server.py | 4573 | return web.json_response({"item": self.public(self.library.get(iid)), "kept": True}) |
-| server.py | 4581 | self.pending.pop(iid, None) |
-| server.py | 4585 | item = self.library.get(req.match_info["id"]) |
-| server.py | 4591 | self.library.save(item) |
-| server.py | 4595 | item = self.library.get(req.match_info["id"]) |
-| server.py | 4614 | self.library.remove(item["id"]) |
-| server.py | 4622 | items = [x for x in (self.library.get(i) for i in ids) if x] |
-| server.py | 4660 | self.library.remove(i) |
-| server.py | 4687 | item = self.library.get(req.match_info["id"]) |
+| application.py | 95 | self.pending = {}  # item id -> item; memory only, so a restart forgets them |
+| application.py | 908 | for item in (*self.library.items, *self.pending.values()): |
+| application.py | 944 | return self.library.get(item_id) or self.pending.get(item_id) |
+| application.py | 949 | self.pending[item["id"]] = item |
+| application.py | 950 | while len(self.pending) > PREVIEW_LIMIT: |
+| application.py | 951 | self.pending.pop(next(iter(self.pending))) |
 | services/media.py | 399 | self.library.repo.add(item)   # the row and the file are both there, or neither is shown |
 | services/media.py | 524 | existing = self.library.get(item["id"]) |
 | services/media.py | 527 | self.library.add(item)          # the row is written first: it may raise, the draft is kept |
 | services/media.py | 538 | self.library.save(item)     # one changed row: the path of the copy |
 | services/media.py | 556 | if library or self.library.get(item["id"]) is not None: |
+| routes/jobs.py | 256 | items = [self.public(x) for x in (*self.library.items, *self.pending.values()) if x.get("prompt_id") == pid] |
+| routes/jobs.py | 351 | self.library.add(item) |
+| routes/library.py | 138 | item = self.pending.get(iid) |
+| routes/library.py | 140 | known = self.library.get(iid) |
+| routes/library.py | 144 | if self.library.get(iid) is not None:   # the list was written, the draft was not dropped yet |
+| routes/library.py | 145 | self.pending.pop(iid, None) |
+| routes/library.py | 146 | return web.json_response({"item": self.public(self.library.get(iid)), "kept": True}) |
+| routes/library.py | 154 | self.pending.pop(iid, None) |
+| routes/library.py | 158 | item = self.library.get(req.match_info["id"]) |
+| routes/library.py | 164 | self.library.save(item) |
+| routes/library.py | 168 | item = self.library.get(req.match_info["id"]) |
+| routes/library.py | 187 | self.library.remove(item["id"]) |
+| routes/library.py | 195 | items = [x for x in (self.library.get(i) for i in ids) if x] |
+| routes/library.py | 233 | self.library.remove(i) |
+| routes/library.py | 260 | item = self.library.get(req.match_info["id"]) |
+| routes/montage.py | 388 | self.library.add(item) |
 
 ## Короткая память об исходах: 4
 
 | файл | строка | код |
 | --- | --- | --- |
-| server.py | 1397 | self.recent[pid] = {"state": kind, "at": datetime.now().isoformat(timespec="seconds"), |
-| server.py | 1431 | self.history[job["prompt_id"]] = {"meta": job.get("meta") or {}, "created": job.get("t0")} |
-| server.py | 2208 | self.recent[pid] = {"state": "error", "at": datetime.now().isoformat(timespec="seconds"), |
-| server.py | 2284 | r = self.recent[pid] |
+| application.py | 885 | self.recent[pid] = {"state": kind, "at": datetime.now().isoformat(timespec="seconds"), |
+| application.py | 919 | self.history[job["prompt_id"]] = {"meta": job.get("meta") or {}, "created": job.get("t0")} |
+| routes/jobs.py | 190 | self.recent[pid] = {"state": "error", "at": datetime.now().isoformat(timespec="seconds"), |
+| routes/jobs.py | 266 | r = self.recent[pid] |
 
 ## Фоновые задачи: 50
 
 | файл | строка | код |
 | --- | --- | --- |
-| server.py | 630 | self.hw = await asyncio.to_thread(engine.detect_hardware) |
-| server.py | 635 | await asyncio.to_thread(self.llm.stop) |
-| server.py | 710 | self.packs_task = self.tasks.spawn("install-nodes", self.install_missing_packs()) |
-| server.py | 713 | self.ws_task = self.tasks.spawn("comfy-ws", self.comfy_ws_loop()) |
-| server.py | 714 | self.guard_task = self.tasks.spawn("gpu-watch", self.guard_loop()) |
-| server.py | 715 | self.watchdog_task = self.tasks.spawn("lost-watch", self.jobs_watchdog())  # jobs ComfyUI has lost, not a hung card |
-| server.py | 802 | await asyncio.to_thread(self.llm.stop) |
-| server.py | 816 | worker = asyncio.ensure_future(asyncio.to_thread(func, *args)) |
-| server.py | 981 | self.hw = await asyncio.to_thread(engine.detect_hardware) |
-| server.py | 1027 | gpu = await asyncio.to_thread(self.monitor.gpu) |
-| server.py | 1527 | raw = await asyncio.to_thread(path.read_bytes) |
-| server.py | 1682 | self.dl_task = self.tasks.spawn("models", run()) |
-| server.py | 1708 | self.hw = await asyncio.to_thread(engine.detect_hardware) |
-| server.py | 1811 | data = await asyncio.to_thread(self.monitor.sample, where) |
-| server.py | 1830 | hw = await asyncio.to_thread(engine.detect_hardware, install_dir) |
-| server.py | 1930 | hw = await asyncio.to_thread(engine.detect_hardware, install_dir) |
-| server.py | 1941 | self.installer.task = self.tasks.spawn("install", self.run_install(install_dir, models_dir)) |
-| server.py | 2004 | hw = await asyncio.to_thread(engine.detect_hardware, self.config.get("install_dir")) |
-| server.py | 2015 | text = await asyncio.to_thread(report.build, { |
-| server.py | 2157 | self.tasks.spawn(f"cloud:{pid}", self.poll_cloud(rh, pid), replace=True) |
-| server.py | 2362 | return web.json_response({"have": await asyncio.to_thread(clipboard_has_picture)}) |
-| server.py | 2370 | if await asyncio.to_thread(clipboard_set_picture, data): |
-| server.py | 2373 | picture = await asyncio.to_thread(clipboard_picture) |
-| server.py | 2464 | self.tasks.spawn(f"cloud:{pid}", self.poll_cloud(rh, pid), replace=True) |
-| server.py | 2575 | gpu = await asyncio.to_thread(self.monitor.gpu) |
-| server.py | 3364 | dl = asyncio.create_task(civitai_client.download_file_stream(self.session, url, str(dest), token)) |
-| server.py | 3389 | self.lora_dl_task = self.tasks.spawn("lora", work()) |
-| server.py | 3598 | return web.json_response(await asyncio.to_thread(work)) |
-| server.py | 3742 | return await asyncio.to_thread(p.read_bytes) |
-| server.py | 3927 | self.ffmpeg_dl_task = self.tasks.spawn("ffmpeg-dl", work()) |
-| server.py | 3955 | res = await asyncio.to_thread(ffmpeg_mgr.check_ffmpeg_update, st.get("version")) |
-| server.py | 4071 | task = self.tasks.spawn(f"ffmpeg:{pid}", |
-| server.py | 4096 | info = await asyncio.to_thread(ffmpeg_mgr.probe_media, st["ffprobe_path"], str(dest)) |
-| server.py | 4399 | self.tasks.spawn(f"cancel:{pid}", self.interrupt_watch(pid), replace=True) |
-| server.py | 4422 | self.tasks.spawn(f"cancel:{pid}", self.interrupt_watch(pid), replace=True) |
-| server.py | 4610 | gone = set(await asyncio.to_thread(send_to_recycle_bin, todo)) if todo else set() |
-| server.py | 4759 | _, _, found = await asyncio.to_thread(ag.find_gguf, custom["dir"]) |
-| server.py | 4823 | self.tasks.spawn("agent-install", run()) |
-| server.py | 4841 | found = await asyncio.to_thread(speech.locate, self.llm.root, folder) |
-| server.py | 4895 | self.hw = await asyncio.to_thread(engine.detect_hardware) |
-| server.py | 4896 | model, proj, models = await asyncio.to_thread(ag.find_gguf, folder, body.get("model"), self.hw.get("vram_gb")) |
-| server.py | 5068 | sid = await asyncio.to_thread(self.skills.save_upload, files) |
+| application.py | 179 | self.hw = await asyncio.to_thread(engine.detect_hardware) |
+| application.py | 184 | await asyncio.to_thread(self.llm.stop) |
+| application.py | 251 | self.packs_task = self.tasks.spawn("install-nodes", self.install_missing_packs()) |
+| application.py | 254 | self.ws_task = self.tasks.spawn("comfy-ws", self.comfy_ws_loop()) |
+| application.py | 255 | self.guard_task = self.tasks.spawn("gpu-watch", self.guard_loop()) |
+| application.py | 256 | self.watchdog_task = self.tasks.spawn("lost-watch", self.jobs_watchdog())  # jobs ComfyUI has lost, not a hung card |
+| application.py | 321 | await asyncio.to_thread(self.llm.stop) |
+| application.py | 335 | worker = asyncio.ensure_future(asyncio.to_thread(func, *args)) |
+| application.py | 500 | self.hw = await asyncio.to_thread(engine.detect_hardware) |
+| application.py | 539 | gpu = await asyncio.to_thread(self.monitor.gpu) |
+| application.py | 1011 | raw = await asyncio.to_thread(path.read_bytes) |
+| application.py | 1065 | gpu = await asyncio.to_thread(self.monitor.gpu) |
 | agentapi.py | 320 | gpu = await asyncio.to_thread(app.monitor.gpu) |
 | services/engines.py | 89 | await asyncio.to_thread(process.stop)   # a worker thread: terminate + wait 15 s + taskkill |
 | services/engines.py | 109 | await asyncio.to_thread(self.process.restart) |
@@ -334,23 +304,44 @@
 | services/media.py | 207 | await asyncio.to_thread(_replace, part, dest) |
 | services/media.py | 225 | worker = asyncio.ensure_future(asyncio.to_thread( |
 | runtime/events.py | 87 | sub.task = self._tasks.spawn(f"events:{self._count}", self._send(sub)) |
+| routes/agent.py | 48 | _, _, found = await asyncio.to_thread(ag.find_gguf, custom["dir"]) |
+| routes/agent.py | 112 | self.tasks.spawn("agent-install", run()) |
+| routes/agent.py | 130 | found = await asyncio.to_thread(speech.locate, self.llm.root, folder) |
+| routes/agent.py | 184 | self.hw = await asyncio.to_thread(engine.detect_hardware) |
+| routes/agent.py | 185 | model, proj, models = await asyncio.to_thread(ag.find_gguf, folder, body.get("model"), self.hw.get("vram_gb")) |
+| routes/agent.py | 355 | sid = await asyncio.to_thread(self.skills.save_upload, files) |
+| routes/generate.py | 733 | return web.json_response(await asyncio.to_thread(work)) |
+| routes/jobs.py | 139 | self.tasks.spawn(f"cloud:{pid}", self.poll_cloud(rh, pid), replace=True) |
+| routes/jobs.py | 296 | self.tasks.spawn(f"cloud:{pid}", self.poll_cloud(rh, pid), replace=True) |
+| routes/jobs.py | 428 | self.tasks.spawn(f"cancel:{pid}", self.interrupt_watch(pid), replace=True) |
+| routes/jobs.py | 451 | self.tasks.spawn(f"cancel:{pid}", self.interrupt_watch(pid), replace=True) |
+| routes/library.py | 57 | return await asyncio.to_thread(p.read_bytes) |
+| routes/library.py | 183 | gone = set(await asyncio.to_thread(send_to_recycle_bin, todo)) if todo else set() |
+| routes/lora.py | 240 | dl = asyncio.create_task(civitai_client.download_file_stream(self.session, url, str(dest), token)) |
+| routes/lora.py | 265 | self.lora_dl_task = self.tasks.spawn("lora", work()) |
+| routes/models.py | 141 | self.dl_task = self.tasks.spawn("models", run()) |
+| routes/models.py | 167 | self.hw = await asyncio.to_thread(engine.detect_hardware) |
+| routes/models.py | 258 | hw = await asyncio.to_thread(engine.detect_hardware, install_dir) |
+| routes/models.py | 358 | hw = await asyncio.to_thread(engine.detect_hardware, install_dir) |
+| routes/models.py | 369 | self.installer.task = self.tasks.spawn("install", self.run_install(install_dir, models_dir)) |
+| routes/montage.py | 204 | self.ffmpeg_dl_task = self.tasks.spawn("ffmpeg-dl", work()) |
+| routes/montage.py | 232 | res = await asyncio.to_thread(ffmpeg_mgr.check_ffmpeg_update, st.get("version")) |
+| routes/montage.py | 348 | task = self.tasks.spawn(f"ffmpeg:{pid}", |
+| routes/montage.py | 373 | info = await asyncio.to_thread(ffmpeg_mgr.probe_media, st["ffprobe_path"], str(dest)) |
+| routes/status.py | 130 | data = await asyncio.to_thread(self.monitor.sample, where) |
+| routes/status.py | 158 | hw = await asyncio.to_thread(engine.detect_hardware, self.config.get("install_dir")) |
+| routes/status.py | 169 | text = await asyncio.to_thread(report.build, { |
+| routes/status.py | 239 | return web.json_response({"have": await asyncio.to_thread(clipboard_has_picture)}) |
+| routes/status.py | 247 | if await asyncio.to_thread(clipboard_set_picture, data): |
+| routes/status.py | 250 | picture = await asyncio.to_thread(clipboard_picture) |
 
 ## Запись на диск: 24
 
 | файл | строка | код |
 | --- | --- | --- |
-| server.py | 259 | path.write_text(CLIP_HELPER, encoding="utf-8-sig") |
-| server.py | 303 | path.write_bytes(data) |
-| server.py | 1374 | atomic_write_json(d / f"state_{lg['part']}{sfx}.json", |
-| server.py | 2026 | path.write_text(text, encoding="utf-8") |
-| server.py | 2319 | tmp.write_bytes(data) |
-| server.py | 2664 | atomic_write_json(self.wf_path(wid), {"name": name, "graph": graph}) |
-| server.py | 3533 | (d / (key + ext)).write_bytes(raw) |
-| server.py | 3544 | atomic_write_json(d / "project.json", body["project"]) |
-| server.py | 4011 | p.write_bytes(files[k][1]) |
-| server.py | 4052 | music.write_bytes(files["music"][1]) |
-| server.py | 4064 | probe.write_bytes(b"") |
-| server.py | 5050 | atomic_write_json(p, data) |
+| application.py | 862 | atomic_write_json(d / f"state_{lg['part']}{sfx}.json", |
+| webcommon.py | 210 | path.write_text(CLIP_HELPER, encoding="utf-8-sig") |
+| webcommon.py | 254 | path.write_bytes(data) |
 | agentapi.py | 190 | atomic_write_json(self._meta_path(asset_id), meta) |
 | agentapi.py | 223 | atomic_write_json(path, data, indent=1) |
 | engine.py | 62 | atomic_write_json(self.path, data, indent=1) |
@@ -363,4 +354,13 @@
 | storage/atomic.py | 95 | return atomic_write_bytes(path, text.encode(encoding), fsync=fsync, retries=retries, retry_delay=retry_delay) |
 | storage/atomic.py | 98 | def atomic_write_json(path, data, *, indent=None, ensure_ascii=False, sort_keys=False, fsync=True): |
 | storage/atomic.py | 101 | return atomic_write_text(path, text, fsync=fsync) |
+| routes/agent.py | 337 | atomic_write_json(p, data) |
+| routes/generate.py | 69 | atomic_write_json(self.wf_path(wid), {"name": name, "graph": graph}) |
+| routes/generate.py | 668 | (d / (key + ext)).write_bytes(raw) |
+| routes/generate.py | 679 | atomic_write_json(d / "project.json", body["project"]) |
+| routes/library.py | 49 | tmp.write_bytes(data) |
+| routes/montage.py | 288 | p.write_bytes(files[k][1]) |
+| routes/montage.py | 329 | music.write_bytes(files["music"][1]) |
+| routes/montage.py | 341 | probe.write_bytes(b"") |
+| routes/status.py | 180 | path.write_text(text, encoding="utf-8") |
 

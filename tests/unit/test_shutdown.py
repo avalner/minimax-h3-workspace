@@ -15,6 +15,8 @@ from unittest import mock
 import support
 
 import cloud
+import application
+import routes.jobs
 import server
 from domain.jobs import JobRecord, JobState
 from storage.database import Database
@@ -113,7 +115,7 @@ class ShutdownTest(unittest.IsolatedAsyncioTestCase):
 
         task = app.tasks.spawn("stubborn", stubborn())
         await asyncio.sleep(0)
-        with mock.patch.object(server, "SHUTDOWN_BUDGET", 0.2):
+        with mock.patch.object(application, "SHUTDOWN_BUDGET", 0.2):
             await app.stop(None)
         self.assertEqual(app.last_shutdown["unfinished"], ["stubborn"])
         self.assertTrue(any("stubborn" in text for text in app.recent_errors),
@@ -208,7 +210,7 @@ class CloudResumeTest(unittest.IsolatedAsyncioTestCase):
                 app.jobs.pop("rh-t", None)   # the watch ends: the task left the queue
                 return "RUNNING"
 
-        with mock.patch.object(server, "CLOUD_RETRY", 0):
+        with mock.patch.object(routes.jobs, "CLOUD_RETRY", 0):
             await app.poll_cloud(FlakyCloud(), "rh-t")
         self.assertEqual(len(calls), 3, "обрыв связи не повторил вопрос")
         self.assertEqual(app.recent_errors, [], "обрыв сети записан как ошибка задания")
@@ -223,7 +225,7 @@ class CloudResumeTest(unittest.IsolatedAsyncioTestCase):
             async def status(self, task):
                 raise cloud.CloudError("RunningHub недоступен: нет сети")
 
-        with mock.patch.object(server, "CLOUD_RETRY", 0):
+        with mock.patch.object(routes.jobs, "CLOUD_RETRY", 0):
             await app.poll_cloud(DeadCloud(), "rh-t")
         self.assertNotIn("rh-t", app.jobs, "задание навсегда осталось в очереди")
         self.assertEqual([e["type"] for e in events if e["type"] == "error"], ["error"])
