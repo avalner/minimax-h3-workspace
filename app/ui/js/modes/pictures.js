@@ -822,16 +822,17 @@ function buildInpaint(scope) {
           <div class="ip-stage"><div class="ip-fit"><canvas class="ip-img"></canvas><canvas class="ip-over" tabindex="0"></canvas><canvas class="ip-sel"></canvas><div class="ip-ring" hidden></div></div></div>
           <div class="ip-grip" title="Потяните вверх или вниз — высота холста"></div>
           <div class="ip-tools">
+            <button class="btn ip-fullb" type="button" title="Редактор на всё окно (F). Выход — Esc или эта же кнопка">На весь экран</button>
             <div class="seg ip-mode" style="grid-template-columns:1fr 1fr 1fr 1fr;width:392px"><button data-m="select" class="on">Выделение</button><button data-m="paint">Закрасить</button><button data-m="erase">Ластик</button><button data-m="fill">Заливка</button></div>
             <div class="seg ip-selshape" style="grid-template-columns:1fr 1fr 1fr;width:300px"><button data-s="rect" class="on">Прямоугольник</button><button data-s="ellipse">Овал</button><button data-s="lasso">Лассо</button></div>
             <span class="hint">Кисть</span><input type="range" class="ip-brush" min="8" max="160" value="36"><b class="ip-brushv">36</b>
-            <span class="hint">Холст</span><input type="range" class="ip-zoom" min="20" max="200" value="100"><b class="ip-zoomv">100 %</b>
+            <span class="hint">Холст</span><input type="range" class="ip-zoom" min="20" max="300" value="100"><b class="ip-zoomv">100 %</b>
             <button class="btn ip-fitb" type="button" title="Показать картинку целиком: холст по высоте окна">Вся картинка</button>
             <button class="btn ip-undo" type="button" title="Убрать последний мазок (Ctrl+Z)" disabled>Отменить</button>
             <button class="btn ip-clear" type="button">Очистить закраску</button>
             <button class="btn ip-unsel" type="button" title="Закраска снова на всей картинке" disabled>Снять выделение</button>
           </div>
-          <div class="hint" style="margin-top:8px">Клавиши 1–4 выбирают инструмент (1 ещё раз — форма выделения), [ и ] меняют размер кисти и ластика. «Заливка» заполняет область, обведённую кистью, «Выделение» ограничивает работу выбранной областью: Ctrl добавляет ещё одну, Shift держит ровный круг или квадрат, Alt перетаскивает выделение, Esc снимает. Если не закрашено ничего, в модель уходит само выделение. Ctrl+Z — убрать последний шаг, Shift+Ctrl+Z — вернуть его, Shift+колесо мыши — масштаб холста</div>
+          <div class="hint" style="margin-top:8px">Клавиши 1–4 выбирают инструмент (1 ещё раз — форма выделения), [ и ] меняют размер кисти и ластика. «Заливка» заполняет область, обведённую кистью, «Выделение» ограничивает работу выбранной областью: Ctrl добавляет ещё одну, Shift держит ровный круг или квадрат, Alt перетаскивает выделение, Esc снимает. Если не закрашено ничего, в модель уходит само выделение. Ctrl+Z — убрать последний шаг, Shift+Ctrl+Z — вернуть его, Shift+колесо мыши — масштаб холста. <b>«На весь экран» (F)</b>: там колесо мыши — масштаб вокруг указателя, пробел или средняя кнопка мыши — двигать картинку, Esc — выйти.</div>
         </div></div>
       <div class="card"><div class="card-h"><h3><span class="n">2</span>Что должно быть на закрашенном месте</h3></div>
         <textarea class="ip-prompt" placeholder="Например: белая майка вместо красной куртки. Лицо, фон и свет оставить как было."></textarea>
@@ -847,6 +848,7 @@ function buildInpaint(scope) {
   const selC = $('.ip-sel', root), sctx = selC.getContext('2d');
   const ictx = imgC.getContext('2d'), octx = overC.getContext('2d');
   let mode = 'select', brush = 36, hasMask = false;
+  let isFull = false, spaceHeld = false, panning = null;   // «На весь экран», the Space-drag that pans it and the drag itself
   overC.style.opacity = .55;   // the strokes are fully opaque in the data, but the picture stays visible under them
   /* the tool cursors are drawn on a 32 px canvas: an eraser and a paint bucket, the way they look in editors.
      The hot spot is taken from the picture itself — the lowest point of the rubber and of the paint drop —
@@ -909,6 +911,7 @@ function buildInpaint(scope) {
   };
   let altHeld = false;
   const cursorNow = () => {   // the arrow only where it will actually move something, in any tool
+    if (isFull && spaceHeld) { overC.style.cursor = 'grab'; return; }   // Space in «На весь экран»: drag the picture
     if (altHeld && sel) { overC.style.cursor = CUR.move; return; }
     if (hoverPt && (mode === 'paint' || mode === 'erase')) { overC.style.cursor = 'none'; return; }   // the ring is the cursor
     overC.style.cursor = CUR[mode] || 'crosshair';
@@ -964,8 +967,9 @@ function buildInpaint(scope) {
   const fitEl = $('.ip-fit', root), stageEl = $('.ip-stage', root);
   const zoomIn = $('.ip-zoom', root), zoomV = $('.ip-zoomv', root);
   let zoom = 100;
+  const ZOOM_MAX = 300;   // 300 % of the stage's width: for a 4000 px picture in a 1400 px window that is about 1:1
   const setZoom = (z, keep) => {
-    zoom = Math.max(20, Math.min(200, Math.round(z)));
+    zoom = Math.max(20, Math.min(ZOOM_MAX, Math.round(z)));
     fitEl.style.width = zoom + '%';
     if (zoomIn.value !== String(zoom)) zoomIn.value = zoom;
     zoomV.textContent = zoom + '%';
@@ -975,19 +979,60 @@ function buildInpaint(scope) {
   const fitZoom = () => {   // the biggest canvas that still shows the whole picture without scrolling
     if (!drop._file || !imgC.height) return 100;
     const panel = stageEl.clientWidth || 480;
-    const fixed = parseFloat(stageEl.style.height) || 0;   // the height the user dragged the stage to, if any
+    // on the whole window the stage fills it, so its own height is the room there is; in the card it is the
+    // height the user dragged the panel to, or a share of the window
+    const fixed = isFull ? stageEl.clientHeight - 2 : (parseFloat(stageEl.style.height) || 0);
     const maxH = fixed > 0 ? fixed - 4 : Math.min(window.innerHeight * .62, 720);
     return Math.max(20, Math.min(100, Math.floor(100 * maxH / (panel * (imgC.height / imgC.width)))));
   };
+  /* zoom that keeps the point under the pointer where it is: the wheel is the usual way to look closer at a face */
+  const zoomAt = (clientX, clientY, k) => {
+    const r = stageEl.getBoundingClientRect(), before = fitEl.getBoundingClientRect();
+    if (!before.width || !before.height) { setZoom(zoom * k); return; }
+    const mx = clientX - r.left, my = clientY - r.top;
+    const fx = (stageEl.scrollLeft + mx) / before.width, fy = (stageEl.scrollTop + my) / before.height;
+    setZoom(zoom * k, true);
+    const after = fitEl.getBoundingClientRect();
+    stageEl.scrollLeft = Math.round(fx * after.width - mx);
+    stageEl.scrollTop = Math.round(fy * after.height - my);
+  };
   zoomIn.oninput = e => setZoom(+e.target.value);
   $('.ip-fitb', root).onclick = () => setZoom(fitZoom());
-  stageEl.addEventListener('wheel', e => {   // Shift + wheel: zoom the canvas; Windows often sends it as deltaX
-    if (!e.shiftKey) return;
+  stageEl.addEventListener('wheel', e => {   // Shift + wheel zooms in the card; on the whole window the wheel itself does
+    if (!isFull && !e.shiftKey) return;
     e.preventDefault();
-    const d = e.deltaY || e.deltaX;
+    const d = e.deltaY || e.deltaX;   // Windows often sends a horizontal wheel as deltaX
     if (!d) return;
-    setZoom(zoom + (d < 0 ? 5 : -5));
+    if (isFull) zoomAt(e.clientX, e.clientY, d < 0 ? 1.12 : 1 / 1.12);
+    else setZoom(zoom + (d < 0 ? 5 : -5));
   }, { passive: false });
+
+  /* --- «На весь экран»: the same picture and the same tools, but the editor takes the whole program window.
+     Zoom is the wheel around the pointer, pan is dragging with Space held or with the middle button. --- */
+  const fullB = $('.ip-fullb', root);
+  let zoomBefore = null;
+  const setFull = on => {
+    const changed = on !== isFull;
+    isFull = on;
+    root.classList.toggle('ip-full', on);   // always: a section left in full screen must come back to the card
+    fullB.textContent = on ? 'Свернуть' : 'На весь экран';
+    fullB.title = on ? 'Вернуться к странице (Esc)' : 'Редактор на всё окно (F)';
+    if (!changed) return false;
+    if (on) {
+      zoomBefore = zoom;
+      setZoom(fitZoom(), true);   // the whole picture first: the working area is bigger than the card
+    } else {
+      spaceHeld = false;
+      panning = null;
+      setZoom(zoomBefore || zoom, true);
+    }
+    hoverPt = null; paintRing();
+    if (on) overC.focus({ preventScroll: true });
+    return true;
+  };
+  fullB.onclick = () => setFull(!isFull);
+  root._exitFull = () => setFull(false);   // another section opened: the overlay must not stay on top of it
+  overC.addEventListener('auxclick', e => { if (e.button === 1) e.preventDefault(); });   // the middle button only pans
 
   /* the height of the canvas panel: drag the handle under it, the picture scrolls inside */
   const grip = $('.ip-grip', root);
@@ -1248,15 +1293,21 @@ function buildInpaint(scope) {
     if (edit.hidden) return;
     e.preventDefault();
     overC.focus({ preventScroll: true });   // the prompt field must let go: Ctrl+Z now belongs to the canvas, not the text
+    if (isFull && (e.button === 1 || spaceHeld)) {   // pan on the whole window: the middle button or Space + drag
+      try { overC.setPointerCapture(e.pointerId); } catch (err) { /* a pointer that is already gone */ }
+      panning = { x: e.clientX, y: e.clientY, sl: stageEl.scrollLeft, st: stageEl.scrollTop };
+      overC.style.cursor = 'grabbing';
+      return;
+    }
     if (e.altKey && sel) {                  // Alt: drag the whole selection to another place, in any tool
       const [sx, sy] = pos(e);
-      overC.setPointerCapture(e.pointerId);
+      try { overC.setPointerCapture(e.pointerId); } catch (err) { /* a pointer that is already gone */ }
       selMove = { x0: sx, y0: sy, orig: sel, moved: false };
       return;
     }
     if (mode === 'select') {                // drag a rectangle, an ellipse or a lasso; Ctrl adds a second area
       const [sx, sy] = pos(e);
-      overC.setPointerCapture(e.pointerId);
+      try { overC.setPointerCapture(e.pointerId); } catch (err) { /* a pointer that is already gone */ }
       selDrag = { x0: sx, y0: sy, x1: sx, y1: sy, pts: [[sx, sy]],
                   add: e.ctrlKey || e.metaKey, round: e.shiftKey };
       return;
@@ -1269,7 +1320,8 @@ function buildInpaint(scope) {
       else if (res === 'leak') toast('Заливка не выполнена: обведите область кистью целиком, без разрывов');
       return;
     }
-    overC.setPointerCapture(e.pointerId); drawing = true;
+    try { overC.setPointerCapture(e.pointerId); } catch (err) { /* a pointer that is already gone */ }
+    drawing = true;
     const [x, y] = pos(e);
     live = { mode, brush, pts: [[x, y]], sel: sel ? sel.path : null };   // the selection goes into the history too, so a replay is exact
     undone = [];                             // a new stroke drops the redo history
@@ -1278,6 +1330,11 @@ function buildInpaint(scope) {
   });
   overC.addEventListener('pointermove', e => {
     hoverPt = [e.clientX, e.clientY]; paintRing();
+    if (panning) {                          // the picture follows the pointer: the stage scrolls
+      stageEl.scrollLeft = panning.sl - (e.clientX - panning.x);
+      stageEl.scrollTop = panning.st - (e.clientY - panning.y);
+      return;
+    }
     if (selMove) {                          // the selection travels with the mouse
       const [x, y] = pos(e);
       const dx = x - selMove.x0, dy = y - selMove.y0;
@@ -1308,6 +1365,7 @@ function buildInpaint(scope) {
     });
   });
   const stop = () => {
+    if (panning) { panning = null; cursorNow(); return; }
     if (selMove) {                          // the move is a step of the history too
       const moved = selMove.moved;
       selMove = null;
@@ -1329,8 +1387,12 @@ function buildInpaint(scope) {
   $('.ip-clear', root).onclick = () => { undone = []; strokes.push({ clear: true }); redraw(); };
   scope.listen(document, 'keydown', e => {
     if (!root.classList.contains('active') || edit.hidden) return;
-    if (e.key === 'Escape') {   // Esc drops the selection (unless a zoom window or a question is on top of it)
-      if (sel && $('#zoomv')?.hidden !== false && $('#confirm')?.hidden !== false) { e.preventDefault(); selCommit(null); }
+    if (e.key === 'Escape') {
+      // Esc drops the selection first; with nothing selected it leaves «На весь экран» (unless a zoom window
+      // or a question is on top of the editor)
+      const onTop = $('#zoomv')?.hidden !== false && $('#confirm')?.hidden !== false;
+      if (sel && onTop) { e.preventDefault(); selCommit(null); return; }
+      if (isFull && onTop) { e.preventDefault(); setFull(false); }
       return;
     }
     const t = e.target;   // a real text field keeps its own keys; a slider or a button does not
@@ -1344,6 +1406,16 @@ function buildInpaint(scope) {
         if (tool === 'select' && mode === 'select') cycleShape(); else setMode(tool);
         return;
       }
+      if (e.code === 'KeyF') {   // the whole window, and back
+        e.preventDefault();
+        setFull(!isFull);
+        return;
+      }
+      if (e.code === 'Space' && isFull) {   // hold Space to drag the picture instead of painting on it
+        e.preventDefault();
+        if (!spaceHeld) { spaceHeld = true; cursorNow(); paintRing(); }
+        return;
+      }
       if (e.code === 'BracketLeft' || e.code === 'BracketRight') {   // [ smaller, ] bigger — any keyboard layout
         e.preventDefault();
         setBrush(e.code === 'BracketLeft' ? brush / 1.25 : brush * 1.25);
@@ -1354,6 +1426,12 @@ function buildInpaint(scope) {
     e.preventDefault();
     if (e.shiftKey) redo(); else undo();
   });
+  scope.listen(document, 'keyup', e => {
+    if (e.code !== 'Space' || !spaceHeld) return;
+    spaceHeld = false;
+    cursorNow(); paintRing();
+  });
+  scope.listen(window, 'blur', () => { spaceHeld = false; panning = null; cursorNow(); });
   $$('.ip-q button', root).forEach(b => b.onclick = () => { S.size = b.dataset.s; $$('.ip-q button', root).forEach(x => x.classList.toggle('on', x === b)); });
   $('.ip-q button', root).classList.add('on');
   const bbox = () => {   // painted region, canvas coordinates
@@ -1449,7 +1527,9 @@ function buildInpaint(scope) {
   });
   window.h3Modes.register("inpaint", {
     mount: buildInpaint,
-    leave: () => pause('#view-inpaint'),
+    // the editor is never shown over another section, and it always comes back as a card, not as the layer
+    enter: () => $('#view-inpaint')._exitFull?.(),
+    leave: () => { pause('#view-inpaint'); $('#view-inpaint')._exitFull?.(); },
     dispose: () => disposePictures('#view-inpaint'),
   });
 })();

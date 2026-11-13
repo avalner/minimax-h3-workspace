@@ -217,6 +217,14 @@
 .ip-tools{display:flex;gap:10px;align-items:center;margin-top:10px;flex-wrap:wrap}
 .ip-tools .seg{flex:0 0 auto}
 .ip-tools input[type=range]{width:140px}
+/* «На весь экран»: the editor becomes one fixed layer over the whole program window, and the stage takes the room
+   that the tools leave; the ring and the canvases keep working exactly as in the card */
+#view-inpaint.ip-full .ip-edit{position:fixed;inset:0;z-index:46;background:var(--bg);display:flex;flex-direction:column;gap:8px;padding:10px 14px 12px;overscroll-behavior:contain}
+#view-inpaint.ip-full{animation:none}   /* an animated transform on the section would make it the box of the layer */
+#view-inpaint.ip-full .ip-stage{flex:1 1 auto;height:auto!important;max-height:none!important;min-height:0;margin-top:0}
+#view-inpaint.ip-full .ip-grip{display:none}
+#view-inpaint.ip-full .ip-tools{margin-top:0}
+#view-inpaint.ip-full .ip-fullb{border-color:var(--accent)}
 .ip-zoomv{font-family:var(--mono);font-size:12px;color:var(--muted);min-width:42px;display:inline-block}
 .ip-brushv{font-family:var(--mono);font-size:12px;color:var(--muted);min-width:28px;display:inline-block}
 .kr-batching .ip-go{display:none!important}

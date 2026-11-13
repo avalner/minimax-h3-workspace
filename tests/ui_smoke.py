@@ -918,6 +918,98 @@ async def run_page(base: str, browser: str, shots: Path):
                 await asyncio.sleep(0.4)
                 await cdp.screenshot(shots / "imgedit-h3img.png")
 
+                # The mask editor on the whole window: the same canvas and the same tools as a fixed layer over the
+                # program window, the wheel zooms around the pointer (no Shift needed there) and Space or the middle
+                # button pans the picture. Esc goes back to the card.
+                fullscr = await cdp.evaluate("""(async () => {
+                  const sleep = ms => new Promise(r => setTimeout(r, ms));
+                  // the editor as its own screen, the way a user gets there: a card of «Редактирование изображений»
+                  document.querySelector('.nav[data-view="imgedit"]').click(); await sleep(80);
+                  document.querySelector('#view-imgedit [data-task="inpaint"]').click(); await sleep(150);
+                  const view = document.querySelector('#view-inpaint');
+                  const c = document.createElement('canvas'); c.width = 900; c.height = 600;
+                  const g = c.getContext('2d');
+                  g.fillStyle = '#2a6ea8'; g.fillRect(0, 0, 900, 600);
+                  g.fillStyle = '#f0c040'; g.fillRect(80, 60, 320, 220);
+                  const blob = await new Promise(r => c.toBlob(r, 'image/png'));
+                  const input = document.querySelector('#ipDrop input[type=file]');
+                  const dt = new DataTransfer(); dt.items.add(new File([blob], 'mask-test.png', { type: 'image/png' }));
+                  input.files = dt.files;
+                  input.dispatchEvent(new Event('change', { bubbles: true }));
+                  const edit = view.querySelector('.ip-edit');
+                  for (let i = 0; i < 60 && edit.hidden; i++) await sleep(50);
+                  if (edit.hidden) return { noedit: true };
+                  const btn = view.querySelector('.ip-fullb');
+                  btn.click(); await sleep(80);
+                  const stage = view.querySelector('.ip-stage'), over = view.querySelector('.ip-over');
+                  const zoomV = () => parseInt(view.querySelector('.ip-zoomv').textContent, 10) || 0;
+                  const r = edit.getBoundingClientRect(), sr = stage.getBoundingClientRect();
+                  const out = { fixed: getComputedStyle(edit).position === 'fixed',
+                    full: view.classList.contains('ip-full'),
+                    covers: r.width >= window.innerWidth - 2 && r.height >= window.innerHeight - 2,
+                    rect: [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)],
+                    win: [window.innerWidth, window.innerHeight],
+                    label: btn.textContent.trim(), stageH: Math.round(stage.clientHeight), z0: zoomV() };
+                  stage.dispatchEvent(new WheelEvent('wheel', { deltaY: -120, bubbles: true, cancelable: true,
+                    clientX: sr.left + sr.width / 2, clientY: sr.top + sr.height / 2 }));
+                  await sleep(40);
+                  out.z1 = zoomV();
+                  const sl0 = stage.scrollLeft, st0 = stage.scrollTop;
+                  const ev = (type, extra) => over.dispatchEvent(new PointerEvent(type, Object.assign({ bubbles: true,
+                    cancelable: true, pointerId: 1, isPrimary: true }, extra)));
+                  ev('pointerdown', { button: 1, buttons: 4, clientX: sr.left + 300, clientY: sr.top + 200 });
+                  ev('pointermove', { buttons: 4, clientX: sr.left + 220, clientY: sr.top + 150 });
+                  ev('pointerup', { button: 1, clientX: sr.left + 220, clientY: sr.top + 150 });
+                  await sleep(40);
+                  out.panned = stage.scrollLeft !== sl0 || stage.scrollTop !== st0;
+                  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true }));
+                  await sleep(80);
+                  out.after = view.classList.contains('ip-full') ? 'full' : 'card';
+                  out.labelAfter = btn.textContent.trim();
+                  const mask = view.querySelector('.ip-over').width > 0 && view.querySelector('.ip-img').width > 0;
+                  out.mask = mask;
+                  return out; })()""", await_promise=True)
+                check("the mask editor takes the whole window and puts the whole picture in it",
+                      fullscr and not fullscr.get("noedit") and fullscr["fixed"] and fullscr["full"] and fullscr["covers"]
+                      and fullscr["label"] == "Свернуть" and fullscr["stageH"] > 400, str(fullscr))
+                check("on the whole window the wheel zooms and the middle button pans",
+                      fullscr and fullscr["z1"] > fullscr["z0"] and fullscr["panned"], str(fullscr))
+                check("Esc goes back to the card and keeps the picture and the mask",
+                      fullscr and fullscr["after"] == "card" and fullscr["labelAfter"] == "На весь экран"
+                      and fullscr["mask"], str(fullscr))
+                # a screenshot of the full-screen editor with a couple of real strokes on the picture
+                await cdp.evaluate("""(async () => {
+                  const sleep = ms => new Promise(r => setTimeout(r, ms));
+                  document.querySelector('.nav[data-view="imgedit"]').click(); await sleep(80);
+                  document.querySelector('#view-imgedit [data-task="inpaint"]').click(); await sleep(150);
+                  document.querySelector('#view-inpaint .ip-fullb').click(); await sleep(120);
+                  const view = document.querySelector('#view-inpaint');
+                  view.querySelector('.ip-mode button[data-m="paint"]').click();
+                  const over = view.querySelector('.ip-over'), sr = over.getBoundingClientRect();
+                  const ev = (type, extra) => over.dispatchEvent(new PointerEvent(type, Object.assign({ bubbles: true,
+                    cancelable: true, pointerId: 1, isPrimary: true, button: 0 }, extra)));
+                  const at = (fx, fy) => ({ clientX: sr.left + sr.width * fx, clientY: sr.top + sr.height * fy });
+                  ev('pointerdown', at(0.18, 0.30));
+                  for (const [x, y] of [[0.26, 0.42], [0.34, 0.36], [0.42, 0.52], [0.48, 0.40]]) { ev('pointermove', at(x, y)); await sleep(20); }
+                  ev('pointerup', at(0.48, 0.40));
+                })()""", await_promise=True)
+                await asyncio.sleep(0.2)
+                await cdp.screenshot(shots / "inpaint-full.png")
+                await cdp.evaluate("document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true }))")
+                # and it must never stay on top of another section: leaving the editor puts it back into the card
+                stale = await cdp.evaluate("""(async () => {
+                  const sleep = ms => new Promise(r => setTimeout(r, ms));
+                  const view = document.querySelector('#view-inpaint');
+                  view.querySelector('.ip-fullb').click(); await sleep(60);
+                  const on = view.classList.contains('ip-full');
+                  document.querySelector('.nav[data-view="library"]').click(); await sleep(80);
+                  document.querySelector('.nav[data-view="imgedit"]').click(); await sleep(60);
+                  document.querySelector('#view-imgedit [data-task="inpaint"]').click(); await sleep(120);
+                  return { on, after: view.classList.contains('ip-full'),
+                    label: view.querySelector('.ip-fullb').textContent.trim() }; })()""", await_promise=True)
+                check("the full-screen layer is taken away when the section is left",
+                      stale and stale["on"] and not stale["after"] and stale["label"] == "На весь экран", str(stale))
+
                 # The page's own event entry, without a ComfyUI: a snapshot of a running job, then
                 # its result. This is the one-owner contract seen from the window: one row, one
                 # library card even if the event is repeated, and the finished row can be cleared.
