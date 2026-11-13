@@ -178,6 +178,7 @@ body.cloud-on #mdCloudBox{display:block!important}
 .bm-item .bm-x{flex:none;width:18px;height:18px;border-radius:6px;display:grid;place-items:center;color:var(--pink);font-size:15px;line-height:1}
 .bm-item .bm-x:hover{background:rgba(255,80,110,.15)}
 .nav .badge{margin-left:auto;font-size:10.5px;padding:2px 7px;border-radius:99px;background:var(--surface-2);color:var(--dim);font-weight:700}
+.nav .badge i{font-style:normal;opacity:.7;margin-left:2px}
 .nav[disabled]{opacity:.55;cursor:default}
 .nav[disabled]:hover{background:none;color:var(--muted)}
 .side-foot{margin:6px 14px 14px;flex:none;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:11px 13px;display:flex;flex-direction:column;gap:8px}

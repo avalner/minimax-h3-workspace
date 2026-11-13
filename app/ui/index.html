@@ -2379,7 +2379,13 @@ async function deleteDraftItem(it) {
   return true;
 }
 function renderLib() {
-  $('#libBadge').textContent = LIB.length;
+  // the badge follows the project filter: how many results are shown now, and how many live elsewhere
+  const shown = LIB.filter(projectOk).length, others = LIB.length - shown;
+  const badge = $('#libBadge');
+  badge.innerHTML = PROJECTS_VIEW.all || !others ? String(LIB.length) : `${shown} <i>+${others}</i>`;
+  const project = PROJECTS_VIEW.list.find(p => p.id === PROJECTS_VIEW.active);
+  badge.title = PROJECTS_VIEW.all ? `Все проекты: ${LIB.length}`
+    : `${shown} в проекте «${project ? project.name : 'Основное'}» · всего в Библиотеке ${LIB.length}`;
   const items = LIB.filter(it => projectOk(it) && (libFilter === 'all' || (libFilter === 'fav' ? it.fav : libFilter === 'images' ? it.kind === 'image' : libFilter === 'videos' ? it.kind !== 'image' : it.mode === libFilter)));
   const lib = $('#lib');
   lib.classList.toggle('selecting', selecting);
