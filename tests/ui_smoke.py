@@ -273,13 +273,18 @@ async def run_page(base: str, browser: str, shots: Path):
                                        .find(p => p.id === window.h3Projects.active()) || {}).name || '';
                       out.mainHasTrash = !!projectRow('Основное')
                         && !!projectRow('Основное').querySelector('[data-delproj]');
-                      // what the project holds: a stage and a film, both real records on the server
+                      // what the project holds: a stage with its frame and a film with a made scene
                       const pid = window.h3Projects.active();
                       await window.postStage({ id: 'uiddelstage', mode: 'video', name: 'Этап удаляемого',
-                                               s: {}, date: new Date().toISOString() });
+                                               s: {}, files: ['video/first'],
+                                               names: { 'video/first': 'frame.png' },
+                                               date: new Date().toISOString() });
+                      await window.uploadStageFile('uiddelstage', 'video/first',
+                        new File([new Uint8Array([137, 80, 78, 71])], 'frame.png', { type: 'image/png' }));
                       await fetch('/api/long/project', { method: 'POST', body: JSON.stringify({
                         run: 'uidelfilm', project: { run: 'uidelfilm', project: pid,
-                                                       scenes: [{ prompt: 'сцена' }] } }) });
+                          scenes: [{ prompt: 'сцена', sec: 10,
+                                     done: { id: 'uidelframescene', url: '/ui/previews/video.mp4', sig: 's' } }] } }) });
                       document.querySelector('#projCur').click(); await wait(80);
                       projectRow('Проект для проверки').querySelector('[data-delproj]').click();
                       await until(() => !document.querySelector('#projDel').hidden);
@@ -289,7 +294,24 @@ async def run_page(base: str, browser: str, shots: Path):
                       document.querySelector('#pdPick').click(); await wait(80);
                       out.byDefault = document.querySelectorAll('#pdBody [data-pd]:checked').length;
                       out.rows = document.querySelectorAll('#pdBody [data-pd]').length;
+                      out.tiles = document.querySelectorAll('#pdBody .pd-tile').length;
+                      out.thumbs = { img: document.querySelectorAll('#pdBody .pd-tile img').length,
+                                     video: document.querySelectorAll('#pdBody .pd-tile video').length };
                       out.goNone = document.querySelector('#pdGo').textContent;
+                      // a tile opens the card: the clip itself, its details, and «Оставить» right there
+                      document.querySelector('#pdBody [data-open="films:uidelfilm"]').click();
+                      await wait(120);
+                      out.card = { open: !document.querySelector('#pdCard').hidden,
+                                   video: !!document.querySelector('#pcBody video'),
+                                   title: (document.querySelector('#pcTitle') || {}).textContent || '',
+                                   text: (document.querySelector('#pcBody') || {}).textContent || '',
+                                   toggle: (document.querySelector('#pcToggle') || {}).textContent || '' };
+                      document.querySelector('#pcToggle').click(); await wait(120);
+                      out.cardAfter = { toggle: document.querySelector('#pcToggle').textContent,
+                                        tileOn: !!document.querySelector('#pdBody .pd-tile.on'),
+                                        go: document.querySelector('#pdGo').textContent };
+                      document.querySelector('#pdCard [data-close]').click(); await wait(80);
+                      out.cardClosed = document.querySelector('#pdCard').hidden;
                       document.querySelector('#pdSelAll').click(); await wait(80);
                       out.allChosen = document.querySelectorAll('#pdBody [data-pd]:checked').length;
                       out.goAll = document.querySelector('#pdGo').textContent;
@@ -323,6 +345,18 @@ async def run_page(base: str, browser: str, shots: Path):
                 check("nothing is chosen in the picker until the user asks, «Выбрать все» marks all of it",
                       admin["rows"] == 2 and admin["byDefault"] == 0 and admin["allChosen"] == 2
                       and "Перенести выбранное (2)" in admin["goAll"], str(admin))
+                check("the picker shows the assets as thumbnails, a stage by its frame and a film by its scene",
+                      admin["tiles"] == 2 and admin["thumbs"]["img"] == 1
+                      and admin["thumbs"]["video"] == 1, str(admin))
+                check("a tile opens the card with the clip itself and its details",
+                      admin["card"]["open"] and admin["card"]["video"]
+                      and "Фильм Видеостудии" in admin["card"]["title"]
+                      and "Готово сцен" in admin["card"]["text"]
+                      and "Оставить в «Основном»" in admin["card"]["toggle"], str(admin["card"]))
+                check("the card can put the asset into «Основное» without going back to the list",
+                      admin["cardClosed"] and "Убрать из выбранных" in admin["cardAfter"]["toggle"]
+                      and admin["cardAfter"]["tileOn"] and "Перенести выбранное (1)" in admin["cardAfter"]["go"],
+                      str(admin["cardAfter"]))
                 check("the chosen part moves to «Основное» and the rest is deleted with the project",
                       admin["oneChosen"] == 1 and not admin["stillThere"]
                       and admin["active"] == "main" and admin["header"] == "Основное"

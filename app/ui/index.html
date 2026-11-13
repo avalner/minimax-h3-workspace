@@ -873,6 +873,18 @@ equirements.txt</code><br>
   </div>
 </div>
 
+<!-- One asset in detail: the picker shows a thumbnail, this shows the clip or the picture itself. -->
+<div class="modal" id="pdCard" hidden>
+  <div class="box pd-card" role="dialog" aria-modal="true" aria-labelledby="pcTitle">
+    <div class="pd-h">
+      <h3 id="pcTitle">Результат</h3>
+      <button class="close" data-close aria-label="Закрыть">✕</button>
+    </div>
+    <div class="pc-body" id="pcBody"></div>
+    <div class="pd-foot" id="pcFoot"></div>
+  </div>
+</div>
+
 <div class="modal" id="qjob" hidden>
   <div class="box qj" role="dialog" aria-modal="true" aria-labelledby="qjTitle">
     <div class="qj-h">
@@ -1943,15 +1955,31 @@ async function renameProject() {
 const PD_GROUPS = [['library', 'Клипы и картинки Библиотеки'], ['drafts', 'Черновики'],
                    ['stages', 'Этапы'], ['films', 'Фильмы Видеостудии']];
 let PD = null;   // the open delete dialog: { id, project, assets, chosen:Set, step }
+let PD_CARD = null;   // the asset whose card is open over the picker
 const pdItems = () => PD ? PD_GROUPS.flatMap(([group]) =>
   (PD.assets[group] || []).map(it => ({ group, it, key: group + ':' + (group === 'films' ? it.run : it.id) }))) : [];
-function pdLabel(group, it) {
-  if (group === 'stages') return `${MODE_NAME[it.mode] || it.mode || 'раздел'} · ${it.name}`
-    + (it.files ? ` · файлов: ${it.files}` : '') + (it.auto ? ' · было до открытия' : '');
-  if (group === 'films') return `Видеостудия · сцен ${it.scenes}, готово ${it.done}`;
-  const when = it.date ? fmtDate(new Date(it.date)) : '';
-  return `${MODE_NAME[it.mode] || it.mode || 'результат'} · ${it.prompt || 'без промпта'}`
-    + (group === 'drafts' ? ' · черновик' : '') + (when ? ` · ${when}` : '');
+const pdByKey = key => pdItems().find(x => x.key === key) || null;
+const pdBadge = (group, it) => group === 'stages' ? 'этап' : group === 'films' ? 'фильм'
+  : group === 'drafts' ? 'черновик' : it.kind === 'image' ? 'картинка' : 'клип';
+function pdCaption(group, it) {
+  if (group === 'stages') return `${MODE_NAME[it.mode] || it.mode || 'раздел'} · ${it.name}`;
+  if (group === 'films') return `сцен ${it.scenes} · готово ${it.done}`;
+  return `${MODE_NAME[it.mode] || it.mode || 'результат'} · ${it.prompt || 'без промпта'}`;
+}
+/* the rows of the picker: the same thumbnails «Прошлые изображения» shows — a picture, a clip with
+   its first frame, or «нет превью» for a stage without images; the tile opens the card, the corner
+   box chooses what to keep */
+function pdTile(group, it, key, on) {
+  const pv = it.preview || null;
+  const media = !pv ? '<span class="pd-nopv">нет превью</span>'
+    : pv.kind === 'image' ? `<img src="${esc(pv.url)}" alt="" loading="lazy">`
+    : `<video src="${esc(pv.url)}#t=0.5" preload="metadata" muted playsinline loop></video>`;
+  return `<div class="pd-tile${on ? ' on' : ''}">
+    <label class="pd-chk" title="Оставить в «Основном»"><input type="checkbox" data-pd="${esc(key)}"${on ? ' checked' : ''}></label>
+    <button type="button" class="pd-th" data-open="${esc(key)}" title="${esc(pdCaption(group, it))}">${media}
+      <span class="pd-badge">${pdBadge(group, it)}</span></button>
+    <div class="pd-cap" data-open="${esc(key)}" title="${esc(pdCaption(group, it))}">${esc(pdCaption(group, it))}</div>
+  </div>`;
 }
 function paintProjectDelete() {
   if (!PD) return;
@@ -1970,29 +1998,70 @@ function paintProjectDelete() {
       + '<button class="btn danger" id="pdAll">Удалить всё</button>';
     return;
   }
-  const rows = PD_GROUPS.map(([group, label]) => {
+  const groups = PD_GROUPS.map(([group, label]) => {
     const list = a[group] || [];
     if (!list.length) return '';
-    return `<div class="pd-g"><div class="pd-gh">${esc(label)} <span>${list.length}</span></div>`
-      + list.map(it => {
-        const key = group + ':' + (group === 'films' ? it.run : it.id), on = PD.chosen.has(key);
-        return `<label class="pd-row${on ? ' on' : ''}" title="${esc(pdLabel(group, it))}">`
-          + `<input type="checkbox" data-pd="${esc(key)}"${on ? ' checked' : ''}>`
-          + `<span>${esc(pdLabel(group, it))}</span></label>`;
-      }).join('') + '</div>';
+    return `<div class="pd-g"><div class="pd-gh">${esc(label)} <span>${list.length}</span></div>
+      <div class="pd-grid">${list.map(it => {
+        const key = group + ':' + (group === 'films' ? it.run : it.id);
+        return pdTile(group, it, key, PD.chosen.has(key));
+      }).join('')}</div></div>`;
   }).join('');
-  $('#pdBody').innerHTML = `<p class="pd-lead">Выбранное переедет в «Основное» — файлы останутся на месте. Остальное будет удалено.</p>
+  $('#pdBody').innerHTML = `<p class="pd-lead">Выбранное переедет в «Основное» — файлы останутся на месте. Остальное будет удалено. Нажмите на плитку, чтобы рассмотреть.</p>
     <div class="pd-tools"><button class="btn mini" id="pdSelAll" type="button">Выбрать все</button>
       <button class="btn mini" id="pdSelNone" type="button">Снять выбор</button>
       <span class="pd-chosen">выбрано: <b>${PD.chosen.size}</b> из ${total}</span></div>
-    <div class="pd-list">${rows}</div>`;
+    <div class="pd-list">${groups}</div>`;
   $('#pdFoot').innerHTML = '<button class="btn" id="pdBack">Назад</button>'
     + (PD.chosen.size
       ? `<button class="btn pri" id="pdGo">Перенести выбранное (${PD.chosen.size}) и удалить проект</button>`
       : '<button class="btn danger" id="pdGo">Удалить проект</button>');
 }
+/* one asset in detail, with its own preview: the picker is small, and a clip or a picture has to be
+   recognisable before it is either kept or lost */
+function paintAssetCard() {
+  const found = PD_CARD && pdByKey(PD_CARD);
+  if (!found) { $('#pdCard').hidden = true; PD_CARD = null; return; }
+  const { group, it, key } = found, pv = it.preview || null, on = PD.chosen.has(key);
+  const pvHtml = !pv ? '<div class="pc-nopv">Превью нет</div>'
+    : pv.kind === 'image' ? `<img class="pc-media" src="${esc(pv.url)}" alt="">`
+    : `<video class="pc-media" src="${esc(pv.url)}" controls loop playsinline></video>`;
+  const rows = [];
+  if (it.prompt) rows.push(['Промпт', it.prompt]);
+  if (it.date) rows.push(['Когда', fmtDate(new Date(it.date))]);
+  if (group === 'stages') {
+    rows.push(['Раздел', MODE_NAME[it.mode] || it.mode || 'раздел']);
+    rows.push(['Этап', it.name + (it.auto ? ' (было до открытия)' : '')]);
+    rows.push(['Файлов', String(it.files)]);
+  } else if (group === 'films') {
+    rows.push(['Сцен', String(it.scenes)]);
+    rows.push(['Готово сцен', String(it.done)]);
+    if (it.saved) rows.push(['Сохранён', fmtDate(new Date(it.saved * 1000))]);
+  } else {
+    rows.push(['Раздел', MODE_NAME[it.mode] || it.mode || 'результат']);
+    rows.push(['Тип', it.kind === 'image' ? 'картинка' : 'клип']);
+    if (it.res) rows.push(['Размер', it.res]);
+    if (it.len) rows.push(['Длина', it.len.toFixed(1).replace('.0', '') + ' с']);
+    rows.push(['Где', it.draft ? 'черновик, в Библиотеке его нет' : 'в Библиотеке']);
+  }
+  const kindName = group === 'films' ? 'Фильм Видеостудии' : group === 'stages' ? 'Этап'
+    : it.kind === 'image' ? 'Картинка' : 'Клип';
+  const modeName = group === 'films' ? '' : (MODE_NAME[it.mode] || it.mode || '');
+  $('#pcTitle').textContent = kindName + (modeName ? ' · ' + modeName : '');
+  $('#pcBody').innerHTML = pvHtml + `<dl class="pc-dl">${rows.map(([k, v]) =>
+    `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>`;
+  $('#pcFoot').innerHTML = '<button class="btn" data-close>Закрыть</button>'
+    + `<button class="btn${on ? '' : ' pri'}" id="pcToggle">${on ? 'Убрать из выбранных' : 'Оставить в «Основном»'}</button>`;
+}
+function openAssetCard(key) {
+  if (!PD || !pdByKey(key)) return;
+  PD_CARD = key;
+  paintAssetCard();
+  $('#pdCard').hidden = false;
+}
 async function openProjectDelete(id) {
   $('#projPop').hidden = true;
+  $('#pdCard').hidden = true; PD_CARD = null;
   let assets;
   try { assets = await apiGet('/api/projects/' + encodeURIComponent(id) + '/assets'); }
   catch (e) { toast('Не удалось узнать, что в проекте: ' + e.message); return; }
@@ -2051,13 +2120,31 @@ async function deleteProjectNow(all) {
     if (e.target.closest('#pdSelAll')) {
       PD.chosen = new Set(pdItems().map(x => x.key)); paintProjectDelete(); return;
     }
-    if (e.target.closest('#pdSelNone')) { PD.chosen.clear(); paintProjectDelete(); }
+    if (e.target.closest('#pdSelNone')) { PD.chosen.clear(); paintProjectDelete(); return; }
+    if (e.target === e.currentTarget || e.target.closest('[data-close]')) {   // the dialog itself closed
+      $('#pdCard').hidden = true; PD_CARD = null;
+    }
+  });
+  $('#pdBody').addEventListener('click', e => {
+    const open = e.target.closest('[data-open]');
+    if (open) { openAssetCard(open.dataset.open); }
   });
   $('#pdBody').addEventListener('change', e => {
     const box = e.target.closest('[data-pd]');
     if (!box || !PD) return;
     if (box.checked) PD.chosen.add(box.dataset.pd); else PD.chosen.delete(box.dataset.pd);
     paintProjectDelete();
+  });
+  $('#pdCard').addEventListener('click', e => {
+    if (e.target.closest('#pcToggle') && PD_CARD && PD) {
+      if (PD.chosen.has(PD_CARD)) PD.chosen.delete(PD_CARD); else PD.chosen.add(PD_CARD);
+      paintProjectDelete();
+      paintAssetCard();
+      return;
+    }
+    if (e.target === e.currentTarget || e.target.closest('[data-close]')) {
+      PD_CARD = null;
+    }
   });
 })();
 (function initProjectBar() {

@@ -152,6 +152,34 @@ class AssetsTest(AdminCase):
         listed = sorted(x["run"] for x in self.app.project_assets(self.other["id"])["films"])
         self.assertEqual(listed, ["made", "typed"])
 
+    async def test_every_line_carries_the_picture_the_picker_shows(self):
+        """The dialog shows thumbnails like «Прошлые изображения»: the row must carry the same URL."""
+        self.library_item("a")
+        self.draft("b")
+        stage, _ = await self.stage("этап")
+        self.film("run", scenes=[{"prompt": "сцена", "sec": 10,
+                                  "done": {"id": "m1", "url": "/api/file/m1", "sig": "s"}}])
+        assets = self.app.project_assets(self.other["id"])
+        self.assertEqual(assets["library"][0]["preview"],
+                         {"url": "/api/file/lib-a", "kind": "video"})
+        self.assertEqual(assets["drafts"][0]["preview"],
+                         {"url": "/api/file/draft-b", "kind": "video"})
+        self.assertEqual(assets["stages"][0]["preview"],
+                         {"url": f"/api/stages/{stage['id']}/file?key=video/first", "kind": "image"})
+        self.assertEqual(assets["films"][0]["preview"], {"url": "/api/file/m1", "kind": "video"})
+
+    async def test_a_missing_file_a_stage_without_pictures_and_a_film_without_clips_have_no_picture(self):
+        gone = {"id": "lib-gone", "mode": "video", "kind": "video", "project": self.other["id"],
+                "file": {"type": "local", "path": str(Path(support.DATA) / "nope.mp4"), "filename": "nope.mp4"}}
+        self.app.library.add(gone)
+        empty_stage = json.loads((await self.app.h_stage_save(support.Req(
+            {"mode": "video", "name": "пустой", "project": self.other["id"]}))).text)["stage"]
+        self.film("typed", scenes=[{"prompt": "сцена", "sec": 10}])
+        assets = self.app.project_assets(self.other["id"])
+        self.assertNotIn("preview", assets["library"][0], "файла нет — превью нет")
+        self.assertIsNone(assets["stages"][0]["preview"], empty_stage["id"])
+        self.assertIsNone(assets["films"][0]["preview"])
+
 
 class DeleteTest(AdminCase):
     async def test_what_the_user_kept_moves_to_the_default_project(self):

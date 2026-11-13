@@ -224,21 +224,61 @@ class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, Agent
             "drafts": [self.asset_row(x) for x in self.pending.values() if x.get("project") == pid],
             "stages": [{"id": s["id"], "mode": s.get("mode") or "", "name": s.get("name") or "",
                         "date": str(s.get("date") or ""), "auto": bool(s.get("auto")),
-                        "files": len(s.get("files") or [])}
+                        "files": len(s.get("files") or []), "preview": self.stage_preview(s)}
                        for s in self.stages_repo.load() if s.get("project") == pid],
             "films": [{"run": f["run"], "scenes": len(f.get("scenes") or []),
                        "done": sum(1 for scene in (f.get("scenes") or [])
                                    if scene.get("done") or scene.get("draftDone")),
-                       "saved": f.get("saved")}
+                       "saved": f.get("saved"), "preview": self.film_preview(f)}
                       for f in long_films()
                       if str(f.get("project") or "") == pid and long_film_has_work(f)],
         }
 
+    def asset_row(self, item):
+        """One line of the delete dialog: what it is, and the picture to recognise it by.
+
+        The dialog shows the same thumbnails «Прошлые изображения» shows, so a line carries the URL
+        the window already uses for the item (a file that is gone simply has no preview).
+        """
+        row = {"id": item["id"], "kind": item.get("kind") or "", "mode": item.get("mode") or "",
+               "prompt": str(item.get("prompt") or "")[:140], "date": str(item.get("date") or "")}
+        for key in ("res", "len"):
+            if item.get(key):
+                row[key] = item[key]
+        if item.get("preview") and self.library.get(item["id"]) is None:
+            row["draft"] = True
+        path = self.file_path(item)
+        if path is not None and path.exists():
+            row["preview"] = {"url": f"/api/file/{item['id']}", "kind": row["kind"] or "video"}
+        return row
+
+    IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".avif")
+
+    def stage_preview(self, stage):
+        """A stage has no clip of its own: its first image (a frame, a reference) is what shows it."""
+        names = stage.get("names") if isinstance(stage.get("names"), dict) else {}
+        for key in stage.get("files") or []:
+            name = str(names.get(str(key)) or key)
+            if Path(name).suffix.lower() not in self.IMAGE_SUFFIXES:
+                continue
+            try:
+                if not self.stages_repo.file_path(stage["id"], str(key)).is_file():
+                    continue
+            except (OSError, ValueError):
+                continue
+            return {"url": f"/api/stages/{stage['id']}/file?key={urllib.parse.quote(str(key))}",
+                    "kind": "image"}
+        return None
+
     @staticmethod
-    def asset_row(item):
-        """One line of the delete dialog: what it is, and just enough to recognise it."""
-        return {"id": item["id"], "kind": item.get("kind") or "", "mode": item.get("mode") or "",
-                "prompt": str(item.get("prompt") or "")[:70], "date": str(item.get("date") or "")}
+    def film_preview(film):
+        """The newest finished scene of the film is its picture: the film itself has no file."""
+        for scene in film.get("scenes") or []:
+            for key in ("done", "draftDone"):
+                clip = (scene or {}).get(key) or {}
+                if isinstance(clip, dict) and clip.get("url"):
+                    return {"url": str(clip["url"]), "kind": "video"}
+        return None
 
     async def delete_project(self, project_id, keep=None):
         """Delete a project; what the user asked to keep moves to «Основное».
