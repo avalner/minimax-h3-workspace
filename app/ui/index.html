@@ -1256,7 +1256,7 @@ H3C.configure({
   addDraftHook: fn => DRAFT_HOOKS.push(fn),
   removeDraftHook: fn => { const i = DRAFT_HOOKS.indexOf(fn); if (i >= 0) DRAFT_HOOKS.splice(i, 1); },
   keepDraft: it => keepDraftItem(it),
-  deleteDraft: (it, at) => deleteDraftItem(it, at),
+  deleteClip: (it, at) => deleteClipItem(it, at),
   projectOk: it => projectOk(it),
   openUpscale: it => openUpscale(it),
   addJob: (id, mode, prompt) => qAdd(id, mode, prompt),
@@ -2359,8 +2359,7 @@ async function keepDraftItem(it) {
   toast(kept.kind === 'image' ? 'Картинка добавлена в Библиотеку' : 'Клип добавлен в Библиотеку');
   return kept;
 }
-/* a draft goes away for good: the server deletes the record, the media row and the files (to the
-   Recycle Bin); the Library is not touched. Shared by every section that shows a draft thumbnails. */
+/* a clip goes away for good: the server deletes the records and the files (to the Recycle Bin) */
 function dropDraft(id) {
   const i = DRAFTS.findIndex(x => x.id === id);
   if (i >= 0) DRAFTS.splice(i, 1);
@@ -2368,11 +2367,19 @@ function dropDraft(id) {
   DRAFT_HOOKS.forEach(f => { try { f(); } catch {} });
   window.trayFill?.();
 }
-/* the delete cross in «Прошлые клипы» does not fire at once: a small popover at the cursor shows the
-   prompt of the clip that is about to go — the thumbnail's own tooltip is not enough to tell two
-   variants apart. Cancelled with Escape, a click outside or «Отмена». */
+function dropLib(id) {
+  const i = LIB.findIndex(x => x.id === id);
+  if (i >= 0) LIB.splice(i, 1);
+  renderLib();
+  IMG_PANELS.forEach(f => { try { f(); } catch {} });
+  DRAFT_HOOKS.forEach(f => { try { f(); } catch {} });
+  window.trayFill?.();
+}
+/* the delete cross in «Прошлые клипы» does not fire at once: a small popover at the cursor asks,
+   and names what is about to go — a draft or a clip that is already in the Library. Cancelled with
+   Escape, a click outside or «Отмена». */
 let draftDelPop = null;
-function askDeleteDraft(it, at) {
+function askDeleteClip(it, draft, at) {
   return new Promise(resolve => {
     if (!draftDelPop) {
       draftDelPop = document.createElement('div');
@@ -2381,7 +2388,7 @@ function askDeleteDraft(it, at) {
       document.body.appendChild(draftDelPop);
     }
     const pop = draftDelPop;
-    pop.innerHTML = '<div class="ddp-t">Удалить черновик?</div>'
+    pop.innerHTML = `<div class="ddp-t">${draft ? 'Удалить черновик?' : 'Удалить клип из Библиотеки?'}</div>`
       + '<div class="ddp-b"><button type="button" class="btn" data-ddp="no">Отмена</button>'
       + '<button type="button" class="btn pri" data-ddp="yes">Удалить в корзину</button></div>';
     pop.hidden = false;
@@ -2414,18 +2421,23 @@ function askDeleteDraft(it, at) {
     pop.querySelector('[data-ddp="yes"]')?.focus();
   });
 }
-async function deleteDraftItem(it, at) {
+async function deleteClipItem(it, at) {
   if (!it) return false;
-  if (byId(it.id)) { toast('Этот клип уже в Библиотеке: удаляйте его там'); return false; }
-  if (!(await askDeleteDraft(it, at))) return false;
-  try { await apiSend('/api/preview/' + encodeURIComponent(it.id), { method: 'DELETE' }); }
-  catch (e) { toast('Не удалось удалить черновик: ' + e.message); return false; }
-  dropDraft(it.id);
-  toast('Черновик удалён');
+  const inLibrary = !!byId(it.id);
+  const draft = !!it.preview && !inLibrary;
+  if (!draft && !inLibrary) { toast('Этот клип уже удалён'); return false; }
+  if (!(await askDeleteClip(it, draft, at))) return false;
+  try {
+    if (draft) await apiSend('/api/preview/' + encodeURIComponent(it.id), { method: 'DELETE' });
+    else await apiSend('/api/library/' + encodeURIComponent(it.id), { method: 'DELETE' });
+  } catch (e) { toast('Не удалось удалить: ' + e.message); return false; }
+  if (draft) dropDraft(it.id); else dropLib(it.id);
+  toast(draft ? 'Черновик удалён' : 'Клип удалён из Библиотеки');
   return true;
 }
-window.deleteDraftItem = deleteDraftItem;
+window.deleteClipItem = deleteClipItem;
 window.dropDraft = dropDraft;
+window.dropLib = dropLib;
 function renderLib() {
   // the badge follows the project filter: how many results are shown now, and how many live elsewhere
   const shown = LIB.filter(projectOk).length, others = LIB.length - shown;

@@ -32,7 +32,7 @@
     addDraftHook() {},
     removeDraftHook() {},
     keepDraft: async it => it,
-    deleteDraft: async () => false,
+    deleteClip: async () => false,
     projectOk: () => true,
     openUpscale() {},
     addJob() {},
@@ -391,12 +391,13 @@ function previewPanel(el, st, opts) {
       : (took ? `Готово за ${took} — видео в Библиотеке.` : 'Видео в Библиотеке.');
     status.innerHTML = `${head} Seed: <b style="font-family:var(--mono)">${esc(String(it.seed ?? '—'))}</b> `;
     if (draft) status.insertAdjacentHTML('beforeend', '<button class="btn pri" id="vKeepBtn" type="button" style="padding:4px 12px;font-size:12px">Добавить в библиотеку</button> ');
-    if (draft) status.insertAdjacentHTML('beforeend', '<button class="btn" id="vDelBtn" type="button" style="padding:4px 12px;font-size:12px" title="Удалить черновик: файл уйдёт в корзину, Библиотека не изменится">Удалить</button> ');
+    // any clip can be deleted from here, a Library one included: the file goes to the Recycle Bin
+    status.insertAdjacentHTML('beforeend', `<button class="btn" id="vDelBtn" type="button" style="padding:4px 12px;font-size:12px" title="${draft ? 'Удалить черновик: файл уйдёт в корзину, Библиотека не изменится' : 'Удалить клип из Библиотеки: файл уйдёт в корзину'}">Удалить</button> `);
     if (it.seed != null) status.insertAdjacentHTML('beforeend', '<button class="btn" id="keepSeed" type="button" style="padding:4px 10px;font-size:12px">Зафиксировать</button> ');
     status.insertAdjacentHTML('beforeend', ' <button class="btn pri" id="upBtn" type="button" style="padding:4px 12px;font-size:12px" title="Увеличить разрешение и добавить чёткости (SeedVR2)">Увеличить видео</button>');
     $('#upBtn', el).onclick = () => deps.openUpscale(deps.byId(it.id) || normalize(it));
     $('#keepSeed', el)?.addEventListener('click', () => useSeed(st, it.seed));
-    $('#vDelBtn', el)?.addEventListener('click', ev => deleteDraftFlow(it, ev));
+    $('#vDelBtn', el)?.addEventListener('click', ev => deleteClipFlow(it, ev));
     $('#vKeepBtn', el)?.addEventListener('click', async () => {
       const b = $('#vKeepBtn', el); b.disabled = true;
       const kept = await deps.keepDraft(it);
@@ -444,7 +445,7 @@ function previewPanel(el, st, opts) {
     }
     vhHh.hidden = false;
     vhHh.textContent = 'Прошлые клипы — нажмите, чтобы открыть';
-    vhHist.innerHTML = mine.map(x => `<button draggable="true" class="cw-th${x.preview ? ' draft' : ''}${shown && shown.id === x.id ? ' on' : ''}" data-id="${x.id}" type="button" title="${esc((x.preview ? 'Черновик, не в Библиотеке · ' : '') + (x.prompt || x.sub || 'клип') + ' · ' + deps.fmtDate(x.date))}">${x.preview ? `<i class="cw-x" data-del="${x.id}" title="Удалить черновик" role="button">✕</i>` : ''}<video src="${x.url}#t=0.5" preload="metadata" muted playsinline></video></button>`).join('');
+    vhHist.innerHTML = mine.map(x => `<button draggable="true" class="cw-th${x.preview ? ' draft' : ''}${shown && shown.id === x.id ? ' on' : ''}" data-id="${x.id}" type="button" title="${esc((x.preview ? 'Черновик, не в Библиотеке · ' : '') + (x.prompt || x.sub || 'клип') + ' · ' + deps.fmtDate(x.date))}"><i class="cw-x" data-del="${x.id}" title="${x.preview ? 'Удалить черновик' : 'Удалить клип из Библиотеки'}" role="button">✕</i><video src="${x.url}#t=0.5" preload="metadata" muted playsinline></video></button>`).join('');
   }
   function showItem(it) {
     if (!it || it.missing) return false;
@@ -458,21 +459,25 @@ function previewPanel(el, st, opts) {
     opts.onShow?.(it);
     return true;
   }
-  async function deleteDraftFlow(it, ev) {
+  async function deleteClipFlow(it, ev) {
     const wasShown = !!(shown && shown.id === it.id);
     const at = ev && ev.clientX != null ? { x: ev.clientX, y: ev.clientY } : null;
-    if (!(await deps.deleteDraft(it, at))) return;
+    if (!(await deps.deleteClip(it, at))) return;
     if (wasShown) {
       shown = null;
       const next = historyItems()[0];
-      if (next) showItem(next); else { resetFrame(); status.textContent = 'Черновик удалён.'; }
+      if (next) showItem(next); else { resetFrame(); status.textContent = 'Клип удалён.'; }
     }
     refreshHist();
   }
   deps.addDraftHook(refreshHist);
   vhHist.onclick = e => {
     const del = e.target.closest('[data-del]');
-    if (del) { const it = deps.draftById(del.dataset.del); if (it) deleteDraftFlow(it, e); return; }
+    if (del) {
+      const it = deps.byId(del.dataset.del) || deps.draftById(del.dataset.del);
+      if (it) deleteClipFlow(it, e);
+      return;
+    }
     const b = e.target.closest('.cw-th'); const it = b && (deps.byId(b.dataset.id) || deps.draftById(b.dataset.id));
     if (!it || run) return;
     showItem(it);

@@ -253,7 +253,7 @@ async def run_page(base: str, browser: str, shots: Path):
                 # the same as thumbnails, and the question must not jump to the middle of the screen.
                 popover = await cdp.evaluate(
                     "(async () => {"
-                    " const p = window.deleteDraftItem({ id: 'ui-pop', prompt: 'Промпт для проверки',"
+                    " const p = window.deleteClipItem({ id: 'ui-pop', prompt: 'Промпт для проверки',"
                     "   preview: true, mode: 'video', res: '1280×736', date: new Date() }, { x: 420, y: 300 });"
                     " await new Promise(r => setTimeout(r, 80));"
                     " const pop = document.querySelector('#draftDelPop');"
@@ -278,7 +278,7 @@ async def run_page(base: str, browser: str, shots: Path):
                 zoomed = await cdp.evaluate(
                     "(async () => {"
                     " document.documentElement.style.zoom = '1.1';"
-                    " const p = window.deleteDraftItem({ id: 'ui-pop2', preview: true, mode: 'video',"
+                    " const p = window.deleteClipItem({ id: 'ui-pop2', preview: true, mode: 'video',"
                     "   date: new Date() }, { x: 420, y: 300 });"
                     " await new Promise(r => setTimeout(r, 80));"
                     " const pop = document.querySelector('#draftDelPop');"
@@ -291,6 +291,29 @@ async def run_page(base: str, browser: str, shots: Path):
                 check("the question stays at the cursor when the interface is zoomed",
                       abs(zoomed["left"] - 434) <= 25 and abs(zoomed["top"] - 314) <= 25
                       and zoomed["right"] <= 1440 and zoomed["bottom"] <= 900, str(zoomed))
+
+                # a clip that already reached the Library can be deleted from the same cross; the
+                # question changes, because the record leaves the Library as well as the file
+                lib_pop = await cdp.evaluate("""
+                    (async () => {
+                      window.eval('LIB.push({ id: "lib-ui", mode: "video", kind: "video", preview: false,'
+                        + ' project: "main", date: new Date(), file: { type: "local", path: "C:/nope.mp4",'
+                        + ' filename: "nope.mp4" } }); renderLib();');
+                      const p = window.deleteClipItem(
+                        { id: 'lib-ui', preview: false, mode: 'video', date: new Date() }, { x: 300, y: 300 });
+                      await new Promise(r => setTimeout(r, 80));
+                      const pop = document.querySelector('#draftDelPop');
+                      const text = pop ? pop.textContent : '';
+                      pop?.querySelector('[data-ddp="no"]')?.click();
+                      const result = await p;
+                      window.eval('(() => { const i = LIB.findIndex(x => x.id === "lib-ui");'
+                        + ' if (i >= 0) LIB.splice(i, 1); renderLib(); })()');
+                      return { text, result };
+                    })()
+                """, await_promise=True)
+                check("a clip that is already in the Library asks with its own wording",
+                      "Удалить клип из Библиотеки?" in lib_pop["text"]
+                      and lib_pop["result"] is False, str(lib_pop))
 
                 empty_queue = await cdp.evaluate(
                     "(() => { const q = document.querySelector('#qList'); return !!q && /Очередь пуста/.test(q.textContent); })()")
@@ -702,4 +725,5 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+
 
