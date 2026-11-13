@@ -396,7 +396,7 @@ function previewPanel(el, st, opts) {
     status.insertAdjacentHTML('beforeend', ' <button class="btn pri" id="upBtn" type="button" style="padding:4px 12px;font-size:12px" title="Увеличить разрешение и добавить чёткости (SeedVR2)">Увеличить видео</button>');
     $('#upBtn', el).onclick = () => deps.openUpscale(deps.byId(it.id) || normalize(it));
     $('#keepSeed', el)?.addEventListener('click', () => useSeed(st, it.seed));
-    $('#vDelBtn', el)?.addEventListener('click', () => deleteDraftFlow(it));
+    $('#vDelBtn', el)?.addEventListener('click', ev => deleteDraftFlow(it, ev));
     $('#vKeepBtn', el)?.addEventListener('click', async () => {
       const b = $('#vKeepBtn', el); b.disabled = true;
       const kept = await deps.keepDraft(it);
@@ -458,9 +458,10 @@ function previewPanel(el, st, opts) {
     opts.onShow?.(it);
     return true;
   }
-  async function deleteDraftFlow(it) {
+  async function deleteDraftFlow(it, ev) {
     const wasShown = !!(shown && shown.id === it.id);
-    if (!(await deps.deleteDraft(it))) return;
+    const at = ev && ev.clientX != null ? { x: ev.clientX, y: ev.clientY } : null;
+    if (!(await deps.deleteDraft(it, at))) return;
     if (wasShown) {
       shown = null;
       const next = historyItems()[0];
@@ -471,7 +472,7 @@ function previewPanel(el, st, opts) {
   deps.addDraftHook(refreshHist);
   vhHist.onclick = e => {
     const del = e.target.closest('[data-del]');
-    if (del) { const it = deps.draftById(del.dataset.del); if (it) deleteDraftFlow(it); return; }
+    if (del) { const it = deps.draftById(del.dataset.del); if (it) deleteDraftFlow(it, e); return; }
     const b = e.target.closest('.cw-th'); const it = b && (deps.byId(b.dataset.id) || deps.draftById(b.dataset.id));
     if (!it || run) return;
     showItem(it);

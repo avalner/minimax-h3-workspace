@@ -249,6 +249,26 @@ async def run_page(base: str, browser: str, shots: Path):
                 check("choosing another project in the header switches it back",
                       restored["name"] == "Основное" and restored["active"] == "main", str(restored))
 
+                # Deleting a draft asks first and shows the prompt of that very clip next to the
+                # cursor: two variants of one shot look the same as thumbnails.
+                popover = await cdp.evaluate(
+                    "(async () => {"
+                    " const p = window.deleteDraftItem({ id: 'ui-pop', prompt: 'Промпт для проверки',"
+                    "   preview: true, mode: 'video', res: '1280×736', date: new Date() }, { x: 420, y: 300 });"
+                    " await new Promise(r => setTimeout(r, 80));"
+                    " const pop = document.querySelector('#draftDelPop');"
+                    " const box = pop && !pop.hidden ? pop.getBoundingClientRect() : null;"
+                    " const text = pop ? pop.textContent : '';"
+                    " pop?.querySelector('[data-ddp=\"no\"]')?.click();"
+                    " const result = await p;"
+                    " return { shown: !!box, text, result, hidden: !!pop && pop.hidden,"
+                    "   inside: !!box && box.left >= 0 && box.top >= 0"
+                    "     && box.right <= innerWidth && box.bottom <= innerHeight }; })()",
+                    await_promise=True)
+                check("the delete cross asks first and shows the clip's prompt next to the cursor",
+                      popover["shown"] and "Промпт для проверки" in popover["text"] and popover["inside"]
+                      and popover["result"] is False and popover["hidden"], str(popover))
+
                 empty_queue = await cdp.evaluate(
                     "(() => { const q = document.querySelector('#qList'); return !!q && /Очередь пуста/.test(q.textContent); })()")
                 check("the queue starts empty with its own message", empty_queue)

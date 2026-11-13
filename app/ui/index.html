@@ -2368,16 +2368,63 @@ function dropDraft(id) {
   DRAFT_HOOKS.forEach(f => { try { f(); } catch {} });
   window.trayFill?.();
 }
-async function deleteDraftItem(it) {
+/* the delete cross in «Прошлые клипы» does not fire at once: a small popover at the cursor shows the
+   prompt of the clip that is about to go — the thumbnail's own tooltip is not enough to tell two
+   variants apart. Cancelled with Escape, a click outside or «Отмена». */
+let draftDelPop = null;
+function askDeleteDraft(it, at) {
+  return new Promise(resolve => {
+    if (!draftDelPop) {
+      draftDelPop = document.createElement('div');
+      draftDelPop.className = 'ddp';
+      draftDelPop.id = 'draftDelPop';
+      document.body.appendChild(draftDelPop);
+    }
+    const pop = draftDelPop;
+    pop.innerHTML = '<div class="ddp-t">Удалить черновик?</div>'
+      + (String(it.prompt || '').trim() ? `<div class="ddp-p">${esc(it.prompt)}</div>`
+        : '<div class="ddp-p ddp-empty">Без промпта</div>')
+      + `<div class="ddp-m">${esc([MODE_NAME[it.mode] || it.mode, it.res, it.date instanceof Date ? fmtDate(it.date) : '']
+        .filter(Boolean).join(' · '))}</div>`
+      + '<div class="ddp-b"><button type="button" class="btn" data-ddp="no">Отмена</button>'
+      + '<button type="button" class="btn pri" data-ddp="yes">Удалить в корзину</button></div>';
+    pop.hidden = false;
+    const w = pop.offsetWidth, h = pop.offsetHeight;
+    let x = ((at && at.x != null) ? at.x : innerWidth / 2) + 14;
+    let y = ((at && at.y != null) ? at.y : innerHeight / 2) + 14;
+    if (x + w > innerWidth - 10) x = Math.max(10, innerWidth - w - 10);
+    if (y + h > innerHeight - 10) y = Math.max(10, y - h - 26);
+    pop.style.left = x + 'px';
+    pop.style.top = y + 'px';
+    const close = ok => {
+      pop.hidden = true;
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('mousedown', onDoc, true);
+      resolve(ok);
+    };
+    const onKey = e => { if (e.key === 'Escape') { e.preventDefault(); close(false); } };
+    const onDoc = e => { if (!pop.contains(e.target)) close(false); };
+    pop.onclick = e => {
+      const b = e.target.closest('[data-ddp]');
+      if (b) close(b.dataset.ddp === 'yes');
+    };
+    document.addEventListener('keydown', onKey);
+    setTimeout(() => document.addEventListener('mousedown', onDoc, true), 0);   // this click must not close it
+    pop.querySelector('[data-ddp="yes"]')?.focus();
+  });
+}
+async function deleteDraftItem(it, at) {
   if (!it) return false;
   if (byId(it.id)) { toast('Этот клип уже в Библиотеке: удаляйте его там'); return false; }
-  if (!confirm('Удалить черновик? Файл будет перемещён в корзину. Библиотека не изменится.')) return false;
+  if (!(await askDeleteDraft(it, at))) return false;
   try { await apiSend('/api/preview/' + encodeURIComponent(it.id), { method: 'DELETE' }); }
   catch (e) { toast('Не удалось удалить черновик: ' + e.message); return false; }
   dropDraft(it.id);
   toast('Черновик удалён');
   return true;
 }
+window.deleteDraftItem = deleteDraftItem;
+window.dropDraft = dropDraft;
 function renderLib() {
   // the badge follows the project filter: how many results are shown now, and how many live elsewhere
   const shown = LIB.filter(projectOk).length, others = LIB.length - shown;
