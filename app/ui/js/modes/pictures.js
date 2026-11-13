@@ -832,7 +832,7 @@ function buildInpaint(scope) {
             <button class="btn ip-clear" type="button">Очистить закраску</button>
             <button class="btn ip-unsel" type="button" title="Закраска снова на всей картинке" disabled>Снять выделение</button>
           </div>
-          <div class="hint" style="margin-top:8px">Клавиши 1–5 выбирают инструмент (1 ещё раз — форма выделения), [ и ] меняют размер кисти и ластика. <b>«Рука»</b> (5) двигает картинку, а <b>пробел</b> включает её, пока зажат, — удобно на любом инструменте. «Заливка» заполняет область, обведённую кистью. «Выделение» ограничивает работу выбранной областью: Ctrl добавляет ещё одну, Shift держит ровный круг или квадрат, Alt перетаскивает выделение, Esc снимает. Если не закрашено ничего, в модель уходит само выделение. Ctrl+Z — убрать последний шаг, Shift+Ctrl+Z — вернуть его, Shift+колесо мыши — масштаб холста. <b>«На весь экран» (F)</b>: там колесо мыши — масштаб вокруг указателя, пробел или средняя кнопка мыши — двигать картинку, Esc — выйти.</div>
+          <div class="hint" style="margin-top:8px">Клавиши 1–5 выбирают инструмент (1 ещё раз — форма выделения), [ и ] меняют размер кисти и ластика. <b>«Рука»</b> (5) двигает картинку в любую сторону, а <b>пробел</b> включает её, пока зажат, — удобно на любом инструменте. <b>Колесо мыши</b> — масштаб вокруг указателя, «Вся картинка» возвращает картинку целиком и ставит её посередине. «Заливка» заполняет область, обведённую кистью. «Выделение» ограничивает работу выбранной областью: Ctrl добавляет ещё одну, Shift держит ровный круг или квадрат, Alt перетаскивает выделение, Esc снимает. Если не закрашено ничего, в модель уходит само выделение. Ctrl+Z — убрать последний шаг, Shift+Ctrl+Z — вернуть его. <b>«На весь экран» (F)</b> — то же самое на всё окно, Esc возвращает назад.</div>
         </div></div>
       <div class="card"><div class="card-h"><h3><span class="n">2</span>Что должно быть на закрашенном месте</h3></div>
         <textarea class="ip-prompt" placeholder="Например: белая майка вместо красной куртки. Лицо, фон и свет оставить как было."></textarea>
@@ -963,21 +963,45 @@ function buildInpaint(scope) {
   scope.listen(document, 'keydown', e => { if (e.key === 'Alt') { altHeld = true; cursorNow(); paintRing(); } });
   scope.listen(document, 'keyup', e => { if (e.key === 'Alt') { altHeld = false; cursorNow(); paintRing(); } });
   scope.listen(window, 'blur', () => { altHeld = false; cursorNow(); });   // Alt+Tab would leave it stuck
-  /* the drawing canvas is as big as the user wants it: 100 % = the width of the card, more = the stage scrolls */
+  /* The picture is seen through a camera: the stage is a window (it does not scroll), `zoom` says how wide the
+     picture is shown in percent of that window, and `pan` where its top-left corner sits. Panning is therefore free
+     in every direction — the picture can be pushed past the edges, the way a drawing program moves the canvas — and
+     zoom keeps the point under the pointer where it is. Pan and zoom are one CSS transform on `.ip-fit`, so the
+     picture itself stays in its own pixels and nothing about the mask changes. */
   const fitEl = $('.ip-fit', root), stageEl = $('.ip-stage', root);
   const zoomIn = $('.ip-zoom', root), zoomV = $('.ip-zoomv', root);
-  let zoom = 100;
+  let zoom = 100, pan = { x: 0, y: 0 };
   const ZOOM_MAX = 300;   // 300 % of the stage's width: for a 4000 px picture in a 1400 px window that is about 1:1
-  const setZoom = (z, keep) => {
-    zoom = Math.max(20, Math.min(ZOOM_MAX, Math.round(z)));
-    fitEl.style.width = zoom + '%';
-    if (zoomIn.value !== String(zoom)) zoomIn.value = zoom;
-    zoomV.textContent = zoom + '%';
+  const applyView = () => {
+    fitEl.style.transformOrigin = '0 0';
+    fitEl.style.transform = `translate(${pan.x}px, ${pan.y}px) scale(${zoom / 100})`;
+  };
+  const stagePoint = (clientX, clientY) => {   // client coordinates -> the stage's own box
+    const r = stageEl.getBoundingClientRect();
+    return { x: clientX - r.left - stageEl.clientLeft, y: clientY - r.top - stageEl.clientTop };
+  };
+  const baseSize = () => ({ w: fitEl.offsetWidth || 1, h: fitEl.offsetHeight || 1 });   // unscaled layout size
+  const centerView = () => {   // the picture in the middle of the window
+    const b = baseSize(), s = zoom / 100;
+    pan = { x: Math.round((stageEl.clientWidth - b.w * s) / 2), y: Math.round((stageEl.clientHeight - b.h * s) / 2) };
+  };
+  root._view = () => ({ zoom, pan: { ...pan } });   // what the camera shows (the window check reads it)
+  const syncZoomUi = () => { if (zoomIn.value !== String(zoom)) zoomIn.value = zoom; zoomV.textContent = zoom + '%'; };
+  const setZoom = (z, keep, anchor) => {
+    const next = Math.max(20, Math.min(ZOOM_MAX, Math.round(z)));
+    if (anchor && next !== zoom) {   // the piece of the picture under the pointer stays under it
+      const p = stagePoint(anchor.clientX, anchor.clientY), k = next / zoom;
+      pan.x = p.x - (p.x - pan.x) * k;
+      pan.y = p.y - (p.y - pan.y) * k;
+    }
+    zoom = next;
+    syncZoomUi();
+    applyView();
     if (!keep) { try { localStorage.setItem('h3-ip-zoom', String(zoom)); } catch {} }
     hoverPt = null; paintRing();   // the picture moved under the pointer: the ring comes back on the next move
     paintSel();                    // ...and the outline of the selection is redrawn at the new on-screen scale
   };
-  const fitZoom = () => {   // the biggest canvas that still shows the whole picture without scrolling
+  const fitZoom = () => {   // the biggest view that still shows the whole picture
     if (!drop._file || !imgC.height) return 100;
     const panel = stageEl.clientWidth || 480;
     // on the whole window the stage fills it, so its own height is the room there is; in the card it is the
@@ -986,32 +1010,19 @@ function buildInpaint(scope) {
     const maxH = fixed > 0 ? fixed - 4 : Math.min(window.innerHeight * .62, 720);
     return Math.max(20, Math.min(100, Math.floor(100 * maxH / (panel * (imgC.height / imgC.width)))));
   };
-  /* zoom that keeps the point under the pointer where it is: the wheel is the usual way to look closer at a face */
-  const zoomAt = (clientX, clientY, k) => {
-    const r = stageEl.getBoundingClientRect(), before = fitEl.getBoundingClientRect();
-    if (!before.width || !before.height) { setZoom(zoom * k); return; }
-    const mx = clientX - r.left, my = clientY - r.top;
-    const fx = (stageEl.scrollLeft + mx) / before.width, fy = (stageEl.scrollTop + my) / before.height;
-    setZoom(zoom * k, true);
-    const after = fitEl.getBoundingClientRect();
-    stageEl.scrollLeft = Math.round(fx * after.width - mx);
-    stageEl.scrollTop = Math.round(fy * after.height - my);
-  };
+  const fitView = () => { setZoom(fitZoom(), true); centerView(); applyView(); paintSel(); };
   zoomIn.oninput = e => setZoom(+e.target.value);
-  $('.ip-fitb', root).onclick = () => setZoom(fitZoom());
-  stageEl.addEventListener('wheel', e => {   // Shift + wheel zooms in the card; on the whole window the wheel itself does
-    if (!isFull && !e.shiftKey) return;
+  $('.ip-fitb', root).onclick = () => fitView();
+  stageEl.addEventListener('wheel', e => {   // the wheel zooms around the pointer, in the card and on the whole window
     e.preventDefault();
     const d = e.deltaY || e.deltaX;   // Windows often sends a horizontal wheel as deltaX
     if (!d) return;
-    if (isFull) zoomAt(e.clientX, e.clientY, d < 0 ? 1.12 : 1 / 1.12);
-    else setZoom(zoom + (d < 0 ? 5 : -5));
+    setZoom(zoom * (d < 0 ? 1.12 : 1 / 1.12), false, { clientX: e.clientX, clientY: e.clientY });
   }, { passive: false });
 
-  /* --- «На весь экран»: the same picture and the same tools, but the editor takes the whole program window.
-     Zoom is the wheel around the pointer, pan is dragging with Space held or with the middle button. --- */
+  /* --- «На весь экран»: the same picture and the same tools, but the editor takes the whole program window. --- */
   const fullB = $('.ip-fullb', root);
-  let zoomBefore = null;
+  let viewBefore = null;
   const setFull = on => {
     const changed = on !== isFull;
     isFull = on;
@@ -1020,14 +1031,15 @@ function buildInpaint(scope) {
     fullB.title = on ? 'Вернуться к странице (Esc)' : 'Редактор на всё окно (F)';
     if (!changed) return false;
     if (on) {
-      zoomBefore = zoom;
-      setZoom(fitZoom(), true);   // the whole picture first: the working area is bigger than the card
+      viewBefore = { zoom, pan: { ...pan } };
+      fitView();   // the whole picture first: the working area is bigger than the card
     } else {
       spaceHeld = false;
       panning = null;
-      setZoom(zoomBefore || zoom, true);
+      if (viewBefore) { zoom = viewBefore.zoom; pan = { ...viewBefore.pan }; syncZoomUi(); applyView(); }
+      viewBefore = null;
     }
-    hoverPt = null; paintRing();
+    hoverPt = null; paintRing(); paintSel();
     if (on) overC.focus({ preventScroll: true });
     return true;
   };
@@ -1157,7 +1169,11 @@ function buildInpaint(scope) {
       let savedH = 0; try { savedH = +localStorage.getItem('h3-ip-stage-h'); } catch {}
       if (savedH >= 160) { stageEl.style.maxHeight = 'none'; stageEl.style.height = savedH + 'px'; }
       let saved = 0; try { saved = +localStorage.getItem('h3-ip-zoom'); } catch {}
-      setZoom(saved >= 20 && saved <= 200 ? saved : fitZoom(), true);   // the picture is not blown up to the whole panel
+      // a new picture is shown WHOLE: the saved zoom is used only when it is smaller than the fit (a smaller view
+      // is fine, a larger one would hide part of the picture behind the edge of the stage), and it starts centered
+      const fit0 = fitZoom();
+      setZoom(Math.min(saved >= 20 && saved <= ZOOM_MAX ? saved : fit0, fit0), true);
+      centerView(); applyView();
     };
     if (img.complete && img.naturalWidth) setup(); else img.onload = setup;
   });
@@ -1307,15 +1323,16 @@ function buildInpaint(scope) {
     if (edit.hidden || !handNow(e)) return;
     e.preventDefault();
     try { stageEl.setPointerCapture(e.pointerId); } catch (err) { /* a pointer that is already gone */ }
-    panning = { x: e.clientX, y: e.clientY, sl: stageEl.scrollLeft, st: stageEl.scrollTop };
+    panning = { x: e.clientX, y: e.clientY, px: pan.x, py: pan.y };   // free: no edges to stop at
     cursorNow();
   };
   stageEl.addEventListener('pointerdown', panStart);
   stageEl.addEventListener('pointermove', e => {
     if (!panning) return;
     e.preventDefault();
-    stageEl.scrollLeft = panning.sl - (e.clientX - panning.x);
-    stageEl.scrollTop = panning.st - (e.clientY - panning.y);
+    pan.x = panning.px + (e.clientX - panning.x);
+    pan.y = panning.py + (e.clientY - panning.y);
+    applyView();
   });
   const panEnd = () => { if (!panning) return; panning = null; cursorNow(); };
   stageEl.addEventListener('pointerup', panEnd);

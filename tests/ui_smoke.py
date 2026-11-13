@@ -954,14 +954,15 @@ async def run_page(base: str, browser: str, shots: Path):
                     clientX: sr.left + sr.width / 2, clientY: sr.top + sr.height / 2 }));
                   await sleep(40);
                   out.z1 = zoomV();
-                  const sl0 = stage.scrollLeft, st0 = stage.scrollTop;
+                  const p0 = view._view().pan;
                   const ev = (type, extra) => over.dispatchEvent(new PointerEvent(type, Object.assign({ bubbles: true,
                     cancelable: true, pointerId: 1, isPrimary: true }, extra)));
                   ev('pointerdown', { button: 1, buttons: 4, clientX: sr.left + 300, clientY: sr.top + 200 });
                   ev('pointermove', { buttons: 4, clientX: sr.left + 220, clientY: sr.top + 150 });
                   ev('pointerup', { button: 1, clientX: sr.left + 220, clientY: sr.top + 150 });
                   await sleep(40);
-                  out.panned = stage.scrollLeft !== sl0 || stage.scrollTop !== st0;
+                  const p1 = view._view().pan;
+                  out.panned = p1.x !== p0.x || p1.y !== p0.y;
                   document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true }));
                   await sleep(80);
                   out.after = view.classList.contains('ip-full') ? 'full' : 'card';
@@ -1064,12 +1065,13 @@ async def run_page(base: str, browser: str, shots: Path):
                   const on = !!view.querySelector('.ip-mode button[data-m="hand"]').classList.contains('on');
                   const paintOff = !view.querySelector('.ip-mode button[data-m="paint"]').classList.contains('on');
                   const sr = over.getBoundingClientRect();
-                  const sl0 = stage.scrollLeft, st0 = stage.scrollTop;
+                  const sl0 = view._view().pan;
                   ptr(over, 'pointerdown', sr.left + 300, sr.top + 200);
                   ptr(over, 'pointermove', sr.left + 180, sr.top + 120, { buttons: 1 });
                   ptr(over, 'pointerup', sr.left + 180, sr.top + 120);
                   await sleep(50);
-                  const moved = stage.scrollLeft !== sl0 || stage.scrollTop !== st0;
+                  const pn = view._view().pan;
+                  const moved = pn.x !== sl0.x || pn.y !== sl0.y;
                   const same = painted() === before;
                   // release → the paint tool comes back
                   document.dispatchEvent(new KeyboardEvent('keyup', { key: ' ', code: 'Space', bubbles: true }));
@@ -1079,22 +1081,36 @@ async def run_page(base: str, browser: str, shots: Path):
                   // the button itself, dragging from the empty area beside the picture
                   view.querySelector('.ip-mode button[data-m="hand"]').click();
                   const handOn = !!view.querySelector('.ip-mode button[data-m="hand"]').classList.contains('on');
-                  const sl1 = stage.scrollLeft;
+                  const p0 = view._view().pan;
                   const r2 = stage.getBoundingClientRect();
                   ptr(stage, 'pointerdown', r2.left + 40, r2.top + 40);
                   ptr(stage, 'pointermove', r2.left + 120, r2.top + 90, { buttons: 1 });
                   ptr(stage, 'pointerup', r2.left + 120, r2.top + 90);
                   await sleep(50);
-                  const movedFromEmpty = stage.scrollLeft !== sl1;
+                  const p1 = view._view().pan;
+                  const movedFromEmpty = p1.x !== p0.x && p1.y !== p0.y;
+                  // and the canvas moves freely: the same drag repeated pushes it out of the window, not to an edge
+                  let p2 = null;
+                  for (let i = 0; i < 4; i++) {
+                    ptr(stage, 'pointerdown', r2.left + 500, r2.top + 300);
+                    ptr(stage, 'pointermove', r2.left + 400, r2.top + 250, { buttons: 1 });
+                    ptr(stage, 'pointerup', r2.left + 400, r2.top + 250);
+                    await sleep(20);
+                  }
+                  p2 = view._view().pan;
+                  const freeX = p1.x - p2.x, freeY = p1.y - p2.y;   // 4 drags of 100 x 50 px, no stopping at an edge
                   await setZ(100);
                   view.querySelector('.ip-mode button[data-m="select"]').click();
-                  return { on, paintOff, moved, same, back, paintOn, handOn, movedFromEmpty }; })()""", await_promise=True)
+                  return { on, paintOff, moved, same, back, paintOn, handOn, movedFromEmpty,
+                    freeX, freeY }; })()""", await_promise=True)
                 check("Space turns the hand on and gives the tool back on release",
                       hand and hand["on"] and hand["paintOff"] and hand["back"] and hand["paintOn"], str(hand))
                 check("the hand moves the picture and paints nothing",
                       hand and hand["moved"] and hand["same"], str(hand))
                 check("the hand button works too, and even from the empty area beside the picture",
                       hand and hand["handOn"] and hand["movedFromEmpty"], str(hand))
+                check("the canvas moves freely in both directions, with no edge to stop at",
+                      hand and hand["freeX"] == 400 and hand["freeY"] == 200, str(hand))
 
                 # The page's own event entry, without a ComfyUI: a snapshot of a running job, then
                 # its result. This is the one-owner contract seen from the window: one row, one

@@ -202,8 +202,8 @@
 .ip-acts{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}
 .ip .go,.ip .stop{margin-top:12px}
 /* the drawing canvas: its size is the user's to set, so the stage scrolls instead of stretching the picture */
-.ip-stage{position:relative;border-radius:12px;overflow:auto;max-height:min(64vh,760px);border:1px solid var(--line);margin-top:10px;background:repeating-conic-gradient(var(--bg-2) 0 25%,var(--surface-2) 0 50%) 0 0/18px 18px}
-.ip-fit{position:relative;width:100%;margin:0 auto}
+.ip-stage{position:relative;border-radius:12px;overflow:hidden;max-height:min(64vh,760px);border:1px solid var(--line);margin-top:10px;background:repeating-conic-gradient(var(--bg-2) 0 25%,var(--surface-2) 0 50%) 0 0/18px 18px;touch-action:none}
+.ip-fit{position:relative;width:100%;margin:0 auto;transform-origin:0 0}
 .ip-stage canvas{display:block;width:100%;height:auto}
 .ip-over{position:absolute;inset:0;cursor:crosshair;touch-action:none}
 .ip-over:focus,.ip-over:focus-visible{outline:none}
