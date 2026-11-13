@@ -56,7 +56,8 @@ function imgPanel(el, o) {
     const mine = [...DRAFTS.filter(x => x.mode === o.mode && x.kind === 'image'),
                   ...LIB.filter(x => x.mode === o.mode && x.kind === 'image' && !x.missing && x.url)]
       .filter((x, i, a) => a.findIndex(y => y.id === x.id) === i)
-      .sort((a, b) => b.date - a.date).slice(0, 12);
+      .sort((a, b) => b.date - a.date)
+      .filter((it, i) => it.preview || i < 12);
     hh.hidden = !mine.length;
     hist.innerHTML = mine.map(it => `<button draggable="true" class="cw-th${last && last.id === it.id ? ' on' : ''}${it.preview ? ' draft' : ''}" data-id="${it.id}" type="button" title="${esc((it.preview ? 'Черновик, не в Библиотеке · ' : '') + fmtDate(it.date) + ((it.prompt || '') ? ' · ' + it.prompt.slice(0, 70) : ''))}"><img src="${it.url}" alt="" loading="lazy"></button>`).join('');
   };

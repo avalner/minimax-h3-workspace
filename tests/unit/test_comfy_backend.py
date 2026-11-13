@@ -46,7 +46,7 @@ class FakeComfy:
 
 def spec(**overrides):
     kwargs = dict(prompt="кадр", aspect="16:9", quality="720p", seconds=5, seed=42, width=1280, height=720,
-                  models=MODELS)
+                  models=MODELS, loras=LORAS)
     kwargs.update(overrides)
     return JobSpec.video(**kwargs)
 

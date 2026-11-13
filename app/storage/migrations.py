@@ -170,10 +170,24 @@ def _import_queue(db, data_dir, report):
     report.imported["queue"] = imported
 
 
+def _drafts(db, data_dir, report):
+    db.execute("CREATE TABLE IF NOT EXISTS drafts (id TEXT PRIMARY KEY, payload TEXT NOT NULL)")
+    # Earlier builds accidentally inserted drafts into library. Only move rows positively
+    # identified as unkept drafts by their media record; leave genuine Library items alone.
+    for row in db.query("SELECT l.id, l.payload FROM library l JOIN media m ON m.media_id=l.id "
+                        "WHERE m.state='draft' AND m.library_id IS NULL"):
+        item = json.loads(row["payload"])
+        item["preview"] = True
+        db.execute("INSERT OR IGNORE INTO drafts(id,payload) VALUES(?,?)",
+                   (row["id"], json.dumps(item, ensure_ascii=False)))
+        db.execute("DELETE FROM library WHERE id=?", (row["id"],))
+
+
 STEPS = (
     ("0001-schema", 1, _schema, "таблицы"),
     ("1000-import-library", 1, _import_library, "библиотека из library.json"),
     ("1001-import-queue", 1, _import_queue, "очередь из queue.json"),
+    ("0002-drafts", 2, _drafts, "долговечные черновики вне Библиотеки"),
 )
 
 

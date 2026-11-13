@@ -218,7 +218,8 @@ class FinalizeTest(MediaCase):
         self.assertEqual(len(self.drafts), 1)
         self.assertIs(job["record"].results[0].state, MediaState.DRAFT)
         self.assertIs(job["record"].state, JobState.SUCCEEDED)
-        self.assertNotIn("local", self.drafts[0], "черновику сделали независимую копию")
+        self.assertTrue(Path(self.drafts[0]["local"]).exists(), "файл черновика должен переживать очистку output")
+        self.assertEqual(self.library.repo.load(), [], "черновик записан как библиотечный результат")
 
     async def test_a_job_without_a_record_still_gets_its_item(self):
         self.put_engine_file()

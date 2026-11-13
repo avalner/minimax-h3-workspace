@@ -52,8 +52,8 @@ class SchemaTest(DbCase):
         folder = data_dir()
         db = self.open_db(folder / "h3studio.db")
         report = migrate(db, folder)
-        self.assertEqual(report.applied, ["0001-schema", "1000-import-library", "1001-import-queue"])
-        self.assertEqual(db.schema_version(), 1)
+        self.assertEqual(report.applied, ["0001-schema", "1000-import-library", "1001-import-queue", "0002-drafts"])
+        self.assertEqual(db.schema_version(), 2)
         self.assertEqual(db.one("PRAGMA journal_mode")["journal_mode"].lower(), "wal")
 
     def test_a_second_start_imports_nothing_again(self):
@@ -61,14 +61,14 @@ class SchemaTest(DbCase):
         db = self.imported(folder)
         again = migrate(db, folder)
         self.assertEqual(again.applied, [])
-        self.assertEqual(again.skipped, ["0001-schema", "1000-import-library", "1001-import-queue"])
+        self.assertEqual(again.skipped, ["0001-schema", "1000-import-library", "1001-import-queue", "0002-drafts"])
         self.assertEqual(LibraryRepository(db).count(), len(LIBRARY_IDS))
         self.assertEqual(JobRepository(db).count(), 2)
 
     def test_a_database_of_a_newer_program_is_refused(self):
         folder = data_dir()
         db = self.imported(folder)
-        db.execute("INSERT INTO schema_migrations(name, version, applied_at) VALUES('9999-future', 2, 0)")
+        db.execute("INSERT INTO schema_migrations(name, version, applied_at) VALUES('9999-future', 99, 0)")
         with self.assertRaises(SchemaVersionError):
             migrate(db, folder)
         self.assertEqual(LibraryRepository(db).count(), len(LIBRARY_IDS), "база не должна переписываться")

@@ -107,10 +107,10 @@ class QueuePersistTest(unittest.TestCase):
         self.assertIsNotNone(record)
         self.assertEqual(record.graph["1"]["class_type"], "Test")
 
-    def test_a_job_that_leaves_the_queue_leaves_the_table(self):
+    def test_removing_a_ui_entry_does_not_delete_a_durable_job(self):
         self.app.jobs["p1"] = support.job("p1", record=support.job_record("p1"))
         self.app.jobs.pop("p1")
-        self.assertIsNone(self.app.jobs_repo.by_prompt("p1"))
+        self.assertIsNotNone(self.app.jobs_repo.by_prompt("p1"))
 
     def test_the_finalizing_phase_is_written(self):
         job = support.job("p1", record=support.job_record("p1"))

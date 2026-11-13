@@ -45,6 +45,7 @@ from pathlib import Path
 
 from domain.jobs import ResultPolicy
 from domain.media import MediaKind, MediaRecord, MediaState, media_id_for
+from storage.repositories import DraftRepository
 
 CHUNK = 1 << 20   # 1 MiB: big enough for throughput, small enough never to hold a clip in memory
 VIDEO_SUFFIXES = (".mp4", ".webm", ".mkv", ".mov")
@@ -335,12 +336,14 @@ class MediaService:
                  outputs_of=None, output_dir=lambda: None, results_dir=lambda: None,
                  keep_copies=lambda: True, present=None, hold_draft=None,
                  note_error=lambda text: None, on_outputs=None, extra_folders=lambda: (),
-                 clock=time.time):
+                 clock=time.time, drafts=None, draft_dir=lambda: None):
         self.db = db
         self.jobs = jobs
         self.media = media
         self.results = results
         self.library = library
+        self.drafts = drafts or DraftRepository(db)
+        self.draft_dir = draft_dir
         self.source = source          # something with `open_output(file_ref)`; None: no downloads
         self.files = files or MediaFiles()
         self.outputs_of = outputs_of  # async (prompt_id) -> the engine's outputs
@@ -385,7 +388,10 @@ class MediaService:
             kind = MediaKind.of_name(ref["filename"])
             backend_file = {**ref, "node": node}
             if draft:
+                item["preview"] = True
+                copy = await self.archive(item, folder=self.draft_dir(), force=True)
                 media = MediaRecord(media_id=media_id, kind=kind, state=MediaState.DRAFT,
+                                    path=copy.path, bytes=copy.bytes, error=copy.error,
                                     backend_file=backend_file, created_at=created)
             else:
                 copy = await self.archive(item)
@@ -394,9 +400,31 @@ class MediaService:
                                     created_at=created, error=copy.error)
             planned.append((item, media))
 
+        return await self._commit(job, planned, record, draft, notify)
+
+    async def publish_local(self, job, item, *, notify=None):
+        """Register a complete local cloud/FFmpeg file with the same commit-before-notify rule."""
+        record = job.get("record")
+        draft = is_draft(job, record)
+        item = dict(item)
+        ref = item["file"]
+        item["id"] = media_id_for(record.job_id if record else job["prompt_id"], "", ref)
+        if draft:
+            item["preview"] = True
+        media = MediaRecord(media_id=item["id"], kind=MediaKind.of_name(ref["filename"]),
+                            state=MediaState.DRAFT if draft else MediaState.LIBRARY,
+                            path=ref.get("path"), backend_file=dict(ref),
+                            library_id=None if draft else item["id"], created_at=self._clock())
+        return await self._commit(job, [(item, media)], record, draft, notify)
+
+    async def _commit(self, job, planned, record, draft, notify):
         with self.db.transaction(), self._restore_record_on_error(record):
             for item, media in planned:
-                self.library.repo.add(item)   # the row and the file are both there, or neither is shown
+                if draft:
+                    self.drafts.save(item)
+                else:
+                    self.library.repo.add(item)
+                    self.drafts.delete(item["id"])
                 if record is None:
                     self.media.save(media)
                     continue
@@ -417,7 +445,7 @@ class MediaService:
                 self.library.note_committed(item)
         items = [self.present(item) for item, _ in planned]
         if notify is not None:
-            await notify({"type": "done", "prompt_id": pid, "item": items[0], "items": items})
+            await notify({"type": "done", "prompt_id": job["prompt_id"], "item": items[0], "items": items})
         return Finalized(items=items, draft=draft)
 
     @contextlib.contextmanager
@@ -454,11 +482,11 @@ class MediaService:
 
     # ---------- the independent copy ----------
 
-    async def archive(self, item, *, token=None) -> Copy:
+    async def archive(self, item, *, token=None, folder=None, force=False) -> Copy:
         """Make (or find) the program's own copy of a finished file. Never raises for a failed copy."""
         ref = item.get("file") or {}
-        folder = self.results_dir()
-        if not self.keep_copies() or not folder:
+        folder = folder or self.results_dir()
+        if (not force and not self.keep_copies()) or not folder:
             return Copy(MediaState.LIBRARY, path=ref.get("path") if ref.get("type") == "local" else None)
         if ref.get("type") == "local":   # the file is already ours (cloud, FFmpeg): no second copy
             return Copy(MediaState.LIBRARY, path=ref.get("path"))
@@ -524,10 +552,24 @@ class MediaService:
         existing = self.library.get(item["id"])
         if existing is not None:
             return existing
-        self.library.add(item)          # the row is written first: it may raise, the draft is kept
-        copy = await self.archive(item)
-        self._save_media(item, copy, library=True)
-        return item
+        # Prepare a copy without mutating the still-visible draft. Commit the Library payload
+        # (including `local`) and its removal from drafts together before updating memory.
+        kept = dict(item)
+        kept.pop("preview", None)
+        copy = await self.archive(kept)
+        existing = self.library.get(kept["id"])
+        if existing is not None:
+            return existing   # another keep request committed while the copy was being prepared
+        before = list(self.library.items)
+        try:
+            with self.db.transaction():
+                self.library.add(kept)
+                self._save_media(kept, copy, library=True, strict=True)
+                self.drafts.delete(kept["id"])
+        except BaseException:
+            self.library.items[:] = before
+            raise
+        return kept
 
     async def archive_item(self, item) -> bool:
         """Copy a Library item again (the backfill of «Результаты»). True when a copy exists now."""
@@ -541,7 +583,7 @@ class MediaService:
         self._save_media(item, copy, library=True)
         return True
 
-    def _save_media(self, item, copy, *, library=False):
+    def _save_media(self, item, copy, *, library=False, strict=False):
         """The media row is the audit of the file, not its owner: a failure here is reported only."""
         try:
             filename = (item.get("file") or {}).get("filename")
@@ -558,6 +600,8 @@ class MediaService:
             media.backend_file = dict(item.get("file") or {})
             self.media.save(media)
         except Exception as e:  # noqa: BLE001 - the Library row is the truth; this is a trace
+            if strict:
+                raise
             self.note_error(f"Состояние файла не записалось: {e}")
 
     # ---------- temporary files ----------

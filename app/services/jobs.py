@@ -62,7 +62,9 @@ class JobService:
     def begin(self, spec, *, backend_id):
         """A job that is not sent yet: the state before the dangerous step."""
         now = self._clock()
-        return JobRecord(job_id=self._ids(), spec=spec, backend=self.backend.name, backend_id=backend_id,
+        job_id = self._ids()
+        return JobRecord(job_id=job_id, prompt_id="pending-" + job_id,
+                         spec=spec, backend=self.backend.name, backend_id=backend_id,
                          created_at=now, updated_at=now)
 
     async def submit(self, record):
@@ -77,7 +79,7 @@ class JobService:
             record.fail(str(e), now=self._clock())
             self.repo.save(record)
             raise
-        except BackendUnavailable:
+        except (BackendUnavailable, asyncio.CancelledError):
             record.apply(JobState.UNCERTAIN, now=self._clock())
             self.repo.save(record)
             raise
@@ -87,7 +89,7 @@ class JobService:
             self.repo.save(record)
             raise
         record.backend_job_id = result.backend_job_id
-        record.prompt_id = record.prompt_id or result.backend_job_id
+        record.prompt_id = result.backend_job_id
         record.graph = result.graph
         record.legacy = {**(record.legacy or {}), "stages": dict(result.stages or {})}
         record.apply(JobState.QUEUED, now=self._clock())
@@ -110,7 +112,11 @@ class JobService:
         if existing:
             return await self._deduplicated(key, existing, fingerprint)
         record = self.begin(spec, backend_id=backend_id)
-        if not self.keys.reserve(key, fingerprint, record.job_id, created_at=self._clock()):
+        with self.repo.db.transaction():
+            reserved = self.keys.reserve(key, fingerprint, record.job_id, created_at=self._clock())
+            if reserved:
+                self.repo.save(record)
+        if not reserved:
             existing = self.keys.get(key) or {}
             return await self._deduplicated(key, existing, fingerprint)
         event = self._in_flight[key] = asyncio.Event()
@@ -120,6 +126,14 @@ class JobService:
             event.set()
             self._in_flight.pop(key, None)
         return record, False
+
+    async def lookup_request(self, key, fingerprint):
+        """Resolve a retry before random defaults or backend uploads change its identity."""
+        existing = self.keys.get(key) if key and self.keys is not None else None
+        if existing:
+            record, _ = await self._deduplicated(key, existing, fingerprint)
+            return record
+        return None
 
     async def _deduplicated(self, key, existing, fingerprint):
         if str(existing.get("fingerprint") or "") != str(fingerprint):

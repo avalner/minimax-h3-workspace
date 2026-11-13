@@ -2247,7 +2247,6 @@ function addDraft(item) {
   const i = DRAFTS.findIndex(x => x.id === item.id);
   if (i >= 0) DRAFTS.splice(i, 1);
   DRAFTS.unshift(item);
-  if (DRAFTS.length > 24) DRAFTS.length = 24;   // the server keeps a few more; these are just the shown thumbnails
   IMG_PANELS.forEach(f => f());
   DRAFT_HOOKS.forEach(f => f());
 }

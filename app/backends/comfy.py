@@ -72,7 +72,7 @@ class ComfyBackend:
         first = _input(spec, "first_frame")
         last = _input(spec, "last_frame")
         graph, stages = wf.video_graph(models, spec.prompt, spec.width, spec.height, spec.seconds, spec.seed,
-                                       first, last, tuple(self.loras(spec.mode)),
+                                       first, last, tuple(spec.loras),
                                        models.get("sla_lora") if spec.acceleration == "sla" else None,
                                        models.get("fused_unet") if spec.model == "fused" else None)
         try:

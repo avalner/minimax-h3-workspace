@@ -25,6 +25,7 @@ from aiohttp import web
 import ffmpeg_mgr
 import mp4info
 import workflows as wf
+from domain.jobs import JobState
 
 
 class MontageRoutes:
@@ -344,10 +345,15 @@ class MontageRoutes:
             raise web.HTTPBadRequest(text=f"Папка результатов недоступна для записи: {out_dir}. Выберите другую в разделе «Настройки».")
         dest = out_dir / f"{datetime.now():%Y%m%d}_{uuid.uuid4().hex[:8]}.mp4"
         pid = "ff-" + uuid.uuid4().hex[:10]
+        record = self.begin_submission(None, None, {}, {"mode": "montage", "seed": 0}, preview,
+                                       backend="ffmpeg", backend_id="ffmpeg:local")
+        record.prompt_id = record.backend_job_id = pid
+        record.apply(JobState.QUEUED, now=datetime.now().timestamp())
+        self.jobs_repo.save(record)
         cancel = threading.Event()
         task = self.tasks.spawn(f"ffmpeg:{pid}",
                                 self.run_ffmpeg_job(pid, dest, paths, cleanup, options, cancel, len(ids), preview))
-        self.ffmpeg_jobs[pid] = {"cancel": cancel, "task": task, "dest": dest}
+        self.ffmpeg_jobs[pid] = {"cancel": cancel, "task": task, "dest": dest, "record": record}
         return web.json_response({"prompt_id": pid})
 
     async def run_ffmpeg_job(self, pid, dest, paths, cleanup, options, cancel, count, preview):
@@ -355,6 +361,11 @@ class MontageRoutes:
         st = self.ffmpeg_status()
         loop = asyncio.get_running_loop()
         last = {"pct": -1}
+        record = self.jobs_repo.by_prompt(pid)
+        if record is not None:
+            record.apply(JobState.RUNNING, now=datetime.now().timestamp())
+            self.jobs_repo.save(record)
+        rendered = False
 
         def prog(pct, _text):
             pct = max(0, min(100, int(pct)))
@@ -372,6 +383,7 @@ class MontageRoutes:
                                           [str(p) for p in paths], str(dest), options, prog, cancel, cancel=cancel)
             info = await asyncio.to_thread(ffmpeg_mgr.probe_media, st["ffprobe_path"], str(dest))
             v = (info or {}).get("video") or None
+            rendered = True
             res = f'{v["width"]}×{v["height"]}' if v else ""
             word = "клип" if count == 1 else "клипа" if count < 5 else "клипов"
             item = {"id": uuid.uuid4().hex[:12], "kind": "video", "mode": "montage",
@@ -381,24 +393,28 @@ class MontageRoutes:
                     "seed": 0, "prompt_id": pid, "date": datetime.now().isoformat(timespec="seconds"),
                     "file": {"type": "local", "path": str(dest), "filename": dest.name},
                     "origin": {"kind": "ffmpeg"}}
-            if preview:
-                self.hold_preview(item)
-            else:
-                try:
-                    self.library.add(item)
-                except STORE_ERRORS as e:
-                    # the built clip is on disk: a failed list write must not delete it as if the
-                    # build itself had failed
-                    self.note_error(f"Сборка готова, но не записалась в Библиотеку: {e}")
-                    await self.broadcast({"type": "error", "prompt_id": pid, "message": (
-                        f"Видео собрано и сохранено в файл {dest}, но в Библиотеку не попало: {e}")})
-                    return
-            await self.broadcast({"type": "done", "prompt_id": pid, "item": self.public(item)})
+            if record is not None:
+                record.legacy["local_item"] = item
+                record.apply(JobState.FINALIZING, now=datetime.now().timestamp())
+                self.jobs_repo.save(record)
+            await self.media.publish_local({"prompt_id": pid, "record": record, "preview": preview},
+                                           item, notify=self.broadcast)
         except Exception as ex:  # noqa: BLE001 - cancel and ffmpeg errors both land here
+            if rendered:
+                self.note_error(f"Монтаж {pid} готов, но ожидает регистрации: {ex}")
+                await self.broadcast({"type": "notice", "text": f"Монтаж сохранён в {dest}. Регистрация повторится при запуске."})
+                return
             dest.unlink(missing_ok=True)
+            if record is not None:
+                record.apply(JobState.CANCELED if cancel.is_set() else JobState.FAILED,
+                             now=datetime.now().timestamp(), error=str(ex))
+                self.jobs_repo.save(record)
             msg = "Сборка остановлена" if cancel.is_set() else f"FFmpeg не справился: {ex}"
             await self.broadcast({"type": "error", "prompt_id": pid, "message": str(msg)[:300]})
         finally:
+            if record is not None and not record.state.terminal and record.state is not JobState.FINALIZING:
+                record.apply(JobState.CANCELED, now=datetime.now().timestamp())
+                self.jobs_repo.save(record)
             for p in cleanup:
                 try:
                     Path(p).unlink(missing_ok=True)

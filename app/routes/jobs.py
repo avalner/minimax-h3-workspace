@@ -14,6 +14,7 @@ import asyncio
 import json
 import uuid
 from datetime import datetime
+from pathlib import Path
 
 import aiohttp
 from aiohttp import web
@@ -41,7 +42,11 @@ class JobRoutes:
         week_ago = datetime.now().timestamp() - 7 * 86400
         out = []
         self.resume_cloud = []
+        self.resume_local = []
         for record in self.jobs_repo.active():
+            if record.backend == "ffmpeg":
+                self.resume_local.append(record)
+                continue
             if record.created_at and record.created_at < week_ago:
                 self.jobs_repo.delete(record.job_id)
                 continue
@@ -63,7 +68,7 @@ class JobRoutes:
             return None
         if record.graph is None:
             record.graph = job.get("graph")
-        record.legacy = {"stages": job.get("stages") or {}, "meta": job.get("meta") or {},
+        record.legacy = {**record.legacy, "stages": job.get("stages") or {}, "meta": job.get("meta") or {},
                          "titles": job.get("titles") or {}, "last_output": bool(job.get("last_output")),
                          "preview": bool(job.get("preview"))}
         return record
@@ -71,30 +76,19 @@ class JobRoutes:
     def save_queue(self):
         """Persist the live jobs and keep the outcomes. Called on every change of the job list.
 
-        The database is the queue now: a job is written when it is added and on every change, and its
-        row goes away when the job leaves memory — unless the job has ended, in which case the row is
-        the record of *how* it ended (the queue itself is `active()`, which skips final states). Those
-        rows are pruned by age and count, so the details window works after a restart without a week
-        of history piling up. A failed write is remembered and reported instead of raising into the
-        caller's state change.
+        Update known live records; never infer deletion from this process's UI cache. Submission,
+        recovery and CPU jobs also live in the database without an entry in self.jobs. Terminal
+        outcomes are pruned by age and count, independently of saved drafts.
         """
         try:
-            live = set()
-            waiting = ({record.job_id for record in self.pending_resume}
-                       | {record.job_id for record in getattr(self, "resume_cloud", ())})
             with self.db.transaction():
                 for job in list(self.jobs.values()):
                     record = self.persisted_job(job)
                     if record is None:
                         continue
                     self.jobs_repo.save(record)
-                    live.add(record.job_id)
-                for row in self.db.query("SELECT job_id, state FROM jobs"):
-                    if row["job_id"] in live or row["job_id"] in waiting:
-                        continue
-                    if row["state"] in JobRepository.FINAL:
-                        continue   # an outcome: the details window and the snapshot still ask about it
-                    self.jobs_repo.delete(row["job_id"])
+                # Absence from the UI cache says nothing about a durable submission. In
+                # particular submitting/uncertain jobs have not been attached to that cache.
                 self.jobs_repo.prune_outcomes()
             self.queue_save_error = None
         except STORE_ERRORS as e:
@@ -146,6 +140,23 @@ class JobRoutes:
             self.try_set_job_state(job, JobState.QUEUED)   # the first status of the task moves it on
             self.tasks.spawn(f"cloud:{pid}", self.poll_cloud(rh, pid), replace=True)
 
+    async def restore_local_results(self):
+        """A completed CPU render needs registration, never a new ComfyUI submission."""
+        for record in list(self.resume_local):
+            item = record.legacy.get("local_item")
+            if record.state is JobState.FINALIZING and item:
+                try:
+                    if not Path(item["file"]["path"]).is_file():
+                        raise FileNotFoundError(item["file"]["path"])
+                    await self.media.publish_local(self.job_from_record(record), item, notify=self.broadcast)
+                except Exception as e:
+                    self.note_error(f"Монтаж {record.prompt_id} ожидает регистрации: {e}")
+                    continue
+            else:
+                record.fail("Монтаж был прерван при закрытии приложения", now=datetime.now().timestamp())
+                self.jobs_repo.save(record)
+            self.resume_local.remove(record)
+
     async def _history_done(self, pid):
         """What ComfyUI's history says about a job of the previous run: finished, failed or unknown."""
         try:
@@ -165,6 +176,10 @@ class JobRoutes:
         mode, prompt = meta.get("mode"), (meta.get("prompt") or "")[:80]
         pid = job.get("prompt_id")
         record = job.get("record")
+        if record is not None and record.state in (JobState.CREATED, JobState.SUBMITTING, JobState.UNCERTAIN):
+            out.append({"prompt_id": pid, "mode": mode, "prompt": prompt, "state": "kept",
+                        "reason": "Исход отправки неизвестен: проверьте очередь движка перед повторным запуском"})
+            return False
         if record is not None and record.backend_id and record.backend_id != self.backend_identity():
             # the settings now point at another engine: this job belongs to the one that had it, and
             # sending it to a different server would generate a different clip behind the user's back
@@ -240,6 +255,11 @@ class JobRoutes:
                 kept += 1
                 continue
             self.pending_resume = [r for r in self.pending_resume if r.job_id != record.job_id]
+            if not record.state.terminal and not any(
+                    j.get("record") is record for j in self.jobs.values()):
+                # Explicit successful resubmission replaces this old queue entry. It is not
+                # inferred from the absence of an entry in memory by save_queue.
+                self.jobs_repo.delete(record.job_id)
             self.save_queue()   # after every job: a crash in the middle must not submit anything twice
         return web.json_response({
             "jobs": out, "restored": len(out), "kept": kept, "unreachable": not backend_ok,
@@ -295,14 +315,25 @@ class JobRoutes:
             except cloud.CloudError:
                 self.rh_models = set()
         cloud.remap_models(graph, self.rh_models)
+        record = self.begin_submission(spec, graph, stages, dict(meta, cloud=True), preview,
+                                       backend="cloud", backend_id="cloud:runninghub")
         try:
             task = await rh.create(graph, self.config.get("rh_workflow_id"), self.config.get("rh_instance", "default"))
         except cloud.CloudError as e:
+            record.apply(JobState.UNCERTAIN, now=datetime.now().timestamp())
+            self.jobs_repo.save(record)
             return web.json_response({"error": str(e)}, status=400)
+        except BaseException:
+            record.apply(JobState.UNCERTAIN, now=datetime.now().timestamp())
+            self.jobs_repo.save(record)
+            raise
         pid = "rh-" + task
+        record.prompt_id, record.backend_job_id = pid, task
+        record.apply(JobState.QUEUED, now=datetime.now().timestamp())
+        self.jobs_repo.save(record)
         self.jobs[pid] = {"prompt_id": pid, "state": "queued", "stages": {}, "stage": None,
                           "meta": dict(meta, cloud=True), "task": task, "t0": datetime.now().timestamp(),
-                          "preview": preview, "record": self.new_record(spec, pid, backend_job_id=task)}
+                          "preview": preview, "record": record}
         self.set_job_state(self.jobs[pid], JobState.QUEUED)
         self.tasks.spawn(f"cloud:{pid}", self.poll_cloud(rh, pid), replace=True)
         return web.json_response({"prompt_id": pid, "seed": meta["seed"]})
@@ -340,34 +371,32 @@ class JobRoutes:
                     if not video:
                         raise cloud.CloudError("RunningHub не вернул видео")
                     self.try_set_job_state(job, JobState.FINALIZING)
+                    self.save_queue()
                     dest = DATA_DIR / "cloud" / f'{pid}.mp4'
                     dest.parent.mkdir(parents=True, exist_ok=True)
                     # the clip is streamed through a `.part` and published only when complete: a
                     # broken cloud download must not leave a finished-looking video on the disk
-                    async with self.session.get(video["fileUrl"]) as r:
-                        if r.status != 200:
-                            raise cloud.CloudError(f"RunningHub не отдал видео: HTTP {r.status}")
-                        await self.media.files.save_stream(dest, r.content.iter_chunked(1 << 20),
-                                                           expected_bytes=r.content_length)
-                    self.jobs.pop(pid, None)
-                    item = dict(job["meta"], id=uuid.uuid4().hex[:12], prompt_id=pid,
+                    try:
+                        if not dest.exists() or not dest.stat().st_size:
+                            async with self.session.get(video["fileUrl"]) as r:
+                                if r.status != 200:
+                                    raise cloud.CloudError(f"RunningHub не отдал видео: HTTP {r.status}")
+                                await self.media.files.save_stream(dest, r.content.iter_chunked(1 << 20),
+                                                                   expected_bytes=r.content_length)
+                        item = dict(job["meta"], prompt_id=pid,
                                 date=datetime.now().isoformat(timespec="seconds"), fav=False,
                                 file={"type": "local", "path": str(dest), "filename": dest.name})
-                    if video.get("consumeCoins"):
-                        item["sub"] = f'{item.get("sub", "")} · ☁ {video["consumeCoins"]} RH'.strip(" ·")
-                    if job.get("preview"):
-                        self.hold_preview(item)
-                    else:
-                        try:
-                            self.library.add(item)
-                        except STORE_ERRORS as e:
-                            # the file is already on disk: report where it is instead of losing it
-                            self.note_error(f"Облачный результат не записался в Библиотеку: {e}")
-                            await self.broadcast({"type": "error", "prompt_id": pid, "message": (
-                                f"Видео скачано в файл {dest}, но в Библиотеку не попало: {e}")})
-                            return
+                        if video.get("consumeCoins"):
+                            item["sub"] = f'{item.get("sub", "")} · ☁ {video["consumeCoins"]} RH'.strip(" ·")
+                        await self.media.publish_local(job, item, notify=self.broadcast)
+                    except Exception as e:
+                        # The remote render succeeded. Retry only collection/registration, never
+                        # the paid generation, and keep the durable task id through a restart.
+                        self.note_error(f"Облачный результат {pid} ожидает сохранения: {e}")
+                        await asyncio.sleep(CLOUD_RETRY)
+                        continue
                     self.try_set_job_state(job, JobState.SUCCEEDED)
-                    await self.broadcast({"type": "done", "prompt_id": pid, "item": self.public(item)})
+                    self.jobs.pop(pid, None)
                     return
                 if status == "FAILED":
                     await rh.outputs(job["task"])  # raises with the failure reason
@@ -413,7 +442,7 @@ class JobRoutes:
             await self.broadcast({"type": "notice", "text": "Этого задания уже нет в очереди: останавливать нечего."})
             return {"state": "unknown", "message": "Этого задания уже нет в очереди"}
         record = job.get("record")
-        if record is not None:
+        if record is not None and not job.get("task"):
             try:
                 accepted = await self.service.request_cancel(record)
             except JobConflict as e:

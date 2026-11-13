@@ -416,7 +416,8 @@ function previewPanel(el, st, opts) {
     const mine = [...deps.drafts().filter(x => x.kind !== 'image' && x.mode === mode && !x.missing && x.url),
                   ...deps.library().filter(x => x.kind !== 'image' && x.mode === mode && !x.missing && x.url)]
       .filter((x, i, a) => a.findIndex(y => y.id === x.id) === i)
-      .sort((a, b) => b.date - a.date).slice(0, 12);
+      .sort((a, b) => b.date - a.date)
+      .filter((it, i) => it.preview || i < 12);
     vhHh.hidden = !mine.length;
     vhHist.innerHTML = mine.map(x => `<button draggable="true" class="cw-th${x.preview ? ' draft' : ''}${shown && shown.id === x.id ? ' on' : ''}" data-id="${x.id}" type="button" title="${esc((x.preview ? 'Черновик, не в Библиотеке · ' : '') + (x.prompt || x.sub || 'клип') + ' · ' + deps.fmtDate(x.date))}"><video src="${x.url}#t=0.5" preload="metadata" muted playsinline></video></button>`).join('');
   }

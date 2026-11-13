@@ -199,7 +199,7 @@ function cwShow(it) {
 function cwShowLast() { const mine = cwMine(); const it = mine.find(x => x.id === CW.shown) || mine[0]; if (it && !it.missing) cwShow(it); }
 function cwHist() {
   const box = $('#cwHist'); if (!box) return;
-  const mine = cwMine().slice(0, 16);
+  const mine = cwMine().filter((it, i) => it.preview || i < 16);
   $('#cwHH').hidden = !mine.length;
   box.innerHTML = mine.map(it => `<button draggable="true" class="cw-th${it.id === CW.shown ? ' on' : ''}${it.preview ? ' draft' : ''}" data-id="${it.id}" type="button" title="${esc((it.label ? it.label + ' · ' : '') + fmtDate(it.date))}">${it.missing ? '<i>—</i>'
     : it.kind === 'image' ? `<img src="${it.url}" alt="" loading="lazy">` : `<video src="${it.url}#t=0.5" preload="metadata" muted"></video>`}${it.label ? `<span class="cw-lb">${esc(it.label)}</span>` : ''}</button>`).join('');

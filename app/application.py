@@ -6,7 +6,7 @@ Everything here works without aiohttp routes and without the window.
 
 from webcommon import (
     BIN_PREVIEW, BIN_PREVIEW_META, CLIENT_ID, DATA_DIR, ENGINE_STOP_TIMEOUT, JobStore, LONG_DIR,
-    Library, PREVIEW_LIMIT, ROOT, SHUTDOWN_BUDGET, STATE_DB, _ssl_context, comfy_error_text
+    Library, ROOT, SHUTDOWN_BUDGET, STATE_DB, STORE_ERRORS, _ssl_context, comfy_error_text
 )
 
 import asyncio
@@ -39,7 +39,7 @@ import watchdog
 import workflows as wf
 from backends.base import BackendUnavailable
 from backends.comfy import ComfyBackend
-from domain.errors import InvalidTransition
+from domain.errors import InvalidTransition, SchemaVersionError
 from domain.jobs import JobRecord, JobState, MAX_SECONDS, new_job_id, public_state
 from runtime.events import EventHub
 from runtime.tasks import TaskSupervisor
@@ -50,7 +50,7 @@ from storage.atomic import atomic_write_json
 from storage.database import Database
 from storage.migrations import migrate
 from storage.repositories import (
-    IdempotencyRepository, JobRepository, MediaRepository, ResultRepository
+    DraftRepository, IdempotencyRepository, JobRepository, MediaRepository, ResultRepository
 )
 
 from routes.status import StatusRoutes
@@ -80,6 +80,9 @@ class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, Agent
         self.migration_error = None
         try:
             self.migration = migrate(self.db, DATA_DIR)
+        except SchemaVersionError:
+            self.db.close()
+            raise
         except Exception as e:  # noqa: BLE001 - a broken database must not hide the window behind a traceback
             self.migration_error = f"{type(e).__name__}: {e}"
         self.jobs_repo = JobRepository(self.db)
@@ -91,7 +94,8 @@ class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, Agent
         self.library = Library(self.db)
         # finished pictures of the picture sections that the user has not added to the Library yet:
         # they are served and saved to disk like Library items, but stay out of the Library list
-        self.pending = {}  # item id -> item; memory only, so a restart forgets them
+        self.drafts_repo = DraftRepository(self.db)
+        self.pending = {item["id"]: item for item in self.drafts_repo.load()}
         self.output_dir = None
         self.comfy_online = False
         self.installer = None
@@ -145,8 +149,9 @@ class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, Agent
             db=self.db, jobs=self.jobs_repo, media=self.media_repo, results=self.results_repo,
             library=self.library, source=self.service.backend, outputs_of=self.outputs_for_media,
             output_dir=lambda: self.output_dir, results_dir=self.results_dir,
-            keep_copies=self.keep_copies, present=self.public, hold_draft=self.hold_preview,
+            keep_copies=self.keep_copies, present=self.public, hold_draft=self.note_preview_committed,
             note_error=self.note_error, on_outputs=self.keep_scene_state,
+            drafts=self.drafts_repo, draft_dir=lambda: DATA_DIR / "drafts",
             extra_folders=lambda: [DATA_DIR / "cloud", DATA_DIR / "cache"])
 
     async def outputs_for_media(self, pid):
@@ -257,6 +262,7 @@ class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, Agent
         self.guard_task = self.tasks.spawn("gpu-watch", self.guard_loop())
         self.watchdog_task = self.tasks.spawn("lost-watch", self.jobs_watchdog())  # jobs ComfyUI has lost, not a hung card
         self.watch_cloud_jobs()   # a remote job survives the window: watch it, never send it again
+        self.tasks.spawn("restore-local-results", self.restore_local_results())
         self.agents.publish()
 
     def prune_input_cache(self, days=30):
@@ -946,6 +952,10 @@ class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, Agent
         if not kind or not pid:
             return
         self.journal.event("outcome", prompt_id=pid, state=kind, message=payload.get("message") or "")
+        record = self.jobs_repo.by_prompt(pid)
+        if record is not None and record.can(JobState(kind)):
+            record.apply(JobState(kind), now=time.time(), error=payload.get("message"))
+            self.jobs_repo.save(record)
         self.jobs_repo.note_message(pid, payload.get("message") or "")
 
     def ui_snapshot(self):
@@ -966,11 +976,14 @@ class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, Agent
         recent = self.recent_outcomes(limit=100)
         wanted = {rec["prompt_id"] for rec in recent}
         results = []
-        for item in (*self.library.items, *self.pending.values()):
+        for item in self.library.items:
             if item.get("prompt_id") in wanted:
                 results.append(self.public(item))
                 if len(results) >= 60:
                     break
+        # Drafts have independent retention: even when their old job outcome has been pruned,
+        # they must be available in the section after every restart.
+        results.extend(self.public(item) for item in self.pending.values())
         return {"type": "hello", "engine": self.comfy_online, "jobs": jobs, "recent": recent, "results": results}
 
     def public(self, item):
@@ -990,6 +1003,9 @@ class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, Agent
         local = item.get("local")   # the program's own copy: it stays when ComfyUI's output folder is cleaned
         if local and Path(local).exists():
             return Path(local)
+        media = self.media_repo.get(item["id"])
+        if media is not None and media.path and Path(media.path).exists():
+            return Path(media.path)
         return orig
 
     def find_item(self, item_id):
@@ -999,9 +1015,13 @@ class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, Agent
     def hold_preview(self, item):
         """A picture is not added to the Library by itself: it waits until the user presses «Добавить в библиотеку»."""
         item["preview"] = True
+        self.drafts_repo.save(item)
+        self.note_preview_committed(item)
+
+    def note_preview_committed(self, item):
+        """Update the UI cache after the draft transaction; do not write the same row again."""
+        item["preview"] = True
         self.pending[item["id"]] = item
-        while len(self.pending) > PREVIEW_LIMIT:
-            self.pending.pop(next(iter(self.pending)))
 
     def default_results_dir(self):
         """Videos\\Minimax H3\\output in the user's folder: it does not depend on where the program lies and survives updates."""
@@ -1135,17 +1155,43 @@ class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, Agent
         if rh:
             return await self.queue_cloud(rh, graph, stages, meta, preview, spec=spec)
         await self.prepare_engine((meta or {}).get("mode", ""))
-        status, res = await self.comfy_json("POST", "/prompt", json={
-            "prompt": graph, "client_id": CLIENT_ID,
-            "extra_data": {"preview_method": "auto"}})
+        record = self.begin_submission(spec, graph, stages, meta, preview, last_output, titles)
+        try:
+            status, res = await self.comfy_json("POST", "/prompt", json={
+                "prompt": graph, "client_id": CLIENT_ID,
+                "extra_data": {"preview_method": "auto"}})
+        except BaseException:
+            record.apply(JobState.UNCERTAIN, now=time.time())
+            self.jobs_repo.save(record)
+            raise
         if status != 200:
+            record.fail(comfy_error_text(res), now=time.time())
+            self.jobs_repo.save(record)
             return web.json_response({"error": comfy_error_text(res)}, status=400)
         pid = res["prompt_id"]
-        self.attach_job(self.new_record(spec, pid), meta=meta, last_output=last_output, titles=titles,
+        record.prompt_id = record.backend_job_id = pid
+        record.apply(JobState.QUEUED, now=time.time())
+        self.jobs_repo.save(record)
+        self.attach_job(record, meta=meta, last_output=last_output, titles=titles,
                         preview=preview, graph=graph, stages=stages, scenes=scenes)
         return web.json_response({"prompt_id": pid, "seed": meta["seed"], "queue_number": res.get("number")})
 
-    async def start_video_job(self, spec, *, meta, last_output=False, titles=None, preview=False, key=None):
+    def begin_submission(self, spec, graph, stages, meta, preview=False, last_output=False, titles=None,
+                         backend=None, backend_id=None):
+        """Write intent before any backend POST, including modes without a typed video spec."""
+        now = time.time()
+        job_id = new_job_id()
+        record = JobRecord(job_id=job_id, prompt_id="pending-" + job_id, spec=spec,
+                           backend=backend or ("cloud" if self.rh() else "comfy"),
+                           backend_id=backend_id or self.backend_identity(), created_at=now, updated_at=now,
+                           graph=graph, legacy={"stages": stages, "meta": meta, "preview": preview,
+                                                "last_output": last_output, "titles": titles or {}})
+        record.apply(JobState.SUBMITTING, now=now)
+        self.jobs_repo.save(record)
+        return record
+
+    async def start_video_job(self, spec, *, meta, last_output=False, titles=None, preview=False, key=None,
+                              fingerprint=None):
         """The one submission path of a video job: window and agent, with or without an idempotency key.
 
         Returns (record, deduplicated). The engine's answer is turned into a service error, never into
@@ -1154,7 +1200,7 @@ class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, Agent
         await self.prepare_engine(spec.mode)
         started = time.monotonic()
         record, deduplicated = await self.service.submit_idempotent(
-            spec, backend_id=self.backend_identity(), key=key)
+            spec, backend_id=self.backend_identity(), key=key, fingerprint=fingerprint)
         if not deduplicated:
             self.attach_job(record, meta=meta, last_output=last_output, titles=titles, preview=preview)
         self.journal.event("submitted", job_id=record.job_id, prompt_id=record.prompt_id,

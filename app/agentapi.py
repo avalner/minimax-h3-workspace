@@ -498,7 +498,7 @@ class AgentAPI:
                              "Разрешены: " + ", ".join(wf.QUALITY))
         seed = get("seed")
         try:
-            seed = int(seed) if seed not in (None, "") else random.randrange(2 ** 50)
+            seed = int(seed) if seed not in (None, "") else None
         except (TypeError, ValueError):
             raise AgentError(400, "INVALID_PARAM", "seed должно быть целым числом")
         loop = bool(get("loop", False))
@@ -512,6 +512,26 @@ class AgentAPI:
             raise AgentError(400, "INVALID_PARAM", "loop работает только с first_frame")
         if loop and last:
             raise AgentError(400, "INVALID_PARAM", "loop и last_frame вместе не бывает: для зацикливания последний кадр — это первый")
+
+        try:
+            seconds = float(get("seconds", 5))
+            if seconds != seconds:
+                raise ValueError("NaN")
+            seconds = round(min(self.max_seconds, max(3.0, seconds)), 2)
+        except (TypeError, ValueError):
+            raise AgentError(400, "INVALID_PARAM", "seconds должно быть числом")
+        intent = {"mode": mode, "prompt": prompt, "aspect": aspect, "quality": quality,
+                  "seconds": seconds, "seed": seed, "loop": loop,
+                  "first": first["asset"] if first else None, "last": last["asset"] if last else None}
+        fingerprint = "request-v1:" + hashlib.sha256(json.dumps(
+            intent, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+        if key:
+            try:
+                prior = await app.service.lookup_request(key, fingerprint)
+            except DomainError as e:
+                raise AgentError(*agent_error(e))
+            if prior is not None:
+                return self._submission_response(prior, True, key)
 
         width, height = wf.resolution(aspect, quality, {})
         first_name = last_name = None
@@ -549,7 +569,8 @@ class AgentAPI:
                     "model": spec.model, "acceleration": spec.acceleration,
                     "origin": {"kind": "agent", "client": str(body.get("client") or "")[:40] or None,
                                "idempotency_key": key or None}}
-            record, deduplicated = await app.start_video_job(spec, meta=meta, key=key or None)
+            record, deduplicated = await app.start_video_job(
+                spec, meta=meta, key=key or None, fingerprint=fingerprint)
         except DomainError as e:
             # one table for both faces of the program: the window's statuses and the agent's codes
             status, code, message, hint = agent_error(e)
@@ -570,12 +591,21 @@ class AgentAPI:
             # the window's queue row shows a short title, not the whole H3 prompt with its sections
             await app.broadcast({"type": "external_job", "prompt_id": job_id, "mode": "video",
                                  "prompt": self._short_title(prompt)})
+        return self._submission_response(record, deduplicated, key)
+
+    def _submission_response(self, record, deduplicated, key):
+        spec = record.spec
+        refs = {ref.key: ref for ref in spec.inputs}
+
+        def input_view(key):
+            ref = refs.get(key)
+            return {"asset": ref.asset, "comfy": ref.comfy} if ref else None
+
         return web.json_response({
-            "job": job_id, "state": public_state(record.state), "deduplicated": deduplicated,
+            "job": record.prompt_id, "state": public_state(record.state), "deduplicated": deduplicated,
             "seed": spec.seed, "seconds": spec.seconds,
             "aspect": spec.aspect, "quality": spec.quality, "res": f"{spec.width}×{spec.height}",
-            "inputs": {"first_frame": {"asset": first["asset"], "comfy": first_name} if first else None,
-                       "last_frame": {"asset": last["asset"], "comfy": last_name} if (last and not loop) else None},
+            "inputs": {"first_frame": input_view("first_frame"), "last_frame": input_view("last_frame")},
             "origin": {"kind": "agent", "idempotency_key": key or None},
             "uncertain": record.state is JobState.UNCERTAIN,
         }, status=200 if deduplicated else 202)   # a duplicate creates nothing, and says so
@@ -691,8 +721,13 @@ class AgentAPI:
                     "queue_position": position,
                     "elapsed": round(time.time() - t0, 1) if t0 else None,
                     "results": []}
-        # a job of an earlier run is not lost: it waits for «восстановить» and is shown as queued
-        for pending in getattr(app, "pending_resume", ()):
+        # Includes a reply lost during this run, before a job could enter the UI cache.
+        durable = getattr(app, "jobs_repo", None)
+        pending_records = list(getattr(app, "pending_resume", ()))
+        stored = durable.by_prompt(job_id) if durable is not None else None
+        if stored is not None and not stored.state.terminal:
+            pending_records.append(stored)
+        for pending in pending_records:
             if (pending.prompt_id or pending.backend_job_id) != job_id:
                 continue
             meta = (pending.legacy or {}).get("meta") or {}

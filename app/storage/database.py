@@ -25,7 +25,7 @@ from pathlib import Path
 
 from domain.errors import SchemaVersionError
 
-SCHEMA_VERSION = 1   # bumped when the tables themselves change; data imports are named steps
+SCHEMA_VERSION = 2   # durable drafts, separate from the Library
 
 
 class Database:
@@ -36,6 +36,11 @@ class Database:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(str(self.path), timeout=timeout, isolation_level=None)
         self.conn.row_factory = sqlite3.Row
+        try:
+            self.check_version()
+        except BaseException:
+            self.conn.close()
+            raise
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA synchronous=NORMAL")
         self.conn.execute("PRAGMA foreign_keys=ON")

@@ -142,9 +142,9 @@ class LibraryRoutes:
                 return web.json_response({"item": self.public(known), "kept": True})
             raise web.HTTPBadRequest(text="Эта картинка уже не ждёт: возможно, её уже добавили в Библиотеку. Сгенерируйте заново")
         if self.library.get(iid) is not None:   # the list was written, the draft was not dropped yet
+            self.drafts_repo.delete(iid)
             self.pending.pop(iid, None)
             return web.json_response({"item": self.public(self.library.get(iid)), "kept": True})
-        item.pop("preview", None)
         try:
             item = await self.media.keep(item)   # one row, then its copy; raises if the row cannot be written
         except STORE_ERRORS as e:

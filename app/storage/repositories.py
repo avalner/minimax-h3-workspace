@@ -60,6 +60,25 @@ class LibraryRepository:
                              item.get("mode"), item.get("prompt_id"), json.dumps(item, ensure_ascii=False)))
 
 
+class DraftRepository:
+    """Unkept results survive restarts independently of the Library and job retention."""
+
+    def __init__(self, db):
+        self.db = db
+
+    def load(self):
+        return [json.loads(row["payload"]) for row in self.db.query(
+            "SELECT payload FROM drafts ORDER BY rowid ASC")]
+
+    def save(self, item):
+        self.db.execute("INSERT INTO drafts(id,payload) VALUES(?,?) "
+                        "ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
+                        (item["id"], json.dumps({**item, "preview": True}, ensure_ascii=False)))
+
+    def delete(self, item_id):
+        self.db.execute("DELETE FROM drafts WHERE id=?", (item_id,))
+
+
 class MediaRepository:
     """The files a job produced, independent of whether they are in the Library yet."""
 
