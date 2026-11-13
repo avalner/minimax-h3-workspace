@@ -273,6 +273,25 @@ async def run_page(base: str, browser: str, shots: Path):
                       and abs(popover["left"] - 434) <= 25 and abs(popover["top"] - 314) <= 25
                       and popover["result"] is False and popover["hidden"], str(popover))
 
+                # the interface can be zoomed (Ctrl+wheel): CSS offsets are multiplied by the zoom,
+                # so a naive position drifts farther from the cursor the farther right it is clicked
+                zoomed = await cdp.evaluate(
+                    "(async () => {"
+                    " document.documentElement.style.zoom = '1.1';"
+                    " const p = window.deleteDraftItem({ id: 'ui-pop2', preview: true, mode: 'video',"
+                    "   date: new Date() }, { x: 420, y: 300 });"
+                    " await new Promise(r => setTimeout(r, 80));"
+                    " const pop = document.querySelector('#draftDelPop');"
+                    " const b = pop.getBoundingClientRect();"
+                    " const out = { left: b.left, top: b.top, right: b.right, bottom: b.bottom };"
+                    " pop.querySelector('[data-ddp=\"no\"]').click();"
+                    " await p;"
+                    " document.documentElement.style.zoom = '';"
+                    " return out; })()", await_promise=True)
+                check("the question stays at the cursor when the interface is zoomed",
+                      abs(zoomed["left"] - 434) <= 25 and abs(zoomed["top"] - 314) <= 25
+                      and zoomed["right"] <= 1440 and zoomed["bottom"] <= 900, str(zoomed))
+
                 empty_queue = await cdp.evaluate(
                     "(() => { const q = document.querySelector('#qList'); return !!q && /Очередь пуста/.test(q.textContent); })()")
                 check("the queue starts empty with its own message", empty_queue)

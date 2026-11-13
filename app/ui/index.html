@@ -2385,11 +2385,16 @@ function askDeleteDraft(it, at) {
       + '<div class="ddp-b"><button type="button" class="btn" data-ddp="no">Отмена</button>'
       + '<button type="button" class="btn pri" data-ddp="yes">Удалить в корзину</button></div>';
     pop.hidden = false;
+    // The window can be zoomed (Ctrl+wheel): a CSS `left` is multiplied by that zoom when painted,
+    // while the click and innerWidth are in screen pixels. Work out the place in layout pixels, or
+    // the popover drifts away from the cursor the farther from the top-left corner it was clicked.
+    const zoom = parseFloat(document.documentElement.style.zoom) || 1;
+    const vw = innerWidth / zoom, vh = innerHeight / zoom;
     const w = pop.offsetWidth, h = pop.offsetHeight;
-    let x = ((at && at.x != null) ? at.x : innerWidth / 2) + 14;
-    let y = ((at && at.y != null) ? at.y : innerHeight / 2) + 14;
-    if (x + w > innerWidth - 10) x = Math.max(10, innerWidth - w - 10);
-    if (y + h > innerHeight - 10) y = Math.max(10, y - h - 26);
+    let x = ((at && at.x != null) ? at.x / zoom : vw / 2) + 14;
+    let y = ((at && at.y != null) ? at.y / zoom : vh / 2) + 14;
+    if (x + w > vw - 10) x = Math.max(10, vw - w - 10);
+    if (y + h > vh - 10) y = Math.max(10, y - h - 26);
     pop.style.left = x + 'px';
     pop.style.top = y + 'px';
     const close = ok => {
