@@ -3212,11 +3212,48 @@ async function postStage(stage) {
   const reply = await apiPost('/api/stages', stage);
   BM.list = reply.stages || BM.list;
   // a stage the server dropped (the ceiling, or the replaced «Было до открытия этапа») takes its
-  // files with it: they live in this browser's IndexedDB, so only the page can clean them up
+  // files with it: the server removes its folder, the page removes the copies it still has locally
   const alive = new Set(BM.list.map(x => x.id));
   before.filter(x => !alive.has(x.id)).forEach(x => (x.files || []).forEach(k => memFile('delete', `bm/${x.id}/${k}`)));
   bmRender();
   return reply.stage;
+}
+/* the files of a stage live next to the database now; the browser keeps them only until they are up */
+async function uploadStageFile(stageId, key, file) {
+  const fd = new FormData();
+  fd.append('file', file, file.name || key.split('/').pop());
+  await apiSend('/api/stages/' + encodeURIComponent(stageId) + '/file?key=' + encodeURIComponent(key),
+                { method: 'POST', body: fd, timeout: 600000 });
+  await memFile('delete', `bm/${stageId}/${key}`);   // the server copy replaces the local one
+}
+async function uploadStageFiles(stageId, uploads) {
+  let failed = 0;
+  for (const { key, file } of uploads) {
+    try { await uploadStageFile(stageId, key, file); } catch { failed++; }
+  }
+  if (failed) toast('Файлы этапа: ' + failed + ' не загрузились и остались в браузере');
+  return failed === 0;
+}
+async function stageFileFromServer(stage, key) {
+  try {
+    const blob = await apiGet('/api/stages/' + encodeURIComponent(stage.id) + '/file?key='
+                              + encodeURIComponent(key), { raw: 'blob', timeout: 600000 });
+    if (!blob || !blob.size) return null;
+    const name = (stage.names || {})[key] || key.split('/').pop();
+    return new File([blob], name, { type: blob.type || 'application/octet-stream' });
+  } catch { return null; }
+}
+/* the file of a stage: the server's copy first; an older stage keeps it in this browser's IndexedDB,
+   and the page hands it to the server — the next open needs no browser copy */
+async function openStageFile(stage, key) {
+  const remote = await stageFileFromServer(stage, key);
+  if (remote) return remote;
+  const local = await memFile('get', `bm/${stage.id}/${key}`);
+  if (local instanceof File) {
+    uploadStageFile(stage.id, key, local).catch(() => {});
+    return local;
+  }
+  return null;
 }
 /* Older versions kept the stages in localStorage, with their files in IndexedDB under the stage id:
    upload the records once, then stop reading the browser copy. The files keep working by the same id. */
@@ -3231,6 +3268,12 @@ async function importLegacyStages() {
       await postStage({ id: b.id, mode: b.mode, name: b.name, auto: !!b.auto, title: b.title || '',
                         date: b.date, s: b.s || {}, prompt: b.prompt || '', files: b.files || [],
                         ...(b.run ? { run: b.run } : {}), ...(b.project ? { project: b.project } : {}) });
+      const uploads = [];
+      for (const key of (b.files || [])) {
+        const file = await memFile('get', `bm/${b.id}/${key}`);
+        if (file instanceof File) uploads.push({ key, file });
+      }
+      if (uploads.length) await uploadStageFiles(b.id, uploads);   // the files move with the records
     } catch { failed++; }
   }
   if (failed) { toast('Не удалось перенести этапы: ' + failed + '. Записи остались в браузере'); return; }
@@ -3243,20 +3286,26 @@ async function bmSave(mode, opt = {}) {
   const st = memStates()[mode]; if (!st) return;
   const [state, prompt] = st, o = {};
   Object.keys(state).forEach(p => { if (!MEM.skip.has(p) && typeof state[p] !== 'function') o[p] = state[p]; });
-  const id = Math.random().toString(36).slice(2, 10), files = [];
+  const id = Math.random().toString(36).slice(2, 10), files = [], uploads = [];
   for (const [key, el] of memSlots()) {
     if (!key.startsWith(mode + '/') || !el._file) continue;
-    await memFile('put', `bm/${id}/${key}`, el._file); files.push(key);
+    await memFile('put', `bm/${id}/${key}`, el._file); files.push(key); uploads.push({ key, file: el._file });
   }
-  if (mode === 'lipsync' && MEM.audio) { await memFile('put', `bm/${id}/lipsync/audio`, MEM.audio); files.push('lipsync/audio'); }
+  if (mode === 'lipsync' && MEM.audio) {
+    await memFile('put', `bm/${id}/lipsync/audio`, MEM.audio); files.push('lipsync/audio');
+    uploads.push({ key: 'lipsync/audio', file: MEM.audio });
+  }
   const text = prompt ? prompt.value.trim() : '';
   const name = opt.auto ? 'Было до открытия этапа' : stageName(text);
+  const names = {};
+  uploads.forEach(({ key, file }) => { names[key] = file.name || key.split('/').pop(); });
   // the server replaces the previous «Было до открытия этапа» and keeps the list at its ceiling
   try {
     await postStage({ id, mode, name, auto: !!opt.auto, project: PROJECTS_VIEW.active || undefined,
                       title: text.slice(0, 200), date: new Date().toISOString(),
-                      s: JSON.parse(JSON.stringify(o)), prompt: text, files });
+                      s: JSON.parse(JSON.stringify(o)), prompt: text, files, names });
   } catch (e) { toast('Не удалось сохранить этап: ' + e.message); return; }
+  if (uploads.length) await uploadStageFiles(id, uploads);
   if (!opt.auto) toast('Этап сохранён: «' + name + '». Он лежит в списке «Этапы» вверху раздела');
 }
 const stageDrop = b => { if (b && b.mode === 'long' && b.run) apiPost('/api/long/stage', { run: b.run, id: b.id, action: 'delete' }).catch(() => {}); };
@@ -3293,12 +3342,12 @@ async function bmOpen(id) {
   for (const [key, el] of memSlots()) {
     if (!key.startsWith(b.mode + '/')) continue;
     if (!(b.files || []).includes(key)) { if (el._file) $('.x', el)?.click(); continue; }
-    const f = await memFile('get', `bm/${b.id}/${key}`); if (!(f instanceof File)) continue;
+    const f = await openStageFile(b, key); if (!(f instanceof File)) continue;
     const input = $('input', el); if (!input) continue;
     const dt = new DataTransfer(); dt.items.add(f); input.files = dt.files; input.dispatchEvent(new Event('change'));
   }
   if (b.mode === 'lipsync' && (b.files || []).includes('lipsync/audio')) {
-    const au = await memFile('get', `bm/${b.id}/lipsync/audio`);
+    const au = await openStageFile(b, 'lipsync/audio');
     if (au instanceof File) { await window.h3Lipsync.loadAudio(au); MEM.audio = au; }
   }
   setTimeout(apply, 800);  // adding a picture re-fits the format: put the saved choice back after that

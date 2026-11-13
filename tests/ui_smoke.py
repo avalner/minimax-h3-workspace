@@ -316,22 +316,31 @@ async def run_page(base: str, browser: str, shots: Path):
                       and lib_pop["result"] is False, str(lib_pop))
 
                 # a stage is a record of the project now, not of this browser: it is saved through
-                # the server and the section's list is painted from the answer
+                # the server, its attached file is uploaded there, and the section paints the answer
                 stage = await cdp.evaluate("""
                     (async () => {
                       const saved = await window.postStage({ id: 'ui-stage', mode: 'video',
                         name: 'Проверка', s: { q: '720p' }, prompt: 'тест',
-                        date: new Date().toISOString(), files: [] });
+                        date: new Date().toISOString(), files: ['video/first'],
+                        names: { 'video/first': 'frame.png' } });
+                      const file = new File([new Uint8Array([1, 2, 3])], 'frame.png', { type: 'image/png' });
+                      await window.uploadStageFile('ui-stage', 'video/first', file);
+                      const served = await fetch('/api/stages/ui-stage/file?key=video/first');
+                      const bytes = served.ok ? [...new Uint8Array(await served.arrayBuffer())] : [];
+                      const type = served.headers.get('content-type');
                       const shown = document.querySelector('#view-video .st-bar .st-n')?.textContent;
                       const listed = (await (await fetch('/api/stages')).json()).stages.length;
                       await window.bmDelete('ui-stage');
                       const after = document.querySelector('#view-video .st-bar .st-n')?.textContent;
-                      return { saved: saved && saved.id, shown, listed, after };
+                      const gone = (await fetch('/api/stages/ui-stage/file?key=video/first')).status;
+                      return { saved: saved && saved.id, shown, listed, after, bytes, type, gone };
                     })()
                 """, await_promise=True)
-                check("a stage is saved to the project and its section shows it",
+                check("a stage and its file are saved to the project, served, and deleted with it",
                       stage["saved"] == "ui-stage" and stage["shown"] == "1"
-                      and stage["listed"] >= 1 and stage["after"] == "0", str(stage))
+                      and stage["listed"] >= 1 and stage["after"] == "0"
+                      and stage["bytes"] == [1, 2, 3] and stage["type"] == "image/png"
+                      and stage["gone"] == 404, str(stage))
 
                 # the previous version kept stages in localStorage: on the first start of this one
                 # they are uploaded to the active project and the browser copy is dropped

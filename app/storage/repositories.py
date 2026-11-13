@@ -15,6 +15,8 @@ What is stored and why:
 from __future__ import annotations
 
 import json
+import shutil
+from pathlib import Path
 
 from domain.jobs import JobRecord
 from domain.media import MediaRecord
@@ -102,14 +104,22 @@ class ProjectRepository:
 class StageRepository:
     """Stages: saved points of a section (settings, files, the clip in the player).
 
-    A stage belongs to a project, not to one browser profile: the record lives in the database, so
-    the same project shows the same stages after a restart, in another window and on another day.
-    The files a stage was made from stay in the browser (IndexedDB, keyed by the stage id): they are
-    the user's own pictures and audio, not results of the program.
+    A stage belongs to a project, not to one browser profile: the record lives in the database and
+    the files it was made from live next to the database (`stages/<id>/…`), so the same project shows
+    the same stages — with their pictures and audio — after a restart and on another day.
     """
 
-    def __init__(self, db):
+    def __init__(self, db, root=None):
         self.db = db
+        self.root = Path(root) if root else Path(db.path).parent / "stages"
+
+    def folder(self, stage_id):
+        return self.root / str(stage_id)
+
+    def file_path(self, stage_id, key):
+        """`video/first`, `refs/img0` … -> stages/<id>/video/first (the key is checked by the route)."""
+        mode, name = str(key).split("/", 1)
+        return self.folder(stage_id) / mode / name
 
     def load(self):
         return [json.loads(row["payload"]) for row in
@@ -130,10 +140,13 @@ class StageRepository:
 
     def delete(self, stage_id):
         self.db.execute("DELETE FROM stages WHERE id=?", (stage_id,))
+        shutil.rmtree(self.folder(stage_id), ignore_errors=True)   # the files go with the record
 
     def drop_auto(self, project, mode):
         """There is one «Было до открытия этапа» per section and project: a new one replaces it."""
-        self.db.execute("DELETE FROM stages WHERE project=? AND mode=? AND auto=1", (project, mode))
+        rows = self.db.query("SELECT id FROM stages WHERE project=? AND mode=? AND auto=1", (project, mode))
+        for row in rows:
+            self.delete(row["id"])
 
     def prune(self, project, mode, keep=15):
         """Keep the newest `keep` hand-saved stages of the section; old ones are not shown for years."""

@@ -13,6 +13,32 @@ import support
 from domain.projects import DEFAULT_PROJECT_ID
 
 
+class Part:
+    """One uploaded file part, as `request.multipart()` hands it to the handler."""
+
+    name = "file"
+
+    def __init__(self, chunks, filename="frame.png"):
+        self.filename = filename
+        self._chunks = list(chunks)
+
+    async def read_chunk(self, size):
+        return self._chunks.pop(0) if self._chunks else b""
+
+
+class UploadReq(support.Req):
+    def __init__(self, part, **kwargs):
+        super().__init__(**kwargs)
+        self._part = part
+
+    async def multipart(self):
+        return self
+
+    async def next(self):
+        part, self._part = self._part, None
+        return part
+
+
 class StageApiTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.app = support.fresh_app()
@@ -69,3 +95,26 @@ class StageApiTest(unittest.IsolatedAsyncioTestCase):
         self.app.db.close()
         self.app = support.new_app()
         self.assertEqual([stage["id"] for stage in await self.stages()], [saved["id"]])
+
+    async def test_a_file_is_uploaded_served_and_deleted_with_its_stage(self):
+        saved = json.loads((await self.save({"mode": "video", "name": "С файлом", "files": ["video/first"],
+                                             "names": {"video/first": "frame.png"}})).text)["stage"]
+        reply = await self.app.h_stage_file_put(
+            UploadReq(Part([b"abc", b"de"]), match_info={"id": saved["id"]},
+                      query={"key": "video/first"}))
+        self.assertEqual(reply.status, 200)
+        path = self.app.stages_repo.file_path(saved["id"], "video/first")
+        self.assertEqual(path.read_bytes(), b"abcde")
+        served = await self.app.h_stage_file_get(
+            support.Req(match_info={"id": saved["id"]}, query={"key": "video/first"}))
+        self.assertEqual(served.content_type, "image/png")
+        self.assertIn("frame.png", served.headers["Content-Disposition"])
+        await self.app.h_stage_delete(support.Req(match_info={"id": saved["id"]}))
+        self.assertFalse(path.exists(), "файлы этапа удаляются вместе с записью")
+
+    async def test_a_file_that_was_not_saved_with_the_stage_is_refused(self):
+        saved = json.loads((await self.save({"mode": "video", "name": "Без файла",
+                                             "files": ["video/first"]})).text)["stage"]
+        with self.assertRaises(web.HTTPBadRequest):
+            await self.app.h_stage_file_put(
+                UploadReq(Part([b"x"]), match_info={"id": saved["id"]}, query={"key": "video/last"}))

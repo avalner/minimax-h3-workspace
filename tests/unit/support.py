@@ -141,9 +141,10 @@ def saved(pid="old1", **extra):
 class Req:
     """The only part of an aiohttp request the handlers under test use."""
 
-    def __init__(self, body=None, match_info=None):
+    def __init__(self, body=None, match_info=None, query=None):
         self._body = body if body is not None else {}
         self.match_info = match_info or {}
+        self.query = query or {}
 
     async def json(self):
         return self._body

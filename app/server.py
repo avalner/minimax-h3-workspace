@@ -157,6 +157,8 @@ def build_app(comfy_override=None, port=None):
         web.post("/api/projects/active", state.h_project_active),
         web.get("/api/stages", state.h_stages),
         web.post("/api/stages", state.h_stage_save),
+        web.get("/api/stages/{id}/file", state.h_stage_file_get),
+        web.post("/api/stages/{id}/file", state.h_stage_file_put),
         web.delete("/api/stages/{id}", state.h_stage_delete),
         web.patch("/api/library/{id}", state.h_library_patch),
         web.delete("/api/library/{id}", state.h_library_delete),
