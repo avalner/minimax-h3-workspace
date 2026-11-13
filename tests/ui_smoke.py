@@ -1041,6 +1041,60 @@ async def run_page(base: str, browser: str, shots: Path):
                       ants and ants["big"]["canvas"] < ants["fit"]["canvas"] < ants["small"]["canvas"], str(ants))
                 await asyncio.sleep(0.2)
                 await cdp.screenshot(shots / "inpaint-select.png")
+                # «Рука»: the button, and Space as a temporary hand in any tool. Dragging it moves the picture and
+                # must not paint a single pixel of the mask.
+                hand = await cdp.evaluate("""(async () => {
+                  const sleep = ms => new Promise(r => setTimeout(r, ms));
+                  const view = document.querySelector('#view-inpaint');
+                  const over = view.querySelector('.ip-over'), stage = view.querySelector('.ip-stage');
+                  const zoom = view.querySelector('.ip-zoom');
+                  const setZ = async v => { zoom.value = String(v); zoom.dispatchEvent(new Event('input', { bubbles: true })); await sleep(60); };
+                  const painted = () => {
+                    const d = over.getContext('2d').getImageData(0, 0, over.width, over.height).data;
+                    let n = 0; for (let i = 3; i < d.length; i += 4) if (d[i] > 0) n++;
+                    return n;
+                  };
+                  const ptr = (el, type, x, y, extra) => el.dispatchEvent(new PointerEvent(type, Object.assign({
+                    bubbles: true, cancelable: true, pointerId: 1, isPrimary: true, button: 0 }, extra, { clientX: x, clientY: y })));
+                  await setZ(200);
+                  view.querySelector('.ip-mode button[data-m="paint"]').click();
+                  const before = painted();
+                  // Space → the hand is on, the paint tool steps aside
+                  document.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', code: 'Space', bubbles: true }));
+                  const on = !!view.querySelector('.ip-mode button[data-m="hand"]').classList.contains('on');
+                  const paintOff = !view.querySelector('.ip-mode button[data-m="paint"]').classList.contains('on');
+                  const sr = over.getBoundingClientRect();
+                  const sl0 = stage.scrollLeft, st0 = stage.scrollTop;
+                  ptr(over, 'pointerdown', sr.left + 300, sr.top + 200);
+                  ptr(over, 'pointermove', sr.left + 180, sr.top + 120, { buttons: 1 });
+                  ptr(over, 'pointerup', sr.left + 180, sr.top + 120);
+                  await sleep(50);
+                  const moved = stage.scrollLeft !== sl0 || stage.scrollTop !== st0;
+                  const same = painted() === before;
+                  // release → the paint tool comes back
+                  document.dispatchEvent(new KeyboardEvent('keyup', { key: ' ', code: 'Space', bubbles: true }));
+                  await sleep(40);
+                  const back = !!view.querySelector('.ip-mode button[data-m="paint"]').classList.contains('on');
+                  const paintOn = !!view.querySelector('.ip-mode button[data-m="paint"]').classList.contains('on');
+                  // the button itself, dragging from the empty area beside the picture
+                  view.querySelector('.ip-mode button[data-m="hand"]').click();
+                  const handOn = !!view.querySelector('.ip-mode button[data-m="hand"]').classList.contains('on');
+                  const sl1 = stage.scrollLeft;
+                  const r2 = stage.getBoundingClientRect();
+                  ptr(stage, 'pointerdown', r2.left + 40, r2.top + 40);
+                  ptr(stage, 'pointermove', r2.left + 120, r2.top + 90, { buttons: 1 });
+                  ptr(stage, 'pointerup', r2.left + 120, r2.top + 90);
+                  await sleep(50);
+                  const movedFromEmpty = stage.scrollLeft !== sl1;
+                  await setZ(100);
+                  view.querySelector('.ip-mode button[data-m="select"]').click();
+                  return { on, paintOff, moved, same, back, paintOn, handOn, movedFromEmpty }; })()""", await_promise=True)
+                check("Space turns the hand on and gives the tool back on release",
+                      hand and hand["on"] and hand["paintOff"] and hand["back"] and hand["paintOn"], str(hand))
+                check("the hand moves the picture and paints nothing",
+                      hand and hand["moved"] and hand["same"], str(hand))
+                check("the hand button works too, and even from the empty area beside the picture",
+                      hand and hand["handOn"] and hand["movedFromEmpty"], str(hand))
 
                 # The page's own event entry, without a ComfyUI: a snapshot of a running job, then
                 # its result. This is the one-owner contract seen from the window: one row, one

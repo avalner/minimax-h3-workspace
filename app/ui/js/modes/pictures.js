@@ -823,7 +823,7 @@ function buildInpaint(scope) {
           <div class="ip-grip" title="Потяните вверх или вниз — высота холста"></div>
           <div class="ip-tools">
             <button class="btn ip-fullb" type="button" title="Редактор на всё окно (F). Выход — Esc или эта же кнопка">На весь экран</button>
-            <div class="seg ip-mode" style="grid-template-columns:1fr 1fr 1fr 1fr;width:392px"><button data-m="select" class="on">Выделение</button><button data-m="paint">Закрасить</button><button data-m="erase">Ластик</button><button data-m="fill">Заливка</button></div>
+            <div class="seg ip-mode" style="grid-template-columns:repeat(5,1fr);width:490px"><button data-m="select" class="on">Выделение</button><button data-m="paint">Закрасить</button><button data-m="erase">Ластик</button><button data-m="fill">Заливка</button><button data-m="hand" title="Двигать картинку (удерживайте пробел)">Рука</button></div>
             <div class="seg ip-selshape" style="grid-template-columns:1fr 1fr 1fr;width:300px"><button data-s="rect" class="on">Прямоугольник</button><button data-s="ellipse">Овал</button><button data-s="lasso">Лассо</button></div>
             <span class="hint">Кисть</span><input type="range" class="ip-brush" min="8" max="160" value="36"><b class="ip-brushv">36</b>
             <span class="hint">Холст</span><input type="range" class="ip-zoom" min="20" max="300" value="100"><b class="ip-zoomv">100 %</b>
@@ -832,7 +832,7 @@ function buildInpaint(scope) {
             <button class="btn ip-clear" type="button">Очистить закраску</button>
             <button class="btn ip-unsel" type="button" title="Закраска снова на всей картинке" disabled>Снять выделение</button>
           </div>
-          <div class="hint" style="margin-top:8px">Клавиши 1–4 выбирают инструмент (1 ещё раз — форма выделения), [ и ] меняют размер кисти и ластика. «Заливка» заполняет область, обведённую кистью, «Выделение» ограничивает работу выбранной областью: Ctrl добавляет ещё одну, Shift держит ровный круг или квадрат, Alt перетаскивает выделение, Esc снимает. Если не закрашено ничего, в модель уходит само выделение. Ctrl+Z — убрать последний шаг, Shift+Ctrl+Z — вернуть его, Shift+колесо мыши — масштаб холста. <b>«На весь экран» (F)</b>: там колесо мыши — масштаб вокруг указателя, пробел или средняя кнопка мыши — двигать картинку, Esc — выйти.</div>
+          <div class="hint" style="margin-top:8px">Клавиши 1–5 выбирают инструмент (1 ещё раз — форма выделения), [ и ] меняют размер кисти и ластика. <b>«Рука»</b> (5) двигает картинку, а <b>пробел</b> включает её, пока зажат, — удобно на любом инструменте. «Заливка» заполняет область, обведённую кистью. «Выделение» ограничивает работу выбранной областью: Ctrl добавляет ещё одну, Shift держит ровный круг или квадрат, Alt перетаскивает выделение, Esc снимает. Если не закрашено ничего, в модель уходит само выделение. Ctrl+Z — убрать последний шаг, Shift+Ctrl+Z — вернуть его, Shift+колесо мыши — масштаб холста. <b>«На весь экран» (F)</b>: там колесо мыши — масштаб вокруг указателя, пробел или средняя кнопка мыши — двигать картинку, Esc — выйти.</div>
         </div></div>
       <div class="card"><div class="card-h"><h3><span class="n">2</span>Что должно быть на закрашенном месте</h3></div>
         <textarea class="ip-prompt" placeholder="Например: белая майка вместо красной куртки. Лицо, фон и свет оставить как было."></textarea>
@@ -848,7 +848,7 @@ function buildInpaint(scope) {
   const selC = $('.ip-sel', root), sctx = selC.getContext('2d');
   const ictx = imgC.getContext('2d'), octx = overC.getContext('2d');
   let mode = 'select', brush = 36, hasMask = false;
-  let isFull = false, spaceHeld = false, panning = null;   // «На весь экран», the Space-drag that pans it and the drag itself
+  let isFull = false, spaceHeld = false, panning = null, modeBeforeSpace = null;   // «На весь экран», the held Space and its tool
   overC.style.opacity = .55;   // the strokes are fully opaque in the data, but the picture stays visible under them
   /* the tool cursors are drawn on a 32 px canvas: an eraser and a paint bucket, the way they look in editors.
      The hot spot is taken from the picture itself — the lowest point of the rubber and of the paint drop —
@@ -911,7 +911,7 @@ function buildInpaint(scope) {
   };
   let altHeld = false;
   const cursorNow = () => {   // the arrow only where it will actually move something, in any tool
-    if (isFull && spaceHeld) { overC.style.cursor = 'grab'; return; }   // Space in «На весь экран»: drag the picture
+    if (mode === 'hand' || spaceHeld) { overC.style.cursor = panning ? 'grabbing' : 'grab'; return; }   // «Рука» / Space
     if (altHeld && sel) { overC.style.cursor = CUR.move; return; }
     if (hoverPt && (mode === 'paint' || mode === 'erase')) { overC.style.cursor = 'none'; return; }   // the ring is the cursor
     overC.style.cursor = CUR[mode] || 'crosshair';
@@ -1163,8 +1163,8 @@ function buildInpaint(scope) {
   });
   const modeBtns = $$('.ip-mode button', root), shapeBtns = $$('.ip-selshape button', root);
   const SHAPES = ['rect', 'ellipse', 'lasso'];
-  const TOOL_KEYS = { Digit1: 'select', Digit2: 'paint', Digit3: 'erase', Digit4: 'fill',
-                      Numpad1: 'select', Numpad2: 'paint', Numpad3: 'erase', Numpad4: 'fill' };
+  const TOOL_KEYS = { Digit1: 'select', Digit2: 'paint', Digit3: 'erase', Digit4: 'fill', Digit5: 'hand',
+                      Numpad1: 'select', Numpad2: 'paint', Numpad3: 'erase', Numpad4: 'fill', Numpad5: 'hand' };
   const setShape = k => {
     selKind = k;
     shapeBtns.forEach(x => x.classList.toggle('on', x.dataset.s === k));
@@ -1299,16 +1299,32 @@ function buildInpaint(scope) {
   const redo = () => { const s = undone.pop(); if (!s) return; strokes.push(s); redraw(); };
   const pos = e => { const r = overC.getBoundingClientRect(); return [(e.clientX - r.left) * overC.width / r.width, (e.clientY - r.top) * overC.height / r.height]; };
   let drawing = false, live = null;
+  /* «Рука»: the picture follows the pointer. The drag starts on the STAGE, not on the canvas, so it works on the
+     empty area around the picture too; every pointer event of the canvas bubbles up to the stage, and the canvas
+     leaves these gestures alone. The middle button does the same at any tool. */
+  const handNow = e => mode === 'hand' || spaceHeld || e.button === 1;
+  const panStart = e => {
+    if (edit.hidden || !handNow(e)) return;
+    e.preventDefault();
+    try { stageEl.setPointerCapture(e.pointerId); } catch (err) { /* a pointer that is already gone */ }
+    panning = { x: e.clientX, y: e.clientY, sl: stageEl.scrollLeft, st: stageEl.scrollTop };
+    cursorNow();
+  };
+  stageEl.addEventListener('pointerdown', panStart);
+  stageEl.addEventListener('pointermove', e => {
+    if (!panning) return;
+    e.preventDefault();
+    stageEl.scrollLeft = panning.sl - (e.clientX - panning.x);
+    stageEl.scrollTop = panning.st - (e.clientY - panning.y);
+  });
+  const panEnd = () => { if (!panning) return; panning = null; cursorNow(); };
+  stageEl.addEventListener('pointerup', panEnd);
+  stageEl.addEventListener('pointercancel', panEnd);
   overC.addEventListener('pointerdown', e => {
     if (edit.hidden) return;
+    if (handNow(e)) return;                 // the stage starts the pan; the canvas must not paint or select
     e.preventDefault();
     overC.focus({ preventScroll: true });   // the prompt field must let go: Ctrl+Z now belongs to the canvas, not the text
-    if (isFull && (e.button === 1 || spaceHeld)) {   // pan on the whole window: the middle button or Space + drag
-      try { overC.setPointerCapture(e.pointerId); } catch (err) { /* a pointer that is already gone */ }
-      panning = { x: e.clientX, y: e.clientY, sl: stageEl.scrollLeft, st: stageEl.scrollTop };
-      overC.style.cursor = 'grabbing';
-      return;
-    }
     if (e.altKey && sel) {                  // Alt: drag the whole selection to another place, in any tool
       const [sx, sy] = pos(e);
       try { overC.setPointerCapture(e.pointerId); } catch (err) { /* a pointer that is already gone */ }
@@ -1340,11 +1356,6 @@ function buildInpaint(scope) {
   });
   overC.addEventListener('pointermove', e => {
     hoverPt = [e.clientX, e.clientY]; paintRing();
-    if (panning) {                          // the picture follows the pointer: the stage scrolls
-      stageEl.scrollLeft = panning.sl - (e.clientX - panning.x);
-      stageEl.scrollTop = panning.st - (e.clientY - panning.y);
-      return;
-    }
     if (selMove) {                          // the selection travels with the mouse
       const [x, y] = pos(e);
       const dx = x - selMove.x0, dy = y - selMove.y0;
@@ -1375,7 +1386,6 @@ function buildInpaint(scope) {
     });
   });
   const stop = () => {
-    if (panning) { panning = null; cursorNow(); return; }
     if (selMove) {                          // the move is a step of the history too
       const moved = selMove.moved;
       selMove = null;
@@ -1421,9 +1431,14 @@ function buildInpaint(scope) {
         setFull(!isFull);
         return;
       }
-      if (e.code === 'Space' && isFull) {   // hold Space to drag the picture instead of painting on it
+      if (e.code === 'Space') {   // hold Space: the hand, in any tool and in both views — release brings the tool back
         e.preventDefault();
-        if (!spaceHeld) { spaceHeld = true; cursorNow(); paintRing(); }
+        if (!spaceHeld) {
+          spaceHeld = true;
+          modeBeforeSpace = mode;
+          if (mode !== 'hand') setMode('hand');
+          else { cursorNow(); paintRing(); }
+        }
         return;
       }
       if (e.code === 'BracketLeft' || e.code === 'BracketRight') {   // [ smaller, ] bigger — any keyboard layout
@@ -1439,9 +1454,18 @@ function buildInpaint(scope) {
   scope.listen(document, 'keyup', e => {
     if (e.code !== 'Space' || !spaceHeld) return;
     spaceHeld = false;
+    if (mode === 'hand' && modeBeforeSpace) setMode(modeBeforeSpace);   // the held hand lets go: the tool comes back
+    modeBeforeSpace = null;
     cursorNow(); paintRing();
   });
-  scope.listen(window, 'blur', () => { spaceHeld = false; panning = null; cursorNow(); });
+  scope.listen(window, 'blur', () => {
+    if (spaceHeld) {
+      spaceHeld = false;
+      if (mode === 'hand' && modeBeforeSpace) setMode(modeBeforeSpace);
+      modeBeforeSpace = null;
+    }
+    panning = null; cursorNow();
+  });
   $$('.ip-q button', root).forEach(b => b.onclick = () => { S.size = b.dataset.s; $$('.ip-q button', root).forEach(x => x.classList.toggle('on', x === b)); });
   $('.ip-q button', root).classList.add('on');
   const bbox = () => {   // painted region, canvas coordinates
