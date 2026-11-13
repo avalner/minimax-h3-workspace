@@ -18,6 +18,7 @@ import json
 
 from domain.jobs import JobRecord
 from domain.media import MediaRecord
+from domain.projects import DEFAULT_PROJECT_ID, new_project_id
 
 
 class LibraryRepository:
@@ -27,25 +28,38 @@ class LibraryRepository:
         self.db = db
 
     def load(self):
-        return [json.loads(row["payload"]) for row in
-                self.db.query("SELECT payload FROM library ORDER BY position ASC, rowid ASC")]
+        """Items in the order the window shows them; `project` comes from the row when the payload
+        of an older version does not have it yet (the migration writes both, this is the safety net)."""
+        items = []
+        for row in self.db.query("SELECT payload, project FROM library ORDER BY position ASC, rowid ASC"):
+            item = json.loads(row["payload"])
+            if not item.get("project"):
+                item["project"] = row["project"] or DEFAULT_PROJECT_ID
+            items.append(item)
+        return items
 
     def count(self):
         return self.db.one("SELECT COUNT(*) AS n FROM library")["n"]
 
     def add(self, item):
-        """Insert a new item on top, or update the existing one in place (its position is kept)."""
+        """Insert a new item on top, or update the existing one in place (its position is kept).
+
+        The project is a label on the record: a column for filtering and the same value inside the
+        payload, so the window receives one item and does not join anything.
+        """
+        project = str(item.get("project") or DEFAULT_PROJECT_ID)
+        item = {**item, "project": project}
         payload = json.dumps(item, ensure_ascii=False)
         columns = (item.get("date"), int(bool(item.get("fav"))), item.get("kind"), item.get("mode"),
-                   item.get("prompt_id"))
+                   item.get("prompt_id"), project)
         if self.db.one("SELECT 1 FROM library WHERE id=?", (item["id"],)):
-            self.db.execute("UPDATE library SET date=?, fav=?, kind=?, mode=?, prompt_id=?, payload=? WHERE id=?",
-                            (*columns, payload, item["id"]))
+            self.db.execute("UPDATE library SET date=?, fav=?, kind=?, mode=?, prompt_id=?, project=?, "
+                            "payload=? WHERE id=?", (*columns, payload, item["id"]))
             return
         lowest = self.db.one("SELECT MIN(position) AS p FROM library")["p"]
         position = (lowest - 1) if lowest is not None else 0
-        self.db.execute("INSERT INTO library(id, position, date, fav, kind, mode, prompt_id, payload) "
-                        "VALUES(?,?,?,?,?,?,?,?)", (item["id"], position, *columns, payload))
+        self.db.execute("INSERT INTO library(id, position, date, fav, kind, mode, prompt_id, project, payload) "
+                        "VALUES(?,?,?,?,?,?,?,?,?)", (item["id"], position, *columns, payload))
 
     def delete(self, item_id):
         self.db.execute("DELETE FROM library WHERE id=?", (item_id,))
@@ -58,6 +72,31 @@ class LibraryRepository:
                             "VALUES(?,?,?,?,?,?,?,?)",
                             (item["id"], position, item.get("date"), int(bool(item.get("fav"))), item.get("kind"),
                              item.get("mode"), item.get("prompt_id"), json.dumps(item, ensure_ascii=False)))
+
+
+class ProjectRepository:
+    """The workspaces the user chooses from. The default one is created by the migration."""
+
+    def __init__(self, db):
+        self.db = db
+
+    def all(self):
+        return [dict(row) for row in self.db.query(
+            "SELECT id, name, created_at FROM projects ORDER BY created_at ASC, rowid ASC")]
+
+    def get(self, project_id):
+        row = self.db.one("SELECT id, name, created_at FROM projects WHERE id=?", (project_id,))
+        return dict(row) if row else None
+
+    def exists(self, project_id) -> bool:
+        return bool(project_id) and self.get(str(project_id)) is not None
+
+    def create(self, name, *, now=0.0):
+        """A new project with its own id: the name may be edited later, the id never changes."""
+        project_id = new_project_id()
+        self.db.execute("INSERT INTO projects(id, name, created_at) VALUES(?,?,?)",
+                        (project_id, str(name), float(now)))
+        return self.get(project_id)
 
 
 class DraftRepository:

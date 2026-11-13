@@ -306,6 +306,7 @@ class JobRoutes:
         raise web.HTTPNotFound()
 
     async def queue_cloud(self, rh, graph, stages, meta, preview=False, spec=None):
+        meta = self.submission_meta(meta)
         if not self.config.get("rh_workflow_id"):
             return web.json_response({"error": "Укажите ID любого вашего workflow на RunningHub (раздел «Настройки» → «Облако»)"},
                                      status=400)

@@ -41,6 +41,7 @@ from backends.base import BackendUnavailable
 from backends.comfy import ComfyBackend
 from domain.errors import InvalidTransition, SchemaVersionError
 from domain.jobs import JobRecord, JobState, MAX_SECONDS, new_job_id, public_state
+from domain.projects import DEFAULT_PROJECT_ID, clean_name
 from runtime.events import EventHub
 from runtime.tasks import TaskSupervisor
 from services.engines import EngineManager
@@ -50,7 +51,8 @@ from storage.atomic import atomic_write_json
 from storage.database import Database
 from storage.migrations import migrate
 from storage.repositories import (
-    DraftRepository, IdempotencyRepository, JobRepository, MediaRepository, ResultRepository
+    DraftRepository, IdempotencyRepository, JobRepository, MediaRepository, ProjectRepository,
+    ResultRepository
 )
 
 from routes.status import StatusRoutes
@@ -61,9 +63,11 @@ from routes.lora import LoraRoutes
 from routes.agent import AgentRoutes
 from routes.generate import GenerateRoutes
 from routes.montage import MontageRoutes
+from routes.projects import ProjectRoutes
 
 
-class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, AgentRoutes, GenerateRoutes, MontageRoutes):
+class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, AgentRoutes, GenerateRoutes,
+          MontageRoutes, ProjectRoutes):
     def __init__(self, comfy_override=None, port=None):
         self.config = engine.Config(DATA_DIR / "config.json")
         # a share or a synchronised folder is a poor home for the queue, the library and (stage 3) the
@@ -88,6 +92,7 @@ class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, Agent
         self.jobs_repo = JobRepository(self.db)
         self.media_repo = MediaRepository(self.db)
         self.results_repo = ResultRepository(self.db)
+        self.projects_repo = ProjectRepository(self.db)
         self.queue_save_error = None   # the last failure to persist the queue, shown in the window instead of a silent loss
         self.pending_resume = self.load_resume_queue()  # unfinished jobs of an earlier run (asked about at start)
         self.jobs = JobStore(self.save_queue)  # prompt_id -> job dict
@@ -153,6 +158,48 @@ class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, Agent
             note_error=self.note_error, on_outputs=self.keep_scene_state,
             drafts=self.drafts_repo, draft_dir=lambda: DATA_DIR / "drafts",
             extra_folders=lambda: [DATA_DIR / "cloud", DATA_DIR / "cache"])
+
+    # ---------- projects ----------
+
+    def projects(self):
+        """The workspaces to choose from. The default one is created by the migration, so the
+        window always has a project to show, even for a user who never made one."""
+        return self.projects_repo.all()
+
+    def active_project(self):
+        """The project new results are stamped with: the chosen one, else the default.
+
+        A project deleted behind the window's back must not stop generation: an unknown id in the
+        settings falls back to the default instead of failing a submit.
+        """
+        project_id = str(self.config.get("active_project") or "")
+        if project_id and self.projects_repo.exists(project_id):
+            return project_id
+        return DEFAULT_PROJECT_ID
+
+    def set_active_project(self, project_id):
+        project_id = str(project_id or "").strip()
+        if not project_id or not self.projects_repo.exists(project_id):
+            raise KeyError(project_id)
+        self.config.update(active_project=project_id)
+        return project_id
+
+    def create_project(self, name):
+        """A new workspace, selected at once: a project is created to work in it."""
+        name = clean_name(name)
+        if not name:
+            raise ValueError("Название проекта не может быть пустым")
+        project = self.projects_repo.create(name, now=time.time())
+        self.config.update(active_project=project["id"])
+        return project
+
+    def submission_meta(self, meta):
+        """A job's meta carries the project it was submitted in — the active one unless the caller
+        named another (the agent API may). Stamped at submission, not at completion: a clip that
+        finishes after the user switched projects still belongs to the one it was asked in."""
+        meta = dict(meta or {})
+        meta.setdefault("project", self.active_project())
+        return meta
 
     async def outputs_for_media(self, pid):
         """The engine's outputs, asked through the App every time: the media service must not keep a
@@ -741,6 +788,7 @@ class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, Agent
         The record is the truth; this dict is what the window, the engine events and the agent view
         have always used. One place builds it, whether the job came through the service or not.
         """
+        meta = self.submission_meta(meta)
         pid = record.prompt_id or record.backend_job_id
         if not pid:
             raise InvalidTransition("У задания нет идентификатора: показывать в очереди нечего")
@@ -1015,6 +1063,7 @@ class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, Agent
     def hold_preview(self, item):
         """A picture is not added to the Library by itself: it waits until the user presses «Добавить в библиотеку»."""
         item["preview"] = True
+        item.setdefault("project", self.active_project())
         self.drafts_repo.save(item)
         self.note_preview_committed(item)
 
@@ -1179,6 +1228,7 @@ class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, Agent
     def begin_submission(self, spec, graph, stages, meta, preview=False, last_output=False, titles=None,
                          backend=None, backend_id=None):
         """Write intent before any backend POST, including modes without a typed video spec."""
+        meta = self.submission_meta(meta)
         now = time.time()
         job_id = new_job_id()
         record = JobRecord(job_id=job_id, prompt_id="pending-" + job_id, spec=spec,
