@@ -619,3 +619,9 @@
 /* the delete badge on a draft thumbnail: shown on hover, never on a Library clip */
 .cw-x{position:absolute;top:4px;right:4px;z-index:2;width:18px;height:18px;border-radius:50%;background:rgba(var(--ov-rgb),.82);color:var(--text);font-style:normal;font-size:10px;line-height:18px;text-align:center;opacity:0;transition:opacity .12s;cursor:pointer}
 .cw-th:hover .cw-x,.cw-x:focus{opacity:1}
+
+/* the status line of a finished clip: the text and a wrapping row of small buttons, even gaps */
+.v-status{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;line-height:1.45;text-align:left}
+.v-head{min-width:0}
+.v-actions{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.v-act{padding:4px 10px;font-size:12px;line-height:1.25;white-space:nowrap}

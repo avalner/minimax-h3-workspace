@@ -389,12 +389,21 @@ function previewPanel(el, st, opts) {
     const head = draft
       ? (took ? `Готово за ${took} — черновик, в Библиотеку не добавлен.` : 'Черновик, в Библиотеку не добавлен.')
       : (took ? `Готово за ${took} — видео в Библиотеке.` : 'Видео в Библиотеке.');
-    status.innerHTML = `${head} Seed: <b style="font-family:var(--mono)">${esc(String(it.seed ?? '—'))}</b> `;
-    if (draft) status.insertAdjacentHTML('beforeend', '<button class="btn pri" id="vKeepBtn" type="button" style="padding:4px 12px;font-size:12px">Добавить в библиотеку</button> ');
+    // the text and the buttons are one wrapping row with even gaps: no stray spaces, nothing crowds
+    status.innerHTML = `<div class="v-status"><span class="v-head">${head} Seed: `
+      + `<b style="font-family:var(--mono)">${esc(String(it.seed ?? '—'))}</b></span>`
+      + '<span class="v-actions" id="vActions"></span></div>';
+    const acts = $('#vActions', el);
+    const add = (id, label, { pri = false, title = '' } = {}) => acts.insertAdjacentHTML(
+      'beforeend', `<button class="btn${pri ? ' pri' : ''} v-act" id="${id}" type="button"`
+      + `${title ? ` title="${title}"` : ''}>${label}</button>`);
+    if (draft) add('vKeepBtn', 'Добавить в библиотеку', { pri: true });
     // any clip can be deleted from here, a Library one included: the file goes to the Recycle Bin
-    status.insertAdjacentHTML('beforeend', `<button class="btn" id="vDelBtn" type="button" style="padding:4px 12px;font-size:12px" title="${draft ? 'Удалить черновик: файл уйдёт в корзину, Библиотека не изменится' : 'Удалить клип из Библиотеки: файл уйдёт в корзину'}">Удалить</button> `);
-    if (it.seed != null) status.insertAdjacentHTML('beforeend', '<button class="btn" id="keepSeed" type="button" style="padding:4px 10px;font-size:12px">Зафиксировать</button> ');
-    status.insertAdjacentHTML('beforeend', ' <button class="btn pri" id="upBtn" type="button" style="padding:4px 12px;font-size:12px" title="Увеличить разрешение и добавить чёткости (SeedVR2)">Увеличить видео</button>');
+    add('vDelBtn', 'Удалить', { title: draft
+      ? 'Удалить черновик: файл уйдёт в корзину, Библиотека не изменится'
+      : 'Удалить клип из Библиотеки: файл уйдёт в корзину' });
+    if (it.seed != null) add('keepSeed', 'Зафиксировать');
+    add('upBtn', 'Увеличить видео', { pri: true, title: 'Увеличить разрешение и добавить чёткости (SeedVR2)' });
     $('#upBtn', el).onclick = () => deps.openUpscale(deps.byId(it.id) || normalize(it));
     $('#keepSeed', el)?.addEventListener('click', () => useSeed(st, it.seed));
     $('#vDelBtn', el)?.addEventListener('click', ev => deleteClipFlow(it, ev));
@@ -407,11 +416,12 @@ function previewPanel(el, st, opts) {
     });
     // beginner flow: try another variant, or redo this very one (same seed) in a better size
     if (!fresh) return;
-    status.insertAdjacentHTML('beforeend', ' <button class="btn" id="otherBtn" type="button" style="padding:4px 12px;font-size:12px" title="Новый вариант с другим seed, настройки те же">Другой вариант</button>');
+    add('otherBtn', 'Другой вариант', { title: 'Новый вариант с другим seed, настройки те же' });
     $('#otherBtn', el).addEventListener('click', () => { st.seedFixed = false; st._upd?.(); go.onclick(); });
     const curQ = QUALITY_ALL.find(x => x.id === st.q), goodQ = QUALITY_ALL.find(x => x.id === '720p');
     if (it.seed != null && curQ && !(st.cw && st.ch) && curQ.px < goodQ.px) {
-      status.insertAdjacentHTML('beforeend', ' <button class="btn" id="goodBtn" type="button" style="padding:4px 12px;font-size:12px" title="Тот же вариант (seed сохранится), размер 1280×736. Результат будет похож, но не пиксель в пиксель">В хорошем качестве</button>');
+      add('goodBtn', 'В хорошем качестве', { title: 'Тот же вариант (seed сохранится), размер 1280×736. '
+        + 'Результат будет похож, но не пиксель в пиксель' });
       $('#goodBtn', el).addEventListener('click', () => { st.seedFixed = true; st.seed = String(it.seed); st.q = '720p'; st._upd?.(); go.onclick(); });
     }
   }
