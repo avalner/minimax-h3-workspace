@@ -160,6 +160,14 @@ def build(info):
     sec("НАСТРОЙКИ (без ключей)")
     L.append(json.dumps(safe_config(info.get("config")), ensure_ascii=False, indent=1))
 
+    sec("ЖУРНАЛ ЗАДАНИЙ (события, состояния, длительности)")
+    journal = info.get("journal") or []
+    if not journal:
+        L.append("событий не было с момента запуска")
+    for entry in journal:
+        fields = " ".join(f"{k}={v}" for k, v in entry.items() if k not in ("at", "event"))
+        L.append(f"- {entry.get('at', '')} {entry.get('event', '')}: {fields}")
+
     sec("ПОСЛЕДНИЕ ОШИБКИ В ПРИЛОЖЕНИИ")
     for e in info.get("errors") or ["ошибок не было с момента запуска"]:
         L.append("- " + str(e))

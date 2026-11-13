@@ -170,6 +170,7 @@ class StatusRoutes:
             "long_states": long_states,
             "home": HOME, "data_dir": DATA_DIR, "hw": hw, "page": page.get("page"), "comfy": comfy, "models": models,
             "config": self.config.data, "errors": self.recent_errors, "toasts": page.get("toasts"),
+            "journal": self.journal.tail(60),
             "comfy_log": self.engines.log_tail(60),
             "guard": self.guard_log_tail(), "guard_on": self.watchdog_on(),
             "shutdown": self.last_shutdown,   # what a closing run could not finish in its budget

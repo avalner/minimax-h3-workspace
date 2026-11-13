@@ -429,12 +429,14 @@ class JobRoutes:
                 await self.broadcast({"type": "notice", "text": text})
                 return {"state": "refused", "message": text}
             if record.state is JobState.CANCELED:   # a queued job is removed at once
+                self.journal.event("cancel", prompt_id=pid, job_id=record.job_id, result="canceled")
                 self.jobs.pop(pid, None)
                 await self.broadcast({"type": "interrupted", "prompt_id": pid})
                 return {"state": "canceled", "message": None}
             if accepted:
                 # running: the engine accepted the request, the outcome comes from its event or the watch
                 self.tasks.spawn(f"cancel:{pid}", self.interrupt_watch(pid), replace=True)
+            self.journal.event("cancel", prompt_id=pid, job_id=record.job_id, result="canceling")
             return {"state": "canceling", "message": None}
         # cloud tasks and jobs of an older run have no record: their own paths stay as they were
         if job.get("task"):

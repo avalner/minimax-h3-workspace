@@ -6,7 +6,8 @@
 Задача этапа — свести `server.py` к сборке приложения и подключению маршрутов, убрать временные
 адаптеры, добавить структурированную диагностику и привести документацию в вид, по которому новую
 установку и обновление со старыми данными можно пройти без чтения кода. Этап идёт частями; этот
-файл описывает две: composition root (§1–§5) и исходы в записи вместо памяти (§6).
+файл описывает три: composition root (§1–§5), исходы в записи вместо памяти (§6) и журнал
+заданий (§7).
 
 ## 1. Что сделано по пунктам плана
 
@@ -15,8 +16,8 @@
 | 2. `server.py` — composition root, setup/models/agent/LoRA-обработчики перенесены по функциям | сделано | [server.py](../../app/server.py), [application.py](../../app/application.py), [routes/](../../app/routes), [webcommon.py](../../app/webcommon.py) |
 | 1. Удалить `JobStore`, `saved_queue`, параллельные `recent`/`history` | `recent`/`history` удалены, их ответственность переехала в запись задания (§7); `saved_queue` в коде нет; `JobStore` оставлен осознанно — это и есть «писать очередь при каждом изменении» | [application.py](../../app/application.py), [routes/jobs.py](../../app/routes/jobs.py), [storage/repositories.py](../../app/storage/repositories.py) |
 | 3. `engine.py`/`cloud.py`/`ffmpeg_mgr.py`/`workflows.py` оставить на месте, не вводить DSL графов | не трогали; без изменений | — |
-| 4. Структурированная диагностика (job_id, backend_job_id, переход, операция, длительность, тип ошибки) | не начато | — |
-| 5. README, `docs/agent-api.md`, схема, миграция/backup/recovery, правила импортов проверкой | не начато | — |
+| 4. Структурированная диагностика (job_id, backend_job_id, переход, операция, длительность, тип ошибки) | сделано: журнал событий заданий (§7) | [journal.py](../../app/journal.py), [status.py](../../app/routes/status.py), [report.py](../../app/report.py) |
+| 5. README, `docs/agent-api.md`, схема, миграция/backup/recovery, правила импортов проверкой | не начато (остаток этапа) | — |
 
 ## 2. Куда переехало
 
@@ -59,10 +60,10 @@ LoraRoutes, AgentRoutes, GenerateRoutes, MontageRoutes)`. Таблица мар�
 ```powershell
 $env:PYTHONPATH = "I:\Video Generation\ComfyUI_windows_portable\python_embeded\Lib\site-packages"
 _test\venv\Scripts\python.exe tests\run.py
-# Итог: прошло 31, не прошло 0, пропущено 0
+# Итог: прошло 32, не прошло 0, пропущено 0
 ```
 
-- `unit` (25 файлов) — включая `test_finish_job`, `test_queue_resume`, `test_shutdown`,
+- `unit` (26 файлов) — включая `test_finish_job`, `test_queue_resume`, `test_shutdown`,
   `test_state_files`, `test_legacy_files`; они создают `server.App` и вызывают его методы. Тесты
   исходов (`test_events`, `test_ui_snapshot`, `test_job_details`, `test_queue_resume`,
   `test_finish_job`) переписаны на запись в базе: задание, у которого есть исход, теперь создаётся
@@ -111,12 +112,44 @@ _test\venv\Scripts\python.exe tests\run.py
 меняется очередь. `queue.json`/`library.json` по-прежнему только читаются (импорт при первом
 запуске) и никогда не пишутся.
 
-## 7. Что осталось в этапе 9
+## 7. Диагностика: журнал заданий
 
-1. **Диагностика**: job_id, backend_job_id, переход, операция, длительность, тип ошибки; без
-   токенов и полного содержимого чувствительных запросов.
-2. **Документация**: README, `docs/agent-api.md`, архитектурная схема, миграция/backup/recovery,
-   запуск тестов и сборка; правила импортов закрепить лёгкой автоматической проверкой
-   (`domain`/`services` не зависят от HTTP и окна).
-3. `routes/generate.py` (1015 строк) — следующий кандидат на разделение по режимам, если это
+Добавлен [journal.py](../../app/journal.py): одна строка JSON на событие, `at`, `event` и явные
+поля от вызывающего. Пишется в `logs/journal.jsonl` рядом с базой, при 2 МБ один раз
+переименовывается в `.1`, в памяти держится последние 200 записей. Если папка недоступна для
+записи, журнал продолжает работать в памяти и говорит об этом (`write_error`) — диагностика не
+может остановить работу.
+
+Что записывается (и чего в журнале нет):
+
+| Событие | Поля |
+| --- | --- |
+| `submitted` | `job_id`, `prompt_id`, `backend_job_id`, `mode`, `deduplicated`, `keyed`, `ms` — сколько заняла отправка |
+| `transition` | те же id + `backend`, `was`, `now`, `ms` с прошлого перехода, `error` |
+| `finalized` | `prompt_id`, `job_id`, `backend_job_id`, `results`, `ms` — сколько заняла финализация |
+| `finalize_failed` | `prompt_id`, `job_id`, `error` (тип исключения), `ms` |
+| `cancel` | `prompt_id`, `job_id`, `result` (`canceled`/`canceling`) |
+| `watchdog` | `verdict`, `text` |
+| `outcome` | `prompt_id`, `state`, короткое `message` |
+| `shutdown` | `seconds`, `unfinished`, `writers` |
+
+В журнал попадают **только примитивы**: словарь, список или объект молча отбрасываются, длинная
+строка обрезается до 200 символов. Поэтому конфигурация (токены RunningHub и Civitai), тела
+запросов, промпты и содержимое файлов туда не попадают даже по ошибке — это закреплено тестом
+`test_only_primitives_are_written`.
+
+Журнал виден в «Отчёте для разработчика» (`/api/report`) отдельным разделом «ЖУРНАЛ ЗАДАНИЙ»:
+последние 60 записей, по одной строке. Отдельного маршрута у журнала нет — он для разбора
+присланного отчёта, а не для окна.
+
+Проверка — [test_journal.py](../../tests/unit/test_journal.py): формат строки, отказ от словаря,
+обрезка, `tail`, ротация с сохранением предыдущего файла, недоступная папка, и переход задания
+(`queued → running → failed`) с обоими id и сообщением.
+
+## 8. Что осталось в этапе 9
+
+1. **Документация**: README, `docs/agent-api.md`, архитектурная схема, миграция/backup/recovery,
+   запуск тестов и сборка. Закрепить правила импортов лёгкой автоматической проверкой
+   (`domain`/`services` не зависят от HTTP/окна).
+2. `routes/generate.py` (1015 строк) — следующий кандидат на разделение по режимам, если это
    понадобится; сейчас это одна связная область «собрать форму и отправить задание».

@@ -33,6 +33,7 @@ import catalog
 import cloud
 import datadir
 import engine
+import journal
 import monitor
 import watchdog
 import workflows as wf
@@ -106,6 +107,9 @@ class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, Agent
         self.rh_models = None  # model paths found in the user's RunningHub workflow
         self.monitor = monitor.Monitor()
         self.recent_errors = []  # last problems, for the report to the author
+        # what happened to each job: ids, states, durations and the kind of an error — never prompts,
+        # tokens or configuration. The report to the author includes its tail.
+        self.journal = journal.Journal(DATA_DIR / "logs" / "journal.jsonl")
         # every background coroutine of the app: one place that keeps the reference, sees the error
         # and can stop it (a `create_task` in a handler is fire and forget)
         self.tasks = TaskSupervisor(note_error=self.note_error)
@@ -319,6 +323,8 @@ class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, Agent
         await asyncio.to_thread(self.llm.stop)
         self.last_shutdown = {"seconds": round(time.monotonic() - started, 2), "unfinished": unfinished,
                               "writers": bool(writers)}
+        self.journal.event("shutdown", seconds=self.last_shutdown["seconds"],
+                           unfinished=len(unfinished), writers=bool(writers))
         if unfinished:
             self.note_error("При закрытии не успели: " + ", ".join(unfinished)
                             + ". Состояние сохранено, следующий запуск продолжит.")
@@ -541,6 +547,8 @@ class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, Agent
     async def on_stuck(self, verdict):
         """The engine looks hung: say why, restart it, and tell the user what that costs."""
         line = watchdog.describe(verdict)
+        self.journal.event("watchdog", verdict=str(getattr(verdict, "kind", verdict))[:40],
+                           text=line)
         self.guard_log(line)
         self.note_error("Сторож видеокарты: " + line)
         await self.broadcast({"type": "notice", "text": watchdog.verdict_text(verdict)})
@@ -763,9 +771,17 @@ class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, Agent
             job["state"] = public_state(target)
             job["finalizing"] = target is JobState.FINALIZING
             return True
+        was_state, was_at = record.state, record.updated_at
         changed = record.apply(target, now=datetime.now().timestamp(), error=error)
         job["state"] = public_state(record.state)
         job["finalizing"] = record.state is JobState.FINALIZING
+        if changed:
+            self.journal.event("transition", job_id=record.job_id, prompt_id=record.prompt_id,
+                               backend_job_id=record.backend_job_id, backend=record.backend,
+                               mode=record.spec.mode if record.spec else None,
+                               was=was_state.value, now=record.state.value,
+                               ms=int((record.updated_at - (was_at or record.updated_at)) * 1000),
+                               error=error)
         if changed and record.state.terminal:
             # the outcome is a fact the moment it happens: write it down before any window hears about
             # it, so the details window and the snapshot never depend on the order of events. A live
@@ -807,6 +823,7 @@ class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, Agent
         if job.get("finalizing") or job.get("finalized"):
             return   # a second event for the same job: the first one is registering its result
         pid = job["prompt_id"]
+        started = time.monotonic()
         self.set_job_state(job, JobState.FINALIZING)   # also sets the `finalizing` mark the watch reads
         job["finalize_tries"] = job.get("finalize_tries", 0) + 1
         self.save_queue()   # a crash in the middle of finalization must be known to the next start
@@ -818,10 +835,20 @@ class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, Agent
             if record is not None:
                 record.finalize_attempts += 1   # stays FINALIZING: the generation itself did happen
             self.note_error(f"Результат задания {pid} сгенерирован, но не сохранился: {type(e).__name__}: {e}")
+            self.journal.event("finalize_failed", prompt_id=pid,
+                               job_id=record.job_id if record is not None else None,
+                               error=journal.error_type(e), ms=int((time.monotonic() - started) * 1000))
             await self.broadcast({"type": "notice", "text": (
                 "Результат готов, но записать его в Библиотеку не удалось: " + str(e) +
                 ". Задание осталось в очереди — можно повторить.")})
             self.save_queue()
+            return
+        record = job.get("record")
+        self.journal.event("finalized", prompt_id=pid,
+                           job_id=record.job_id if record is not None else None,
+                           backend_job_id=record.backend_job_id if record is not None else None,
+                           results=len(record.results) if record is not None else None,
+                           ms=int((time.monotonic() - started) * 1000))
 
     async def _finish_job(self, job):
         """One call to the media service: find the outputs, make the copies, record, notify.
@@ -905,6 +932,7 @@ class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, Agent
         pid = payload.get("prompt_id")
         if not kind or not pid:
             return
+        self.journal.event("outcome", prompt_id=pid, state=kind, message=payload.get("message") or "")
         self.jobs_repo.note_message(pid, payload.get("message") or "")
 
     def ui_snapshot(self):
@@ -1115,10 +1143,15 @@ class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, Agent
         an HTTP response, so both entrances map it their own way.
         """
         await self.prepare_engine(spec.mode)
+        started = time.monotonic()
         record, deduplicated = await self.service.submit_idempotent(
             spec, backend_id=self.backend_identity(), key=key)
         if not deduplicated:
             self.attach_job(record, meta=meta, last_output=last_output, titles=titles, preview=preview)
+        self.journal.event("submitted", job_id=record.job_id, prompt_id=record.prompt_id,
+                           backend_job_id=record.backend_job_id, mode=spec.mode,
+                           deduplicated=deduplicated, keyed=bool(key),
+                           ms=int((time.monotonic() - started) * 1000))
         return record, deduplicated
 
     async def need_models(self, mode):
