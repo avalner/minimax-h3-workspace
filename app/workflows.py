@@ -1300,26 +1300,23 @@ def h3img_tags(text):
 
 
 def h3img_t2i_graph(m, prompt, width, height, seed):
-    """MiniMax H3 Image, picture by text (the official t2i recipe): 6 steps, beta schedule, CFG 1, no negative prompt.
-
-    There is deliberately no prompt enhancer and no negative branch: the model was trained without them, and the
-    prompt is written by the agent's «minimax-h3-image» skill.
+    """MiniMax H3 Image, picture by text: 6 steps, CFG 1, euler, simple schedule — the official ComfyUI recipe
+    (templates/image_minimax_h3_image_t2i.json), minus its prompt enhancer: the prompt is written by the agent's
+    «minimax-h3-image» skill. There is deliberately no negative branch either: with CFG 1 it would do nothing.
     """
     g = _h3img_base(m)
     g.update({
         "5": {"class_type": "MiniMaxH3ImageConditioning", "inputs": {"prompt": prompt, "width": width, "height": height,
                                                                    "clip": ["2", 0], "vae": ["3", 0]}},
-        "6": {"class_type": "RandomNoise", "inputs": {"noise_seed": seed}},
-        "7": {"class_type": "BasicGuider", "inputs": {"model": ["4", 0], "conditioning": ["5", 0]}},
-        "8": {"class_type": "KSamplerSelect", "inputs": {"sampler_name": "euler"}},
-        "9": {"class_type": "BasicScheduler", "inputs": {"model": ["4", 0], "scheduler": "beta", "steps": 6, "denoise": 1.0}},
-        "10": {"class_type": "SamplerCustomAdvanced", "inputs": {
-            "noise": ["6", 0], "guider": ["7", 0], "sampler": ["8", 0], "sigmas": ["9", 0], "latent_image": ["5", 1]}},
-        "11": {"class_type": "VAEDecode", "inputs": {"samples": ["10", 0], "vae": ["3", 0]}},
-        "12": {"class_type": "SaveImage", "inputs": {"filename_prefix": "H3Workspace/h3img", "images": ["11", 0]}},
+        "6": {"class_type": "ConditioningZeroOut", "inputs": {"conditioning": ["5", 0]}},
+        "7": {"class_type": "KSampler", "inputs": {
+            "seed": seed, "steps": 6, "cfg": 1, "sampler_name": "euler", "scheduler": "simple", "denoise": 1,
+            "model": ["4", 0], "positive": ["5", 0], "negative": ["6", 0], "latent_image": ["5", 1]}},
+        "8": {"class_type": "VAEDecode", "inputs": {"samples": ["7", 0], "vae": ["3", 0]}},
+        "9": {"class_type": "SaveImage", "inputs": {"filename_prefix": "H3Workspace/h3img", "images": ["8", 0]}},
     })
-    stages = {"1": "load", "2": "load", "3": "load", "4": "load", "5": "encode", "6": "encode", "7": "encode",
-              "8": "encode", "9": "encode", "10": "sample", "11": "decode", "12": "save"}
+    stages = {"1": "load", "2": "load", "3": "load", "4": "load", "5": "encode", "6": "encode",
+              "7": "sample", "8": "decode", "9": "save"}
     return g, stages
 
 

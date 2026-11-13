@@ -122,11 +122,11 @@ class TextToPictureTest(RouteCase):
         await self.call(self.app.h_generate_krea, form(prompt="a lighthouse", aspect="1:1", engine="h3img"))
         self.assertEqual((self.conditioning()["width"], self.conditioning()["height"]), wf.h3img_size("1:1", 4.0))
 
-    async def test_the_six_steps_and_no_negative_are_in_the_graph(self):
+    async def test_the_six_steps_and_cfg_one_are_in_the_graph(self):
         await self.call(self.app.h_generate_krea, form(prompt="a lighthouse", aspect="16:9", engine="h3img", mp="16"))
-        schedule = next(n for n in self.sent["graph"].values() if n["class_type"] == "BasicScheduler")
-        self.assertEqual((schedule["inputs"]["steps"], schedule["inputs"]["scheduler"]), (6, "beta"))
-        self.assertFalse([n for n in self.sent["graph"].values() if n["class_type"] == "ConditioningZeroOut"])
+        sampler = next(n for n in self.sent["graph"].values() if n["class_type"] == "KSampler")
+        self.assertEqual((sampler["inputs"]["steps"], sampler["inputs"]["cfg"]), (6, 1))
+        self.assertEqual(sampler["inputs"]["scheduler"], "simple")
 
     async def test_a_big_own_size_is_not_cut_down_to_two_megapixels(self):
         await self.call(self.app.h_generate_krea,

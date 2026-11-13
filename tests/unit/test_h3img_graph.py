@@ -41,13 +41,19 @@ class H3ImgTextTest(unittest.TestCase):
     def setUp(self):
         self.g, self.stages = wf.h3img_t2i_graph(MODELS, "a cat on a windowsill", 2048, 2048, 11)
 
-    def test_the_recipe_is_six_steps_beta_cfg_one(self):
-        sched = one(self.g, "BasicScheduler")
-        self.assertEqual(sched["inputs"]["steps"], 6)
-        self.assertEqual(sched["inputs"]["scheduler"], "beta")
-        self.assertEqual(sched["inputs"]["denoise"], 1.0)
-        self.assertIsNotNone(one(self.g, "BasicGuider"), "CFG 1: обычный guider без негативной ветки")
-        self.assertIsNone(one(self.g, "ConditioningZeroOut"), "негативного промпта у модели нет и он не строится")
+    def test_the_recipe_is_six_steps_cfg_one_on_the_official_schedule(self):
+        # Comfy-Org's own template (image_minimax_h3_image_t2i.json): KSampler, 6 steps, cfg 1, euler, simple
+        ks = one(self.g, "KSampler")
+        self.assertEqual((ks["inputs"]["steps"], ks["inputs"]["cfg"]), (6, 1))
+        self.assertEqual((ks["inputs"]["sampler_name"], ks["inputs"]["scheduler"]), ("euler", "simple"))
+        self.assertEqual(ks["inputs"]["denoise"], 1)
+        self.assertIsNone(one(self.g, "BasicScheduler"), "расписание задаёт KSampler, отдельных сигм нет")
+        self.assertIsNone(one(self.g, "SamplerCustomAdvanced"))
+
+    def test_there_is_no_negative_prompt(self):
+        # CFG 1: the model was trained without a negative branch, so one would change nothing
+        self.assertEqual(one(self.g, "KSampler")["inputs"]["negative"], ["6", 0])
+        self.assertEqual(self.g["6"]["class_type"], "ConditioningZeroOut")
         self.assertIsNone(one(self.g, "CFGGuider"))
 
     def test_the_conditioning_carries_the_size_and_the_vae(self):
@@ -58,9 +64,9 @@ class H3ImgTextTest(unittest.TestCase):
         self.assertEqual([k for k in cond if k.startswith("images")], [], "без референсов слотов нет")
 
     def test_the_latent_comes_from_the_conditioning_node(self):
-        sample = one(self.g, "SamplerCustomAdvanced")
+        sample = one(self.g, "KSampler")
         self.assertEqual(sample["inputs"]["latent_image"], ["5", 1])
-        self.assertEqual(one(self.g, "VAEDecode")["inputs"]["samples"], ["10", 0])
+        self.assertEqual(one(self.g, "VAEDecode")["inputs"]["samples"], ["7", 0])
 
     def test_the_attention_is_the_same_comfy_kitchen_as_in_the_other_modes(self):
         att = one(self.g, "ModelAttentionBackend")
@@ -70,8 +76,8 @@ class H3ImgTextTest(unittest.TestCase):
     def test_it_is_saved_as_a_picture_of_the_h3img_family(self):
         save = one(self.g, "SaveImage")
         self.assertTrue(save["inputs"]["filename_prefix"].startswith("H3Workspace/h3img"))
-        self.assertEqual(self.stages["10"], "sample")
-        self.assertEqual(self.stages["12"], "save")
+        self.assertEqual(self.stages["7"], "sample")
+        self.assertEqual(self.stages["9"], "save")
 
 
 class H3ImgEditTest(unittest.TestCase):
