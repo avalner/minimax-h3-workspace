@@ -1566,6 +1566,7 @@ let MD_ENGINE = '', MD_EXTDIR = '', MD_NEED = [];
 let MD_EXT = false;
 function renderModels(s) {
   if (!s.models) return;
+  if ($('#mlist .pm')) return;   // a file picker is open: a status refresh must not throw the choice away
   MD_ENGINE = s.engine;
   const have = s.models.filter(m => m.have).length;
   $('#modelsBadge').textContent = `${have} / ${s.models.length}`; $('#modelsBadge').hidden = false;
@@ -3279,25 +3280,65 @@ $('#mlist').addEventListener('click', async e => {
   const name = c ? c.dataset.copyname : f ? f.textContent : ''; if (!name) return;
   navigator.clipboard?.writeText(name).then(() => toast('Имя файла скопировано'), () => toast(name));
 });
+/* Model files for one role, as the server judged them in /api/models/files: fit = ok / unknown / no.
+   A models folder also holds the files of other sections and other H3 model types, so only the fitting
+   ones are offered at once; a renamed file stays behind «Показать все», not at the top of the list. */
+const MODEL_FIT_RANK = { ok: 0, unknown: 1, no: 2 };
+function fillModelOptions(sel, files, showAll, query, withDefault = false) {
+  // a server from an older build answered with plain names: keep the picker usable until the app is restarted
+  files = (files || []).map(f => typeof f === 'string' ? { name: f, fit: 'unknown', why: '', current: false } : f);
+  const words = String(query || '').toLowerCase().split(/\s+/).filter(Boolean);
+  const shown = files
+    .filter(f => (showAll || f.fit !== 'no') && words.every(w => f.name.toLowerCase().includes(w)))
+    .sort((a, b) => (b.current ? 1 : 0) - (a.current ? 1 : 0)
+      || (MODEL_FIT_RANK[a.fit] ?? 2) - (MODEL_FIT_RANK[b.fit] ?? 2)
+      || a.name.localeCompare(b.name));
+  const group = (title, items) => items.length
+    ? `<optgroup label="${esc(title)}">${items.map(f => `<option value="${esc(f.name)}">${esc(f.name)}</option>`).join('')}</optgroup>` : '';
+  const keep = sel.value;
+  sel.innerHTML = (withDefault ? '<option value="">как по умолчанию (встроенная)</option>' : '')
+    + ((group('Подходят', shown.filter(f => f.fit !== 'no'))
+      + group('Не подходят', shown.filter(f => f.fit === 'no'))) || (withDefault ? '' : '<option value="">— подходящих файлов нет —</option>'));
+  const want = shown.find(f => f.current) || shown.find(f => f.name === keep) || (withDefault ? null : shown[0]);
+  sel.value = want ? want.name : '';
+  sel.disabled = !shown.length && !withDefault;
+  return shown;
+}
+
 // a model file with another name than the app expects: pick it from what ComfyUI sees
 $('#mlist').addEventListener('click', async e => {
   const b = e.target.closest('[data-pickmodel]'); if (!b) return;
   const row = b.closest('.m'), role = b.dataset.pickmodel;
   try {
-    const r = await apiGet('/api/models/files?role=' + role);
+    const r = await apiGet('/api/models/files?role=' + encodeURIComponent(role));
     if (!r.files?.length) { toast(`ComfyUI не видит файлов в папке ${r.folder}`); return; }
     b.hidden = true;
-    row.insertAdjacentHTML('beforeend', `<div class="pm"><input type="search" class="pm-q" placeholder="Поиск по имени…" spellcheck="false"><select><option value="">как по умолчанию</option>${r.files.map(f => `<option>${esc(f)}</option>`).join('')}</select><button class="btn mini pri" type="button">Выбрать</button></div>`);
-    $('.pm-q', row).oninput = e => {  // only the files whose name contains the typed words
-      const words = e.target.value.toLowerCase().split(/\s+/).filter(Boolean);
-      $$('.pm select option', row).forEach(o => { o.hidden = !!o.value && !words.every(w => o.textContent.toLowerCase().includes(w)); });
-      const first = $$('.pm select option', row).find(o => !o.hidden && o.value); if (words.length && first) first.selected = true;
+    row.insertAdjacentHTML('beforeend', `<div class="pm"><input type="search" class="pm-q" placeholder="Поиск по имени…" spellcheck="false"><select></select><button class="btn mini pri" type="button">Выбрать</button><button class="btn mini" type="button" data-no>Отмена</button><button class="btn mini" type="button" data-all hidden></button><span class="hint mp-info"></span></div>`);
+    const pm = $('.pm', row), sel = $('select', pm), q = $('.pm-q', pm);
+    let showAll = false;
+    const paint = () => {
+      const shown = fillModelOptions(sel, r.files, showAll, q.value, true);
+      const bad = r.files.filter(f => f.fit === 'no').length;
+      const all = $('[data-all]', pm);
+      all.hidden = !bad;
+      all.textContent = showAll ? 'Скрыть неподходящие' : `Показать все файлы (${bad})`;
+      $('.mp-info', pm).textContent = !shown.length
+        ? 'Нет файлов по запросу — нажмите «Показать все».'
+        : showAll ? `Показаны все файлы (${shown.length} из ${r.files.length}), в том числе не подходящие этой строке.`
+          : `Показано ${shown.length} из ${r.files.length}: только файлы, которые подходят этой строке${r.marks ? ' (в названии: ' + r.marks + ')' : ''}.`;
     };
-    $('.pm .pri', row).onclick = async () => {
-      const name = $('.pm select', row).value;
-      const r = await postJSON('/api/models/pick', { role, name });
-      if (r && r.warn) { confirmBox('Это точно тот файл?', r.warn, 'Всё равно выбрать', async () => { await postJSON('/api/models/pick', { role, name, force: true }); await loadStatus(); toast('Файл выбран'); }); return; }
-      await loadStatus(); toast('Файл выбран');
+    paint();
+    q.oninput = paint;
+    $('[data-all]', pm).onclick = () => { showAll = !showAll; paint(); };
+    $('[data-no]', pm).onclick = () => { pm.remove(); b.hidden = false; };
+    $('.pri', pm).onclick = async () => {
+      const name = sel.value;
+      const done = async () => { pm.remove(); b.hidden = false; toast(name ? 'Файл выбран' : 'Снова встроенная модель'); await loadStatus(); };
+      try {
+        const res = await postJSON('/api/models/pick', { role, name });
+        if (res && res.warn) { confirmBox('Это точно тот файл?', res.warn, 'Всё равно выбрать', async () => { await postJSON('/api/models/pick', { role, name, force: true }); await done(); }); return; }
+        await done();
+      } catch (err) { toast(err.message); }
     };
   } catch { toast('ComfyUI не отвечает'); }
 });
@@ -4226,47 +4267,111 @@ requestAnimationFrame(() => document.documentElement.classList.add('booted'));
 // An own main model in the mode itself: pick a file ComfyUI sees; the app says whether it fits the rest of the mode (speed-up LoRAs, format, video card)
 (() => {
   const MAIN = { video: 'fast_unet', lipsync: 'lipsync_unet', refs: 'lipsync_unet', actor: 'lipsync_unet', swap: 'lipsync_unet', long: 'lipsync_unet', action: 'action_unet', krea: 'krea_unet', qwen: 'qwen_unet' };
+  // A built-in LoRA of the mode is not a switch of its own: the section connects it when its own
+  // control is on (acceleration, Pika, the realism checkbox...). The row says which control it is,
+  // and Turbo-SLA is a real button here: it flips the section's «Быстрый черновик» itself.
+  const LORA_HOW = {
+    sla_lora: 'переключателем «Ускорение → Быстрый черновик» в этом разделе',
+    pika_lora: 'переключателем «Pika Flex / Прежнее» в этом разделе',
+    realism_lora: 'галочкой «Реализм» в блоке LoRA этого раздела',
+    motion_repair_lora: 'галочкой «Исправление движения» в блоке LoRA этого раздела',
+    speed_slider_lora: 'галочкой «LoRA Speed Slider» в этом разделе',
+    draft_lora: 'выбором «Черновик» в качестве в этом разделе',
+  };
+  const loraChip = (l, mode) => {
+    const file = String(l.name || '').split(/[\\/]/).pop();
+    if (l.custom) {
+      return `<button type="button" class="mp-l mine tgl${l.off ? ' off' : ''}" data-file="${esc(l.name)}" title="Нажмите, чтобы ${l.off ? 'включить' : 'выключить'} эту LoRA в этом режиме">${l.off ? '✕ выключена' : '✓ включена'} здесь: ${esc(file)}</button>`;
+    }
+    if (l.role === 'sla_lora' && mode === 'video') {
+      const st = (window.h3Video && window.h3Video.state) || {};
+      if (st.unet === 'fused') return `<span class="mp-l" title="Fused Turbo: ускорение уже внутри файла, отдельная LoRA не подключается">Turbo-SLA: внутри Fused Turbo</span>`;
+      const on = st.accel === 'sla';
+      return `<button type="button" class="mp-l tgl${on ? '' : ' off'}" data-accel="1" title="LoRA Turbo-SLA: 4 шага вместо 8, качество ниже. Нажмите, чтобы ${on ? 'выключить' : 'включить'} «Быстрый черновик» в этом разделе">${on ? '✓ включена' : '✕ выключена'} здесь: Turbo-SLA</button>`;
+    }
+    const how = LORA_HOW[l.role];
+    const title = l.must ? 'Нужна этому режиму' : how ? `Файл есть. Включается ${how}.` : 'Подключается по желанию';
+    return `<span class="mp-l${l.have ? '' : ' no'}${l.mine ? ' mine' : ''}" title="${esc(title)}">${esc(l.title)}: ${esc(file)}${l.have ? '' : ' (файла нет)'}</span>`;
+  };
   const refresh = async box => {
     const { mode, role } = box.dataset;
     try {
-      const r = await apiGet(`/api/models/compat?role=${role}&mode=${mode}`);
-      $('.mp-cur', box).textContent = (r.name || '').split(/[\\/]/).pop() || 'не найдена';
-      const src = $('.mp-src', box); src.textContent = r.picked ? 'СВОЯ МОДЕЛЬ' : 'встроенная'; src.className = 'mp-src ' + (r.picked ? 'own' : 'std');
-      box.classList.toggle('own', !!r.picked);
+      const r = await apiGet(`/api/models/compat?role=${encodeURIComponent(role)}&mode=${encodeURIComponent(mode)}`);
+      const cur = r.name || '';
+      box.dataset.current = cur;
+      const el = $('.mp-cur', box);
+      el.textContent = cur.split(/[\\/]/).pop() || 'не найдена';
+      el.title = cur ? 'Сейчас этот раздел использует: ' + cur : '';
+      const applied = typeof r.applied === 'boolean' ? r.applied : !!r.picked;   // a server from an older build has no `applied`
+      const src = $('.mp-src', box); src.textContent = applied ? 'СВОЯ МОДЕЛЬ' : 'встроенная'; src.className = 'mp-src ' + (applied ? 'own' : 'std');
+      box.classList.toggle('own', applied);
       $('.mp-reset', box).hidden = !r.picked;
       $('.mp-loras', box).innerHTML = (r.loras || []).length
-        ? '<span class="hint">LoRA:</span>' + r.loras.map(l => l.custom
-          ? `<button type="button" class="mp-l mine tgl${l.off ? ' off' : ''}" data-file="${esc(l.name)}" title="Нажмите, чтобы ${l.off ? 'включить' : 'выключить'} эту LoRA в этом режиме">${l.off ? '✕ выключена' : '✓ включена'} здесь: ${esc(String(l.name).split(/[\\/]/).pop())}</button>`
-          : `<span class="mp-l${l.have ? '' : ' no'}${l.mine ? ' mine' : ''}" title="${esc(l.must ? 'Нужна этому режиму' : 'Подключается по желанию')}">${esc(l.title)}: ${esc(String(l.name).split(/[\\/]/).pop())}${l.have ? '' : ' (файла нет)'}</span>`).join('')
+        ? '<span class="hint">LoRA:</span>' + r.loras.map(l => loraChip(l, mode)).join('')
         : '<span class="hint">LoRA: нет</span>';
-      $('.mp-notes', box).innerHTML = r.picked ? r.notes.map(n => `<div class="${n.level}">${n.level === 'bad' ? '✕ ' : n.level === 'warn' ? '⚠ ' : 'ⓘ '}${esc(n.text)}</div>`).join('') : '';
-    } catch { /* ComfyUI is off: the block stays as it is */ }
+      $('.mp-notes', box).innerHTML = r.picked ? (r.notes || []).map(n => `<div class="${n.level}">${n.level === 'bad' ? '✕ ' : n.level === 'warn' ? '⚠ ' : 'ⓘ '}${esc(n.text)}</div>`).join('') : '';
+    } catch (e) {
+      // do not leave «…» forever: say that the name could not be read, and keep the reason in the tooltip
+      const el = $('.mp-cur', box);
+      if (el.textContent === '…') { el.textContent = 'не удалось узнать'; el.title = String((e && e.message) || e); }
+    }
   };
+  // the section's own switch (acceleration, Pika, a LoRA checkbox) changes what this row shows:
+  // the mode module asks for a repaint instead of the page polling the switches
+  window.h3ModelRows = { refresh: mode => $$('.mdl-pick').filter(b => !mode || b.dataset.mode === mode).forEach(refresh) };
   const ensure = view => {
     const mode = view.id.replace('view-', ''), role = MAIN[mode];
     if (!role || $('.mdl-pick', view)) return;
     // the section's own title is moved into the pinned header while the section is open: the row then goes
     // right under the stage bar; a section with neither gets the row as its first element
     const anchor = $('.head', view) || $('.st-bar', view);
-    const row = `<div class="mdl-pick card" data-mode="${mode}" data-role="${role}"><span>Модель:</span><span class="mp-cur">…</span><span class="mp-src"></span><button class="btn mini mp-change" type="button" title="Выбрать другой файл модели из папки вашего ComfyUI">Выбрать свою…</button><button class="btn mini mp-reset" type="button" hidden>Вернуть встроенную</button><div class="pm" hidden><input type="search" class="pm-q" placeholder="Поиск по имени…" spellcheck="false"><select></select><button class="btn mini pri mp-ok" type="button">Выбрать</button><button class="btn mini mp-no" type="button">Отмена</button></div><div class="mp-loras"></div><div class="mp-notes"></div></div>`;
+    const row = `<div class="mdl-pick card" data-mode="${mode}" data-role="${role}"><span>Модель:</span><span class="mp-cur">…</span><span class="mp-src"></span><button class="btn mini mp-change" type="button" title="Выбрать другой файл модели из папки вашего ComfyUI">Выбрать свою…</button><button class="btn mini mp-reset" type="button" hidden>Вернуть встроенную</button><div class="pm" hidden><input type="search" class="pm-q" placeholder="Поиск по имени…" spellcheck="false"><select></select><button class="btn mini pri mp-ok" type="button">Выбрать</button><button class="btn mini mp-no" type="button">Отмена</button><button class="btn mini mp-all" type="button" hidden></button><span class="hint mp-info"></span></div><div class="mp-loras"></div><div class="mp-notes"></div></div>`;
     if (anchor) anchor.insertAdjacentHTML('afterend', row); else view.insertAdjacentHTML('afterbegin', row);
-    const box = $('.mdl-pick', view), pm = $('.pm', box), sel = $('select', pm);
-    refresh(box);
+    const box = $('.mdl-pick', view), pm = $('.pm', box), sel = $('select', pm), q = $('.pm-q', box);
+    // the page's own script runs before the deferred modules that own HTTP: the first read used to
+    // fail with «Модуль HTTP не загрузился» and the swallowed error left the row at «…» forever.
+    // DOMContentLoaded is the first moment `h3Api` is guaranteed to be in.
+    afterModules(() => refresh(box));
+    let picker = { files: [], all: false };
+    const paint = () => {
+      if (!picker.files.length) return;
+      const shown = fillModelOptions(sel, picker.files, picker.all, q.value);
+      const bad = picker.files.filter(f => f.fit === 'no').length;
+      const all = $('.mp-all', box);
+      all.hidden = !bad;
+      all.textContent = picker.all ? 'Скрыть неподходящие' : `Показать все файлы (${bad})`;
+      $('.mp-info', box).textContent = !shown.length
+        ? 'Нет файлов по запросу — нажмите «Показать все».'
+        : picker.all
+          ? `Показаны все файлы (${shown.length} из ${picker.files.length}), в том числе не подходящие этому разделу.`
+          : `Показано ${shown.length} из ${picker.files.length}: только файлы, которые подходят этому разделу.`;
+      $('.mp-ok', box).disabled = !shown.length;
+    };
     $('.mp-change', box).onclick = async () => {
       try {
-        const r = await apiGet('/api/models/files?role=' + role);
+        const r = await apiGet('/api/models/files?role=' + encodeURIComponent(role));
         if (!r.files?.length) { toast(`ComfyUI не видит файлов в папке ${r.folder}`); return; }
-        sel.innerHTML = r.files.map(f => `<option>${esc(f)}</option>`).join(''); pm.hidden = false;
-      } catch { toast('ComfyUI не отвечает'); }
+        picker = { files: r.files, all: false };
+        q.value = '';
+        pm.hidden = false;
+        paint();
+        q.focus();
+      } catch (e) { toast(e.message || 'ComfyUI не отвечает'); }
     };
-    $('.pm-q', box).oninput = e => {
-      const words = e.target.value.toLowerCase().split(/\s+/).filter(Boolean);
-      $$('option', sel).forEach(o => { o.hidden = !words.every(w => o.textContent.toLowerCase().includes(w)); });
-      const first = $$('option', sel).find(o => !o.hidden); if (words.length && first) first.selected = true;
-    };
+    $('.mp-all', box).onclick = () => { picker.all = !picker.all; paint(); };
+    q.oninput = () => paint();
     $('.mp-no', box).onclick = () => { pm.hidden = true; };
     $('.mp-loras', box).onclick = async e => {
       const b = e.target.closest('.tgl'); if (!b) return;
+      if (b.dataset.accel) {
+        // Turbo-SLA is switched by the section's own «Ускорение» control: press that button, so its
+        // state, the hint about a missing file and the preview all update exactly as if the user did it
+        const on = !!(window.h3Video && window.h3Video.state && window.h3Video.state.accel === 'sla');
+        const btn = document.querySelector(`.v-accel button[data-ac="${on ? 'normal' : 'sla'}"]`);
+        if (!btn) { toast('Переключатель ускорения — в параметрах раздела'); return; }
+        btn.click();
+        return;
+      }
       try { await postJSON('/api/loras/custom/mode', { file: b.dataset.file, mode, on: b.classList.contains('off') }); refresh(box); } catch (err) { toast(err.message); }
     };
     $('.mp-ok', box).onclick = async () => {

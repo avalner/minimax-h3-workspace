@@ -611,10 +611,22 @@ class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, Agent
             def seen(file):
                 ok = {file, *catalog.FILE_ALIASES.get(file, ())}  # same file under another name (e.g. upscaler from Hugging Face)
                 return next((n for n in visible[entry["category"]] if n.replace("/", "\\").split("\\")[-1] in ok), None)
-            others = {v["file"] for r, vs in catalog.VARIANTS.items() if r != role for v in vs.values()}
-            if picked and picked.replace("/", "\\").split("\\")[-1] in others:  # the file of ANOTHER model of the app: never feed it to this role
+            others = {v["file"].lower() for r, vs in catalog.VARIANTS.items() if r != role for v in vs.values()}
+            pick_base = catalog.file_base(picked).lower() if picked else ""
+            if pick_base and pick_base in others:  # the file of ANOTHER model of the app: never feed it to this role
                 picked = None
-            hit = picked if picked in visible[entry["category"]] else seen(entry["file"])
+            hit = None
+            if picked:
+                # the hand pick is stored as ComfyUI lists it (usually «MinimaxH3\file»), and the
+                # lists above hold exactly those names: an exact path wins, then the base name (a
+                # pick saved before the subfolder rule, or with the other separator) — never a
+                # silent fallback to the built-in file
+                want = picked.replace("/", "\\").lower()
+                hit = next((n for n in visible[entry["category"]] if n.replace("/", "\\").lower() == want), None)
+                if not hit:
+                    hit = next((n for n in visible[entry["category"]] if catalog.same_file(n, picked)), None)
+            if not hit:
+                hit = seen(entry["file"])
             if not hit and role not in (self.config.get("choice_override") or {}):  # another variant the user already has (v1.3 instead of v2); never for a version picked by hand
                 hit = next(filter(None, (seen(v["file"]) for v in catalog.VARIANTS[role].values())), None)
             names[role] = hit or entry["name"]

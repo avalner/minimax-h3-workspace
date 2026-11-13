@@ -21,6 +21,11 @@
 /* «Модели» is not highlighted all the time: the only «you are here» marker in the navigation is .nav.active.
    Before the engine is set up it stands out by itself (body.first-run, «Начните здесь»). */
 .mdl-pick .pm{flex-basis:100%;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+/* the picker of a mode: the same controls as the model rows in «Модели», and a line that says how many
+   files were hidden as unfitting (they stay behind «Показать все») */
+.mdl-pick .pm .pm-q{flex:1 1 180px;background:var(--bg-2);border:1px solid var(--line);border-radius:8px;padding:7px 10px;outline:none}
+.mdl-pick .pm select{flex:1 1 260px;min-width:0;background:var(--bg-2);border:1px solid var(--line);border-radius:8px;padding:7px 8px;color:var(--text);font-family:var(--mono);font-size:12px}
+.mdl-pick .pm .mp-info,.m .pm .mp-info{flex-basis:100%;font-size:12px;opacity:.8}
 .mdl-pick .mp-notes{flex-basis:100%;display:grid;gap:4px;font-size:12.5px}
 .mdl-pick .mp-notes .bad{color:#e5484d}
 .mdl-pick .mp-notes .warn{color:#d6a13a}

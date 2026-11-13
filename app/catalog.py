@@ -220,6 +220,34 @@ VARIANTS = {
     },
 }
 
+def _known_files():
+    """Every model file the app knows, by base name, with the role it belongs to.
+
+    A user may keep a file in any subfolder of a models category: only the base name is compared,
+    exactly as ComfyUI lists it in `/models/<category>`.
+    """
+    out = {}
+    for role, variants in VARIANTS.items():
+        for variant in variants.values():
+            for name in (variant["file"], *FILE_ALIASES.get(variant["file"], ())):
+                out.setdefault(name.lower(), role)
+    return out
+
+
+KNOWN_FILES = _known_files()
+
+
+def file_base(name):
+    """The file name without the subfolder ComfyUI may list it under (Windows or POSIX separators)."""
+    return str(name or "").replace("/", "\\").split("\\")[-1]
+
+
+def same_file(a, b):
+    """Two names point at the same model file: the folder it is kept in does not matter."""
+    a, b = file_base(a).lower(), file_base(b).lower()
+    return bool(a) and a == b
+
+
 # What a file name of each role must contain (any of these words, any case). Used only to warn when a file is picked
 # by hand that does not look like the right one, and to say what to check when ComfyUI fails with a shape error.
 ROLE_MARKS = {
@@ -231,6 +259,7 @@ ROLE_MARKS = {
     "draft_lora": ["dmad"],
     "seedvr_unet": ["seedvr"], "seedvr_vae": ["seedvr"], "relayvsr_unet": ["relayvsr"], "relayvsr_vae": ["relayvsr"], "krea_clip": ["qwen3vl", "qwen3-vl"],
     "krea_vae": ["qwen_image", "qwen-image"], "kreareal_unet": ["krea"], "kreareal_lora": ["realism"],
+    "krea_unet": ["krea"],
     "qwen_unet": ["qwen"], "qwen_clip": ["qwen3vl", "qwen3-vl"], "qwen_vae": ["qwen"],
     "flux_unet": ["flux"], "flux_clip": ["qwen_3", "qwen3"], "flux_vae": ["flux"],
 }
@@ -465,6 +494,35 @@ def model_family(filename):
     if "fasth3" in n or "fl2v" in n:
         return "fast"
     return None
+
+
+def file_fit(role, filename):
+    """Can this file be used for `role`? Returns (fit, why), fit is:
+
+    - "ok"      — it is this role's file, or its type and name clearly match;
+    - "unknown" — the name has the right marks but the app cannot tell the model type, so the user decides;
+    - "no"      — a known file of ANOTHER role or another H3 model type: generation would break.
+
+    The list of files offered for a hand pick uses this, so an Image-to-Video picker does not show
+    LoRAs, text encoders and the models of other sections.
+    """
+    name = filename.replace("/", "\\").split("\\")[-1]
+    other = KNOWN_FILES.get(name.lower())
+    if other and other != role:
+        return "no", f"это файл модели «{ROLE_TITLES.get(other, other)}»"
+    want, got = ROLE_FAMILY.get(role), model_family(filename)
+    if want and got and got != want:
+        return "no", f"по названию это модель другого типа: {FAMILY_TITLE[got]}"
+    if other == role:
+        return "ok", ""
+    if not looks_right(role, filename):
+        foreign = foreign_marks(role, filename)
+        if foreign:
+            return "no", f"это файл модели «{ROLE_TITLES.get(foreign[0], foreign[0])}»"
+        return "no", f"в названии нет {marks_text(role)}"
+    if want and not got:
+        return "unknown", "тип модели по названию не определить"
+    return "ok", ""
 
 
 def compat_notes(mode, role, filename, compute_cap=0.0):

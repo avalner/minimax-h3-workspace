@@ -75,7 +75,14 @@ class ModelRoutes:
             return web.json_response({"error": "ComfyUI не отвечает"}, status=503)
 
     async def h_models_files(self, req):
-        """Files ComfyUI sees in the folder this model role lives in, for picking one by hand."""
+        """Files ComfyUI sees in the folder this model role lives in, judged for this role.
+
+        Every file gets `fit`: "ok" (clearly this role's file), "unknown" (the name fits, the type
+        cannot be told) or "no" (another role's file or another model type). The window shows the
+        fitting files at once and keeps the rest behind «Показать все»: a file of another section is
+        not offered by accident, but a renamed model of the user stays reachable. `current` marks the
+        file this role uses now, so re-opening the picker after a reload shows the same choice.
+        """
         role = req.query.get("role", "")
         if role not in catalog.VARIANTS:
             raise web.HTTPBadRequest(text="Неизвестная модель")
@@ -84,7 +91,15 @@ class ModelRoutes:
             _, lst = await self.comfy_json("GET", f"/models/{cat}")
         except Exception:
             raise web.HTTPServiceUnavailable(text="ComfyUI не отвечает")
-        return web.json_response({"files": lst or [], "folder": cat})
+        current = self.model_names.get(role, "")
+        files = []
+        for name in lst or []:
+            fit, why = catalog.file_fit(role, name)
+            files.append({"name": name, "fit": fit, "why": why, "current": catalog.same_file(name, current)})
+        order = {"ok": 0, "unknown": 1, "no": 2}
+        files.sort(key=lambda f: (not f["current"], order.get(f["fit"], 2), f["name"].lower()))
+        return web.json_response({"files": files, "folder": cat, "role": role,
+                                  "marks": catalog.marks_text(role), "current": current})
 
     async def h_models_download(self, req):
         """Own ComfyUI: download missing model files of the app's catalog into the user's models folder (resumable)."""
@@ -165,22 +180,41 @@ class ModelRoutes:
             raise web.HTTPBadRequest(text="Неизвестная модель")
         if self.hw is None:
             self.hw = await asyncio.to_thread(engine.detect_hardware)
-        notes = catalog.compat_notes(mode, role, name or self.model_names.get(role, ""), self.hw.get("compute_cap") or 0)
+        current = self.model_names.get(role, "")
+        pick = (self.config.get("model_pick") or {}).get(role)
+        # a pick whose file disappeared is kept in the settings, but the role falls back to the
+        # built-in file: the window must say «встроенная», not claim a model that is not used
+        applied = bool(pick) and catalog.same_file(pick, current)
+        notes = catalog.compat_notes(mode, role, name or current, self.hw.get("compute_cap") or 0)
+        if not applied:  # the notes describe the built-in file now, not a hand-picked one
+            notes = [(lv, t) for lv, t in notes if not (lv == "info" and "Это своя модель" in t)]
+        if pick and not applied:
+            notes.insert(0, ("warn", (
+                f"Выбранный файл «{catalog.file_base(pick)}» не найден в папке моделей этого раздела: "
+                f"сейчас используется «{catalog.file_base(current)}». Верните файл на место или нажмите «Вернуть встроенную».")))
         missing = {m["role"] for m in self.missing}
         picked = self.config.get("model_pick") or {}
-        loras = [{"title": catalog.ROLE_TITLES.get(r, r), "name": self.model_names.get(r, ""), "have": r not in missing,
+        loras = [{"role": r, "title": catalog.ROLE_TITLES.get(r, r), "name": self.model_names.get(r, ""), "have": r not in missing,
                   "must": r in catalog.MODE_ROLES.get(mode, []), "mine": r in picked}
                  for r in catalog.MODE_ROLES.get(mode, []) + catalog.MODE_OPTIONAL.get(mode, []) if r.endswith("_lora") and r in self.model_names]
         loras += [{"title": "Своя LoRA", "name": x["file"], "have": True, "must": False, "mine": True, "custom": True, "off": mode in (x.get("skip") or [])}
                   for x in self.unique_loras() if x.get("on", True)]
         return web.json_response({"notes": [{"level": lv, "text": t} for lv, t in notes], "loras": loras,
-                                  "picked": picked.get(role), "name": self.model_names.get(role)})
+                                  "picked": pick, "applied": applied, "name": current})
 
     async def h_models_pick(self, req):
         body = await req.json()
         role, name = body.get("role"), body.get("name") or ""
         if role not in catalog.VARIANTS:
             raise web.HTTPBadRequest(text="Неизвестная модель")
+        if name:
+            # the file of another role would be silently ignored later (resolve_models never feeds it to
+            # this role), so say it here instead of saving a choice that cannot be applied
+            other = catalog.KNOWN_FILES.get(catalog.file_base(name).lower())
+            if other and other != role:
+                raise web.HTTPBadRequest(text=(
+                    f"Файл «{catalog.file_base(name)}» — это модель «{catalog.ROLE_TITLES.get(other, other)}», "
+                    f"а здесь нужна «{catalog.ROLE_TITLES.get(role, role)}». Выберите файл из списка этого раздела."))
         if name and not catalog.looks_right(role, name):
             foreign = catalog.foreign_marks(role, name)
             if foreign:

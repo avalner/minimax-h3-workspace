@@ -93,9 +93,9 @@
   }
   scope.listen($('#vParams'), 'click', e => {
     const b = e.target.closest('.v-accel button');
-    if (b) { V.accel = b.dataset.ac; vAccUpd(); vAccCheck(); vPrev(); return; }
+    if (b) { V.accel = b.dataset.ac; vAccUpd(); vAccCheck(); vPrev(); window.h3ModelRows?.refresh('video'); return; }
     const u = e.target.closest('.v-unet button');
-    if (u) { V.unet = u.dataset.un; vUnetUpd(); vFusedCheck(); vPrev(); }
+    if (u) { V.unet = u.dataset.un; vUnetUpd(); vFusedCheck(); vPrev(); window.h3ModelRows?.refresh('video'); }
   });
   ui = { update: vUpd, refresh: vPrev, mode: vMode,
          accCheck: vAccCheck, fusedCheck: vFusedCheck,
@@ -136,6 +136,7 @@
       V.unet = params.model;                          // the model the job was made with, not a caption guess
       V.accel = V.unet === 'fast' ? params.acceleration : 'normal';
       ui?.unetUpd(); ui?.accUpd(); ui?.accCheck(); ui?.fusedCheck();
+      window.h3ModelRows?.refresh('video');   // the model row shows the acceleration state too
       if (ui) { ui.update(); ui.refresh(); ui.mode(); }
       noticeJobParams(params);
   }
