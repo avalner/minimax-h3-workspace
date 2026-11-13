@@ -994,6 +994,8 @@ class GenerateRoutes:
             "selflift": bool(oi), "refiner": bool(oi2), "refiner_def": (oi2 or {}).get("H3SigmaRefiner"),
             "upscaler": have_up, "dmad": dmad,
             "speed": None if "speed_slider_lora" in missing else self.model_names.get("speed_slider_lora"),
+            # the window words the hint differently: the app's own ComfyUI gets the packs by itself, a user's does not
+            "engine": self.config.get("engine"),
         }
 
     async def h_action_info(self, _req):

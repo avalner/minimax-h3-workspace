@@ -26,6 +26,13 @@ NODE_PACKS = [
     # memory savers (MiniMaxChunkFeedForward, MiniMaxLowVRAMAttention) used by the long video graphs
     {"name": "ComfyUI-KJNodes", "repo": "kijai/ComfyUI-KJNodes",
      "commit": "ab72eda7ffad6280422d71ab7d54d3fb87c0ba18"},
+    # The exact action workflow (PM «Minimax H3 Best Action Workflow»): SelfLift samples 8 steps at 0.6x, lifts the
+    # latent with the learned upscaler and finishes with 4 steps at full size; YCNodes adds the finishing sigma step.
+    # Both were read before they were added: no network, no shell, no exec, no extra pip packages; pinned commits.
+    {"name": "comfyui-SelfLift", "repo": "facok/comfyui-SelfLift",
+     "commit": "835c3cf7919410f71f414688f049c6ca497789d0"},          # no LICENSE file in the repository
+    {"name": "ComfyUI-YCNodes-MiniMax-H3", "repo": "yichengup/ComfyUI-YCNodes-MiniMax-H3",   # MIT, the version the workflow was made with
+     "commit": "efbe83f69ffa97a251a575ce42edc7bf8005da0c"},
 ]
 
 # What each mode needs from custom nodes: checked in a user's own ComfyUI (a new install gets them by itself).
@@ -41,6 +48,10 @@ NODE_CHECKS = [
      "optional": False, "why": "видео, в котором меняем персонажа"},
     {"pack": "ComfyUI-KJNodes", "classes": ["MiniMaxChunkFeedForward", "MiniMaxLowVRAMAttention"], "modes": ["long"],
      "optional": False, "why": "экономия видеопамяти в длинном видео"},
+    {"pack": "comfyui-SelfLift", "classes": ["SelfLiftH3Sampler"], "modes": ["action"],
+     "optional": False, "why": "точный режим экшн-сцен (8 шагов в низком разрешении + 4 в высоком)"},
+    {"pack": "ComfyUI-YCNodes-MiniMax-H3", "classes": ["H3SigmaRefiner"], "modes": ["action"],
+     "optional": False, "why": "точный режим экшн-сцен (доводочный шаг)"},
 ]
 
 

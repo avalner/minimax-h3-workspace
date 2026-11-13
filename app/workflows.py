@@ -877,7 +877,8 @@ def action_graph(m, prompt, width, height, seconds, seed, images, audios, faithf
                 "model": ["7", 0], "positive": ["8", 0], "negative": ["9", 0], "vae": ["5", 0],
                 "latent_image": ["8", 1], "sampler": ["12", 0], "sigmas": ["13", 0], "seed": seed, "cfg": 1.0,
                 "transition_step": 8, "lowres_scale": ACTION_LOWRES, "rho": 0.0, "w_min": 0.5, "w_max": 1.0,
-                "upscaler_model": m["action_upscaler"], "highres_tiling": True}},
+                "upscaler_model": m["action_upscaler"], "highres_tiling": True,
+                "upscaler_unload": True}},   # as in the original workflow: the upscaler leaves the video memory after use
             "20": {"class_type": "VAEDecode", "inputs": {"samples": ["14", 0], "vae": ["5", 0]}},
             "21": {"class_type": "VAEDecodeAudio", "inputs": {"samples": ["14", 0], "vae": ["6", 0]}},
         })

@@ -995,12 +995,17 @@ function makeRefMode(cfg) {
         // only the LoRAs this ComfyUI actually has can be switched and tuned
         mountLoras($('.rm-loras', root), S, [...(a.dmad ? ['dmad'] : []), ...(a.speed ? ['speed'] : [])]);
         const row = (ok, t) => `<div class="${ok ? 'ok-t' : 'warn-t'}">${ok ? '✓' : '—'} ${t}</div>`;
+        // the two node packs of the exact scheme ship with the app: its own ComfyUI gets them on the next start,
+        // a user's ComfyUI needs them put into custom_nodes by hand
+        const lack = a.engine === 'managed'
+          ? 'Нод точной схемы ещё нет: закройте и откройте программу — она поставит их сама, и точный режим включится.'
+          : 'Нод точной схемы нет в вашем ComfyUI: поставьте их в custom_nodes (ссылки — «Настройки» → «Ноды»), и приложение переключится само.';
         box.innerHTML = (a.faithful ? '<b class="ok-t">Точная копия вашего workflow</b>' : '<b class="warn-t">Упрощённая схема (то же 8 + 4 шага)</b>')
           + row(a.selflift, 'SelfLift сэмплер (8 шагов в низком разрешении + 4 в высоком)')
           + row(a.refiner, 'H3 Sigma Refiner (+1 финальный шаг)')
           + row(a.upscaler, 'апскейлер h3_upscaler_lms')
           + row(!!a.dmad, 'LoRA DMAD') + row(!!a.speed, 'LoRA Speed Slider')
-          + (a.faithful ? '' : '<span class="hint">Чего нет — заменяется ближайшим: обычный двухпроходный сэмплинг с тем же графиком 8 + 4. Установите недостающее в ComfyUI, и приложение само переключится на точную копию.</span>');
+          + (a.faithful ? '' : `<span class="hint">${lack} Пока считается упрощённая схема: тот же график 8 + 4, но картинка грязнее.</span>`);
       } catch { box.innerHTML = '<span class="hint">ComfyUI не отвечает</span>'; }
     };
     root._check = check;
