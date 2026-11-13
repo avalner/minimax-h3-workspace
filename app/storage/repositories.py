@@ -100,6 +100,15 @@ class ProjectRepository:
                         (project_id, str(name), float(now)))
         return self.get(project_id)
 
+    def rename(self, project_id, name):
+        """The id is what the records point at, so a rename touches nothing else."""
+        self.db.execute("UPDATE projects SET name=? WHERE id=?", (str(name), project_id))
+        return self.get(project_id)
+
+    def delete(self, project_id):
+        """The row only: what the project held is the caller's business (it is relabelled or removed)."""
+        self.db.execute("DELETE FROM projects WHERE id=?", (project_id,))
+
 
 class StageRepository:
     """Stages: saved points of a section (settings, files, the clip in the player).

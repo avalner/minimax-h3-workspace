@@ -387,6 +387,7 @@ function makeRefMode(cfg) {
     }
     root._save = () => { clearTimeout(saveT); saveT = setTimeout(saveNow, 700); };
     root._flush = () => { clearTimeout(saveT); saveNow(); };
+    root._cancelSave = () => clearTimeout(saveT);
     root._snap = () => { saveNow(); return JSON.parse(JSON.stringify(loadAll()[root._run] || null)); };   // a stage of the work: the whole project as it is now
     root._openStage = async (proj, sid) => {
       let r = {}; try { r = await apiPost('/api/long/stage', { run: proj.run, id: sid, action: 'restore' }); } catch {}
@@ -450,7 +451,10 @@ function makeRefMode(cfg) {
     root._projectChanged = async () => {
       const project = window.h3Projects?.active?.() || '';
       if (project === root._project) return;
-      root._flush();                                       // the film is saved under its own project
+      // a film is saved into the project it was made in — but a project that has just been deleted
+      // takes its film with it, and a save would only recreate the folder
+      if (PROJECTS_VIEW.list.some(p => p.id === root._project)) root._flush();
+      else { root._cancelSave?.(); root._project = ''; }
       const run = await projectFilm(project);
       if (run) { await root._openRun(run); return; }
       $$('.sc', root).forEach(c => c.remove());

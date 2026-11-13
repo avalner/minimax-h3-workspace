@@ -364,10 +364,16 @@ body.first-run .pr-first{display:flex}
 .proj-all{flex:none;padding:3px 10px;border:1px solid var(--line);border-radius:999px;background:transparent;color:var(--muted);font:inherit;font-size:11px;cursor:pointer}
 .proj-all.on{color:var(--text);border-color:var(--accent);background:var(--accent-soft)}
 .proj-pop{position:absolute;top:100%;right:0;z-index:60;min-width:280px;max-height:60vh;overflow:auto;background:var(--bg-2);border:1px solid var(--line);border-radius:12px;box-shadow:0 18px 40px rgba(0,0,0,.38);padding:6px}
-.proj-item{display:block;width:100%;text-align:left;padding:8px 10px;border:0;background:transparent;color:var(--text);font:inherit;font-size:13px;border-radius:8px;cursor:pointer}
+.proj-item{display:flex;align-items:center;gap:6px;width:100%;text-align:left;padding:8px 10px;border:0;background:transparent;color:var(--text);font:inherit;font-size:13px;border-radius:8px;cursor:pointer}
 .proj-item:hover{background:rgba(var(--surface-rgb),.7)}
 .proj-item.on{background:var(--accent-soft);font-weight:600}
-.proj-item .pmark{float:right;color:var(--accent)}
+.proj-item .pn{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.proj-item .pmark{flex:none;color:var(--accent)}
+/* rename and delete of a project: small buttons that appear on the row under the cursor */
+.proj-item .pact{flex:none;width:20px;height:20px;display:grid;place-items:center;border-radius:6px;font-style:normal;font-size:11px;line-height:1;color:var(--dim);opacity:0;transition:opacity .12s}
+.proj-item:hover .pact,.proj-item .pact:focus{opacity:1}
+.proj-item .pact:hover{background:rgba(var(--surface-rgb),.95);color:var(--text)}
+.proj-item .pact.del:hover{background:#c0303f;color:#fff}
 .proj-sep{height:1px;background:var(--line);margin:6px 4px}
 .proj-new{display:flex;gap:6px;padding:6px 4px 2px}
 .proj-new input{flex:1;min-width:0;padding:6px 8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text);font:inherit;font-size:12px}
@@ -380,4 +386,30 @@ body.first-run .pr-first{display:flex}
 .ddp[hidden]{display:none}
 .ddp-t{font-weight:700;font-size:12.5px;margin-bottom:6px}
 .ddp-b{display:flex;gap:8px;justify-content:flex-end}
+
+/* ---------- deleting a project: what it holds, and what to keep ---------- */
+.pd{display:flex;flex-direction:column;width:min(720px,100%);max-height:calc(var(--vh,1vh)*100 - 40px);padding:0}
+.pd-h{display:flex;align-items:center;gap:12px;padding:18px 22px 12px;border-bottom:1px solid var(--line)}
+.pd-h h3{flex:1;min-width:0;font-size:17px}
+.pd-h h3{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pd-body{padding:16px 22px;overflow:auto;min-height:80px}
+.pd-foot{display:flex;gap:10px;justify-content:flex-end;align-items:center;flex-wrap:wrap;padding:14px 22px 18px;border-top:1px solid var(--line)}
+.pd-foot .btn[disabled]{opacity:.55;cursor:default}
+.pd-lead{margin:0 0 10px;font-weight:700}
+.pd-note{margin:0;font-size:12.5px;line-height:1.5;color:var(--muted)}
+.pd-counts{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin:0 0 14px}
+.pd-counts>div{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface-2);font-size:12.5px;color:var(--muted)}
+.pd-counts b{font-size:15px;color:var(--text)}
+.pd-tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 10px}
+.pd-chosen{margin-left:auto;font-size:12.5px;color:var(--muted)}
+.pd-chosen b{color:var(--text)}
+.pd-g{margin:0 0 12px}
+.pd-gh{font-size:12px;font-weight:700;color:var(--muted);margin:0 0 6px}
+.pd-gh span{margin-left:6px;padding:0 6px;border-radius:99px;background:var(--surface-2);font-size:11px}
+.pd-list{max-height:44vh;overflow:auto;padding-right:2px}
+.pd-row{display:flex;align-items:center;gap:9px;padding:6px 8px;border-radius:8px;font-size:12.5px;cursor:pointer;min-width:0}
+.pd-row:hover{background:rgba(var(--surface-rgb),.6)}
+.pd-row.on{background:var(--accent-soft)}
+.pd-row span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pd-row input{flex:none;width:15px;height:15px;accent-color:var(--accent)}
 

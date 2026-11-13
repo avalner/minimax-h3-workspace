@@ -6,7 +6,8 @@ Everything here works without aiohttp routes and without the window.
 
 from webcommon import (
     BIN_PREVIEW, BIN_PREVIEW_META, CLIENT_ID, DATA_DIR, ENGINE_STOP_TIMEOUT, JobStore, LONG_DIR,
-    Library, ROOT, SHUTDOWN_BUDGET, STATE_DB, STORE_ERRORS, _ssl_context, comfy_error_text
+    Library, ROOT, SHUTDOWN_BUDGET, STATE_DB, STORE_ERRORS, _ssl_context, comfy_error_text,
+    drop_long_film, long_films, set_long_project
 )
 
 import asyncio
@@ -194,6 +195,131 @@ class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, Agent
         project = self.projects_repo.create(name, now=time.time())
         self.config.update(active_project=project["id"])
         return project
+
+    def rename_project(self, project_id, name):
+        """Only the name changes: the id stays, so every result, stage and film keeps pointing at the
+        same work after a rename (a project is a label, not a folder)."""
+        project = self.projects_repo.get(str(project_id or ""))
+        if project is None:
+            raise KeyError(project_id)
+        name = clean_name(name)
+        if not name:
+            raise ValueError("Название проекта не может быть пустым")
+        return self.projects_repo.rename(project["id"], name)
+
+    def project_assets(self, project_id):
+        """What a project holds — the counts and the list the window's delete dialog offers to keep.
+
+        Everything that carries a project is here: Library items, drafts, stages and the studio's
+        films. The dialog starts with nothing chosen, so this list is also the only place the user
+        sees what is about to be deleted.
+        """
+        project = self.projects_repo.get(str(project_id or ""))
+        if project is None:
+            raise KeyError(project_id)
+        pid = project["id"]
+        return {
+            "project": project,
+            "library": [self.asset_row(x) for x in self.library.items if x.get("project") == pid],
+            "drafts": [self.asset_row(x) for x in self.pending.values() if x.get("project") == pid],
+            "stages": [{"id": s["id"], "mode": s.get("mode") or "", "name": s.get("name") or "",
+                        "date": str(s.get("date") or ""), "auto": bool(s.get("auto")),
+                        "files": len(s.get("files") or [])}
+                       for s in self.stages_repo.load() if s.get("project") == pid],
+            "films": [{"run": f["run"], "scenes": len(f.get("scenes") or []),
+                       "done": sum(1 for scene in (f.get("scenes") or [])
+                                   if scene.get("done") or scene.get("draftDone")),
+                       "saved": f.get("saved")}
+                      for f in long_films() if str(f.get("project") or "") == pid],
+        }
+
+    @staticmethod
+    def asset_row(item):
+        """One line of the delete dialog: what it is, and just enough to recognise it."""
+        return {"id": item["id"], "kind": item.get("kind") or "", "mode": item.get("mode") or "",
+                "prompt": str(item.get("prompt") or "")[:70], "date": str(item.get("date") or "")}
+
+    async def delete_project(self, project_id, keep=None):
+        """Delete a project; what the user asked to keep moves to «Основное».
+
+        Keeping is only a new label — no file is copied or moved, because a project is not a folder.
+        The rest goes for good: the files of Library items and drafts to the Recycle Bin, stages and
+        films from the disk. A file that would not go into the bin is not lost with the project: its
+        record stays and moves to «Основное», so the user can delete it there and try again.
+        """
+        project = self.projects_repo.get(str(project_id or ""))
+        if project is None:
+            raise KeyError(project_id)
+        if project["id"] == DEFAULT_PROJECT_ID:
+            raise ValueError("Проект «Основное» удалить нельзя: в него можно перенести работу "
+                             "остальных проектов")
+        pid, target = project["id"], DEFAULT_PROJECT_ID
+        keep = keep if isinstance(keep, dict) else {}
+        chosen = {name: {str(x) for x in (keep.get(name) or []) if isinstance(x, str)}
+                  for name in ("library", "drafts", "stages", "films")}
+        library = [x for x in self.library.items if x.get("project") == pid]
+        drafts = [x for x in self.pending.values() if x.get("project") == pid]
+        stages = [s for s in self.stages_repo.load() if s.get("project") == pid]
+        films = [f for f in long_films() if str(f.get("project") or "") == pid]
+        moved = {"library": [], "drafts": [], "stages": [], "films": []}
+        deleted = {"library": [], "drafts": [], "stages": [], "films": []}
+        kept_back = {"library": [], "drafts": []}   # a file that would not go: the record stays
+
+        def relabel(item, group):
+            item["project"] = target
+            return moved[group].append(item["id"])
+
+        for item in library:                     # the chosen work keeps its files and changes its label
+            if item["id"] in chosen["library"]:
+                relabel(item, "library")
+                self.library.save(item)
+        for item in drafts:
+            if item["id"] in chosen["drafts"]:
+                relabel(item, "drafts")
+                self.drafts_repo.save(item)
+        for stage in stages:
+            if stage["id"] in chosen["stages"]:
+                stage["project"] = target
+                self.stages_repo.save(stage)
+                moved["stages"].append(stage["id"])
+        for film in films:
+            if film["run"] in chosen["films"] and set_long_project(film["run"], target):
+                moved["films"].append(film["run"])
+
+        drop_library = [x for x in library if x["id"] not in chosen["library"]]
+        if drop_library:
+            result = await self.delete_items(drop_library)
+            deleted["library"] = list(result["done"])
+            for item_id in result["failed"]:     # the file is still there: keep the item, under «Основное»
+                item = self.library.get(item_id)
+                if item is not None:
+                    item["project"] = target
+                    self.library.save(item)
+                    kept_back["library"].append(item_id)
+        gone_drafts = []
+        for item in (x for x in drafts if x["id"] not in chosen["drafts"]):
+            if await self.recycle_draft(item):
+                deleted["drafts"].append(item["id"])
+                gone_drafts.append(item["id"])
+            else:
+                item["project"] = target
+                self.drafts_repo.save(item)
+                kept_back["drafts"].append(item["id"])
+        for stage in (s for s in stages if s["id"] not in chosen["stages"]):
+            self.stages_repo.delete(stage["id"])
+            deleted["stages"].append(stage["id"])
+        for film in (f for f in films if f["run"] not in chosen["films"]):
+            if drop_long_film(film["run"]):
+                deleted["films"].append(film["run"])
+        with self.db.transaction():
+            self.projects_repo.delete(pid)
+            if self.config.get("active_project") == pid:
+                self.config.update(active_project=target)
+        for item_id in gone_drafts:              # another window must not keep showing this draft
+            await self.broadcast({"type": "draft_removed", "id": item_id})
+        return {"project": project, "target": target, "projects": self.projects(),
+                "active": self.active_project(), "moved": moved, "deleted": deleted,
+                "kept_back": kept_back}
 
     def submission_meta(self, meta):
         """A job's meta carries the project it was submitted in — the active one unless the caller

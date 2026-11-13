@@ -859,6 +859,20 @@ equirements.txt</code><br>
   </div>
 </div>
 
+<!-- Deleting a project is the one place that destroys work, so the dialog first says what the project
+     holds and then lets the user choose what to keep: the kept part only changes its project, the
+     rest goes (files to the Recycle Bin, stages and films from the disk). -->
+<div class="modal" id="projDel" hidden>
+  <div class="box pd" role="dialog" aria-modal="true" aria-labelledby="pdTitle">
+    <div class="pd-h">
+      <h3 id="pdTitle">Удалить проект?</h3>
+      <button class="close" data-close aria-label="Закрыть">✕</button>
+    </div>
+    <div class="pd-body" id="pdBody"></div>
+    <div class="pd-foot" id="pdFoot"></div>
+  </div>
+</div>
+
 <div class="modal" id="qjob" hidden>
   <div class="box qj" role="dialog" aria-modal="true" aria-labelledby="qjTitle">
     <div class="qj-h">
@@ -1824,6 +1838,8 @@ function fmtDate(d) {
 /* ---------- projects: the work every new result belongs to ---------- */
 // A project is a label, not a folder: the switcher chooses what the lists show and where new results
 // go. "Все проекты" is a view switch — the active project stays the one results are stamped with.
+const DEFAULT_PROJECT = 'main';   // «Основное»: created by the migration, never deleted
+let PROJ_RENAME = null;           // the project whose name is being edited in the switcher, or null
 function paintProjects() {
   const bar = $('#tbProj');
   if (!bar || !$('#projName')) return;
@@ -1833,8 +1849,16 @@ function paintProjects() {
   const all = $('#projAll');
   all.classList.toggle('on', PROJECTS_VIEW.all);
   all.textContent = PROJECTS_VIEW.all ? 'Все проекты' : 'Этот проект';
-  $('#projPop').innerHTML = PROJECTS_VIEW.list.map(p =>
-    `<button type="button" class="proj-item${p.id === PROJECTS_VIEW.active ? ' on' : ''}" data-pid="${esc(p.id)}">${esc(p.name)}${p.id === PROJECTS_VIEW.active ? '<span class="pmark">✓</span>' : ''}</button>`).join('')
+  const renaming = PROJECTS_VIEW.list.find(p => p.id === PROJ_RENAME);
+  $('#projPop').innerHTML =
+    (renaming ? '<div class="proj-new"><input id="projRenameName" maxlength="60" placeholder="Название проекта" '
+      + `value="${esc(renaming.name)}"><button type="button" class="btn mini pri" id="projRenameOk">Сохранить</button>`
+      + '<button type="button" class="btn mini" id="projRenameNo">Отмена</button></div>' : '')
+    + PROJECTS_VIEW.list.map(p =>
+      `<button type="button" class="proj-item${p.id === PROJECTS_VIEW.active ? ' on' : ''}" data-pid="${esc(p.id)}" title="${esc(p.name)}"><span class="pn">${esc(p.name)}</span>`
+      + `<i class="pact ren" data-rename="${esc(p.id)}" role="button" title="Переименовать проект">✎</i>`
+      + (p.id === DEFAULT_PROJECT ? '' : `<i class="pact del" data-delproj="${esc(p.id)}" role="button" title="Удалить проект">✕</i>`)
+      + (p.id === PROJECTS_VIEW.active ? '<span class="pmark">✓</span>' : '') + '</button>').join('')
     + '<div class="proj-sep"></div>'
     + '<div class="proj-new"><input id="projNewName" maxlength="60" placeholder="Название нового проекта">'
     + '<button type="button" class="btn mini pri" id="projNewOk">Создать</button></div>';
@@ -1887,6 +1911,155 @@ async function createProject() {
     toast('Проект создан: ' + (reply.project ? reply.project.name : name));
   } catch (e) { toast('Не удалось создать проект: ' + e.message); }
 }
+
+/* ---------- переименование и удаление проекта ---------- */
+// The name is the only editable part: the id never changes, so every result, stage and film keeps
+// pointing at the same work. Deleting is the one operation that destroys work, so the dialog says
+// what the project holds and then lets the user choose what moves to «Основное» instead of going.
+function startProjectRename(id) {
+  PROJ_RENAME = id;
+  paintProjects();
+  const input = $('#projRenameName');
+  if (!input) return;
+  input.focus(); input.select();
+}
+async function renameProject() {
+  const input = $('#projRenameName'), id = PROJ_RENAME;
+  if (!input || !id) return;
+  const name = input.value.trim();
+  if (!name) { input.focus(); return; }
+  try {
+    const reply = await postJSON('/api/projects/' + encodeURIComponent(id) + '/rename', { name });
+    PROJECTS_VIEW.list = reply.projects || PROJECTS_VIEW.list;
+    PROJECTS_VIEW.active = reply.active || PROJECTS_VIEW.active;
+  } catch (e) { toast('Не удалось переименовать проект: ' + e.message); return; }
+  PROJ_RENAME = null;
+  paintProjects();
+  $('#projPop').hidden = true;
+  refreshProjectLists();
+  toast('Проект переименован: «' + (PROJECTS_VIEW.list.find(p => p.id === id) || {}).name + '»');
+}
+
+const PD_GROUPS = [['library', 'Клипы и картинки Библиотеки'], ['drafts', 'Черновики'],
+                   ['stages', 'Этапы'], ['films', 'Фильмы Видеостудии']];
+let PD = null;   // the open delete dialog: { id, project, assets, chosen:Set, step }
+const pdItems = () => PD ? PD_GROUPS.flatMap(([group]) =>
+  (PD.assets[group] || []).map(it => ({ group, it, key: group + ':' + (group === 'films' ? it.run : it.id) }))) : [];
+function pdLabel(group, it) {
+  if (group === 'stages') return `${MODE_NAME[it.mode] || it.mode || 'раздел'} · ${it.name}`
+    + (it.files ? ` · файлов: ${it.files}` : '') + (it.auto ? ' · было до открытия' : '');
+  if (group === 'films') return `Видеостудия · сцен ${it.scenes}, готово ${it.done}`;
+  const when = it.date ? fmtDate(new Date(it.date)) : '';
+  return `${MODE_NAME[it.mode] || it.mode || 'результат'} · ${it.prompt || 'без промпта'}`
+    + (group === 'drafts' ? ' · черновик' : '') + (when ? ` · ${when}` : '');
+}
+function paintProjectDelete() {
+  if (!PD) return;
+  const a = PD.assets, total = pdItems().length;
+  $('#pdTitle').textContent = 'Удалить проект «' + PD.project.name + '»?';
+  if (PD.step === 'ask') {
+    $('#pdBody').innerHTML = total
+      ? `<p class="pd-lead">В проекте:</p>
+         <div class="pd-counts">${PD_GROUPS.filter(([g]) => (a[g] || []).length).map(([g, label]) =>
+           `<div><span>${esc(label)}</span><b>${a[g].length}</b></div>`).join('')}</div>
+         <p class="pd-note">Что оставите — переедет в «Основное»: файлы останутся на месте, изменится только проект.
+         Остальное будет удалено: файлы уйдут в корзину Windows, этапы и фильмы Видеостудии исчезнут с диска.</p>`
+      : `<p class="pd-lead">Проект пуст.</p><p class="pd-note">Ни клипов, ни черновиков, ни этапов, ни фильмов в нём нет — удаление ничего не стирает.</p>`;
+    $('#pdFoot').innerHTML = '<button class="btn" data-close>Отмена</button>'
+      + (total ? '<button class="btn pri" id="pdPick">Выбрать, что оставить…</button>' : '')
+      + '<button class="btn danger" id="pdAll">Удалить всё</button>';
+    return;
+  }
+  const rows = PD_GROUPS.map(([group, label]) => {
+    const list = a[group] || [];
+    if (!list.length) return '';
+    return `<div class="pd-g"><div class="pd-gh">${esc(label)} <span>${list.length}</span></div>`
+      + list.map(it => {
+        const key = group + ':' + (group === 'films' ? it.run : it.id), on = PD.chosen.has(key);
+        return `<label class="pd-row${on ? ' on' : ''}" title="${esc(pdLabel(group, it))}">`
+          + `<input type="checkbox" data-pd="${esc(key)}"${on ? ' checked' : ''}>`
+          + `<span>${esc(pdLabel(group, it))}</span></label>`;
+      }).join('') + '</div>';
+  }).join('');
+  $('#pdBody').innerHTML = `<p class="pd-lead">Выбранное переедет в «Основное» — файлы останутся на месте. Остальное будет удалено.</p>
+    <div class="pd-tools"><button class="btn mini" id="pdSelAll" type="button">Выбрать все</button>
+      <button class="btn mini" id="pdSelNone" type="button">Снять выбор</button>
+      <span class="pd-chosen">выбрано: <b>${PD.chosen.size}</b> из ${total}</span></div>
+    <div class="pd-list">${rows}</div>`;
+  $('#pdFoot').innerHTML = '<button class="btn" id="pdBack">Назад</button>'
+    + (PD.chosen.size
+      ? `<button class="btn pri" id="pdGo">Перенести выбранное (${PD.chosen.size}) и удалить проект</button>`
+      : '<button class="btn danger" id="pdGo">Удалить проект</button>');
+}
+async function openProjectDelete(id) {
+  $('#projPop').hidden = true;
+  let assets;
+  try { assets = await apiGet('/api/projects/' + encodeURIComponent(id) + '/assets'); }
+  catch (e) { toast('Не удалось узнать, что в проекте: ' + e.message); return; }
+  PD = { id, project: assets.project || { id, name: id }, assets, chosen: new Set(), step: 'ask' };
+  paintProjectDelete();
+  $('#projDel').hidden = false;
+}
+/* the project is gone: the window drops what was deleted and relabels what moved, in one go */
+async function adoptProjectDelete(reply) {
+  const target = reply.target || DEFAULT_PROJECT;
+  const was = PROJECTS_VIEW.active;
+  PROJECTS_VIEW.list = reply.projects || [];
+  PROJECTS_VIEW.active = reply.active || '';
+  const movedLib = new Set([...(reply.moved.library || []), ...((reply.kept_back || {}).library || [])]);
+  const goneLib = new Set(reply.deleted.library || []);
+  for (let i = LIB.length - 1; i >= 0; i--) {
+    const it = LIB[i];
+    if (goneLib.has(it.id)) LIB.splice(i, 1);
+    else if (movedLib.has(it.id)) it.project = target;
+  }
+  const movedDrafts = new Set([...(reply.moved.drafts || []), ...((reply.kept_back || {}).drafts || [])]);
+  for (const id of reply.deleted.drafts || []) dropDraft(id);
+  DRAFTS.forEach(it => { if (movedDrafts.has(it.id)) it.project = target; });
+  paintProjects();
+  refreshProjectLists();
+  await loadStages();                       // the stages of every section come from the server
+  await window.h3LongProjectChanged?.();    // a film that belonged to this project is gone with it
+  return { was };
+}
+async function deleteProjectNow(all) {
+  if (!PD) return;
+  const keep = { library: [], drafts: [], stages: [], films: [] };
+  if (!all) for (const { group, it, key } of pdItems()) {
+    if (PD.chosen.has(key)) keep[group].push(group === 'films' ? it.run : it.id);
+  }
+  const id = PD.id, name = PD.project.name;
+  const buttons = $$('#pdFoot .btn'); buttons.forEach(b => b.disabled = true);
+  let reply;
+  try { reply = await postJSON('/api/projects/' + encodeURIComponent(id) + '/delete', { keep }); }
+  catch (e) { buttons.forEach(b => b.disabled = false); toast('Не удалось удалить проект: ' + e.message); return; }
+  PD = null;
+  $('#projDel').hidden = true;
+  const moved = PD_GROUPS.reduce((n, [g]) => n + (reply.moved[g] || []).length, 0);
+  const left = ((reply.kept_back || {}).library || []).length + ((reply.kept_back || {}).drafts || []).length;
+  await adoptProjectDelete(reply);
+  toast('Проект «' + name + '» удалён' + (moved ? `. Перенесено в «Основное»: ${moved}` : '')
+    + (left ? `. Не удалось удалить ${left} — остались в «Основном»` : ''));
+}
+(function initProjectAdmin() {
+  $('#projDel').addEventListener('click', e => {
+    if (!PD) return;
+    if (e.target.closest('#pdPick')) { PD.step = 'pick'; paintProjectDelete(); return; }
+    if (e.target.closest('#pdBack')) { PD.step = 'ask'; paintProjectDelete(); return; }
+    if (e.target.closest('#pdAll')) { deleteProjectNow(true); return; }
+    if (e.target.closest('#pdGo')) { deleteProjectNow(false); return; }
+    if (e.target.closest('#pdSelAll')) {
+      PD.chosen = new Set(pdItems().map(x => x.key)); paintProjectDelete(); return;
+    }
+    if (e.target.closest('#pdSelNone')) { PD.chosen.clear(); paintProjectDelete(); }
+  });
+  $('#pdBody').addEventListener('change', e => {
+    const box = e.target.closest('[data-pd]');
+    if (!box || !PD) return;
+    if (box.checked) PD.chosen.add(box.dataset.pd); else PD.chosen.delete(box.dataset.pd);
+    paintProjectDelete();
+  });
+})();
 (function initProjectBar() {
   const bar = $('#tbProj');
   if (!bar) return;
@@ -1899,13 +2072,25 @@ async function createProject() {
   $('#projPop').onclick = e => {
     e.stopPropagation();
     if (e.target.closest('#projNewOk')) { createProject(); return; }
+    if (e.target.closest('#projRenameOk')) { renameProject(); return; }
+    if (e.target.closest('#projRenameNo')) { PROJ_RENAME = null; paintProjects(); return; }
+    const ren = e.target.closest('[data-rename]');
+    if (ren) { startProjectRename(ren.dataset.rename); return; }
+    const del = e.target.closest('[data-delproj]');
+    if (del) { openProjectDelete(del.dataset.delproj); return; }
     const item = e.target.closest('.proj-item');
     if (item) { $('#projPop').hidden = true; selectProject(item.dataset.pid); }
   };
   $('#projPop').addEventListener('keydown', e => {
-    if (e.key === 'Enter' && e.target.id === 'projNewName') { e.preventDefault(); createProject(); }
+    if (e.key === 'Escape' && PROJ_RENAME) { PROJ_RENAME = null; paintProjects(); return; }
+    if (e.key !== 'Enter') return;
+    if (e.target.id === 'projNewName') { e.preventDefault(); createProject(); }
+    else if (e.target.id === 'projRenameName') { e.preventDefault(); renameProject(); }
   });
-  document.addEventListener('click', () => { const pop = $('#projPop'); if (pop) pop.hidden = true; });
+  document.addEventListener('click', () => {
+    const pop = $('#projPop'); if (pop) pop.hidden = true;
+    if (PROJ_RENAME) { PROJ_RENAME = null; paintProjects(); }
+  });
 })();
 const fileName = it => `h3_${it.mode}_${it.date.toISOString().slice(0, 16).replace(/[-:T]/g, '')}.${it.ext || 'mp4'}`;
 

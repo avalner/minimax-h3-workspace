@@ -8,8 +8,8 @@ in one place, `server.build_app`.
 """
 
 from webcommon import (
-    CLIENT_ID, LONG_DIR, WORKFLOWS_DIR, comfy_error_text, http_refusal, lora_strength, media_input,
-    round_size, split_frames
+    CLIENT_ID, LONG_DIR, WORKFLOWS_DIR, comfy_error_text, freshest_long_run, http_refusal,
+    lora_strength, media_input, round_size, split_frames
 )
 
 import asyncio
@@ -692,7 +692,7 @@ class GenerateRoutes:
         run = re.sub(r"[^A-Za-z0-9]", "", req.query.get("run", ""))[:32]
         wanted = str(req.query.get("project") or "")[:40]
         if not run and wanted:   # the freshest film of this project
-            run = self.freshest_long_run(wanted)
+            run = freshest_long_run(wanted)
         if not run and req.query.get("last"):   # the most recently saved project
             files = sorted(LONG_DIR.glob("*/project.json"), key=lambda f: f.stat().st_mtime, reverse=True) if LONG_DIR.is_dir() else []
             run = files[0].parent.name if files else ""
@@ -701,24 +701,6 @@ class GenerateRoutes:
             return web.json_response({})
         refs = sorted(p.name for p in (LONG_DIR / run / "refs").glob("*")) if (LONG_DIR / run / "refs").is_dir() else []
         return web.json_response({"run": run, "project": json.loads(f.read_text(encoding="utf-8")), "refs": refs})
-
-    @staticmethod
-    def freshest_long_run(project):
-        """The film of this project that was saved last (its own folder is what makes a film one)."""
-        best, best_t = "", None
-        if not LONG_DIR.is_dir():
-            return best
-        for path in LONG_DIR.glob("*/project.json"):
-            try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-                stamp = path.stat().st_mtime
-            except (OSError, ValueError):
-                continue
-            if str((data or {}).get("project") or "") != project:
-                continue
-            if best_t is None or stamp > best_t:
-                best, best_t = path.parent.name, stamp
-        return best
 
     async def h_long_stage(self, req):
         """A saved stage of a long video: the scene continuation points and the reference pictures are copied aside, so redoing a

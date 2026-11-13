@@ -5,6 +5,7 @@ Library object and the same-origin guard.
 Nothing here knows about aiohttp routes; `routes/` and `application.py` import from this module.
 """
 import ctypes
+import json
 import os
 import re
 import shutil
@@ -21,6 +22,7 @@ from aiohttp import web
 
 import engine
 from http_errors import window_error
+from storage.atomic import atomic_write_json
 from storage.repositories import LibraryRepository
 def http_refusal(error):
     """A domain refusal as the window's own HTTP answer (statuses live in `http_errors`)."""
@@ -356,6 +358,57 @@ CLIENT_ID = "h3studio-" + uuid.uuid4().hex[:8]
 
 # a failed write of the stored state: the JSON files of the older version, or the database now
 STORE_ERRORS = (OSError, sqlite3.Error)
+
+
+def long_films():
+    """The saved films of the Видеостудия, the newest first. Each record is the folder's project.json
+    plus `run`, `folder` and `saved`: the films belong to a project, so listing them by project and
+    moving them to another one is the same scan (see `project_assets` / `delete_project`)."""
+    films = []
+    if not LONG_DIR.is_dir():
+        return films
+    for path in LONG_DIR.glob("*/project.json"):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            saved = path.stat().st_mtime
+        except (OSError, ValueError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        films.append({**data, "run": path.parent.name, "folder": path.parent, "saved": saved})
+    films.sort(key=lambda film: film["saved"], reverse=True)
+    return films
+
+
+def freshest_long_run(project):
+    """The film of this project that was saved last; empty when the project has no film."""
+    for film in long_films():
+        if str(film.get("project") or "") == str(project):
+            return film["run"]
+    return ""
+
+
+def set_long_project(run, project):
+    """The film moves to another project: only its label changes, the folder stays where it is."""
+    path = LONG_DIR / str(run) / "project.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    data["project"] = str(project)
+    atomic_write_json(path, data)
+    return True
+
+
+def drop_long_film(run):
+    """A film goes with its project: the folder holds the scene states, the references and the stages."""
+    folder = LONG_DIR / str(run)
+    if not folder.is_dir() or folder.parent != LONG_DIR:
+        return False
+    shutil.rmtree(folder, ignore_errors=True)
+    return not folder.exists()
 
 # ComfyUI binary websocket event types
 BIN_PREVIEW = 1

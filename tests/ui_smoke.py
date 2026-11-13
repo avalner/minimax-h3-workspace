@@ -249,6 +249,114 @@ async def run_page(base: str, browser: str, shots: Path):
                 check("choosing another project in the header switches it back",
                       restored["name"] == "Основное" and restored["active"] == "main", str(restored))
 
+                # A project can be renamed (the id stays, so results, stages and films keep pointing at
+                # the same work) and deleted. Deleting asks with the numbers, starts with nothing chosen,
+                # «Выбрать все» marks everything, and what stays moves to «Основное» instead of going.
+                admin = await cdp.evaluate("""
+                    (async () => {
+                      const wait = ms => new Promise(r => setTimeout(r, ms));
+                      const until = async (fn, ms = 6000) => { const t0 = Date.now();
+                        while (Date.now() - t0 < ms) { if (fn()) return true; await wait(60); } return false; };
+                      const projectRow = name => [...document.querySelectorAll('.proj-item')]
+                        .find(b => b.textContent.includes(name));
+                      const out = {};
+                      await postJSON('/api/projects', { name: 'Удаляемый проект' });
+                      await loadProjects();
+                      document.querySelector('#projCur').click(); await wait(80);
+                      projectRow('Удаляемый проект').querySelector('[data-rename]').click(); await wait(80);
+                      out.renameInput = !!document.querySelector('#projRenameName');
+                      document.querySelector('#projRenameName').value = 'Проект для проверки';
+                      document.querySelector('#projRenameOk').click();
+                      await until(() => document.querySelector('#projName').textContent === 'Проект для проверки');
+                      out.renamed = document.querySelector('#projName').textContent;
+                      out.savedName = ((await (await fetch('/api/projects')).json()).projects
+                                       .find(p => p.id === window.h3Projects.active()) || {}).name || '';
+                      out.mainHasTrash = !!projectRow('Основное')
+                        && !!projectRow('Основное').querySelector('[data-delproj]');
+                      // what the project holds: a stage and a film, both real records on the server
+                      const pid = window.h3Projects.active();
+                      await window.postStage({ id: 'uiddelstage', mode: 'video', name: 'Этап удаляемого',
+                                               s: {}, date: new Date().toISOString() });
+                      await fetch('/api/long/project', { method: 'POST', body: JSON.stringify({
+                        run: 'uidelfilm', project: { run: 'uidelfilm', project: pid,
+                                                       scenes: [{ prompt: 'сцена' }] } }) });
+                      document.querySelector('#projCur').click(); await wait(80);
+                      projectRow('Проект для проверки').querySelector('[data-delproj]').click();
+                      await until(() => !document.querySelector('#projDel').hidden);
+                      out.title = document.querySelector('#pdTitle').textContent;
+                      out.counts = [...document.querySelectorAll('.pd-counts > div')].map(d => d.textContent);
+                      out.askButtons = [...document.querySelectorAll('#pdFoot .btn')].map(b => b.textContent);
+                      document.querySelector('#pdPick').click(); await wait(80);
+                      out.byDefault = document.querySelectorAll('#pdBody [data-pd]:checked').length;
+                      out.rows = document.querySelectorAll('#pdBody [data-pd]').length;
+                      out.goNone = document.querySelector('#pdGo').textContent;
+                      document.querySelector('#pdSelAll').click(); await wait(80);
+                      out.allChosen = document.querySelectorAll('#pdBody [data-pd]:checked').length;
+                      out.goAll = document.querySelector('#pdGo').textContent;
+                      document.querySelector('#pdBody [data-pd="films:uidelfilm"]').click(); await wait(80);
+                      out.oneChosen = document.querySelectorAll('#pdBody [data-pd]:checked').length;
+                      document.querySelector('#pdGo').click();
+                      await until(() => document.querySelector('#projDel').hidden);
+                      await wait(400);
+                      const projects = await (await fetch('/api/projects')).json();
+                      out.active = projects.active;
+                      out.stillThere = projects.projects.some(p => p.name === 'Проект для проверки');
+                      out.header = document.querySelector('#projName').textContent;
+                      const stage = ((await (await fetch('/api/stages')).json()).stages || [])
+                        .find(s => s.id === 'uiddelstage');
+                      out.stageKept = !!stage && stage.project === out.active;
+                      out.filmGone = Object.keys(await (await fetch('/api/long/project?run=uidelfilm')).json()).length === 0;
+                      out.toast = document.querySelector('#toast').textContent;
+                      await window.bmDelete('uiddelstage');
+                      return out;
+                    })()
+                """, await_promise=True)
+                check("a project is renamed in the switcher and the new name is saved",
+                      admin["renameInput"] and admin["renamed"] == "Проект для проверки"
+                      and admin["savedName"] == "Проект для проверки", str(admin))
+                check("the delete question names the project and counts what it holds",
+                      "Проект для проверки" in admin["title"] and len(admin["counts"]) == 2
+                      and "Выбрать, что оставить…" in admin["askButtons"]
+                      and "Удалить всё" in admin["askButtons"], str(admin))
+                check("«Основное» cannot be deleted: it is where a deleted project's work goes",
+                      admin["mainHasTrash"] is False, str(admin))
+                check("nothing is chosen in the picker until the user asks, «Выбрать все» marks all of it",
+                      admin["rows"] == 2 and admin["byDefault"] == 0 and admin["allChosen"] == 2
+                      and "Перенести выбранное (2)" in admin["goAll"], str(admin))
+                check("the chosen part moves to «Основное» and the rest is deleted with the project",
+                      admin["oneChosen"] == 1 and not admin["stillThere"]
+                      and admin["active"] == "main" and admin["header"] == "Основное"
+                      and admin["stageKept"] and admin["filmGone"], str(admin))
+                check("the window says what happened to the deleted project's work",
+                      "удалён" in admin["toast"] and "Перенесено" in admin["toast"], str(admin["toast"]))
+
+                empty_project = await cdp.evaluate("""
+                    (async () => {
+                      const wait = ms => new Promise(r => setTimeout(r, ms));
+                      const until = async (fn, ms = 6000) => { const t0 = Date.now();
+                        while (Date.now() - t0 < ms) { if (fn()) return true; await wait(60); } return false; };
+                      const out = {};
+                      await postJSON('/api/projects', { name: 'Пустой проект' });
+                      await loadProjects();
+                      document.querySelector('#projCur').click(); await wait(80);
+                      [...document.querySelectorAll('.proj-item')].find(b => b.textContent.includes('Пустой проект'))
+                        .querySelector('[data-delproj]').click();
+                      await until(() => !document.querySelector('#projDel').hidden);
+                      out.lead = (document.querySelector('.pd-lead') || {}).textContent || '';
+                      out.pick = !!document.querySelector('#pdPick');
+                      document.querySelector('#pdAll').click();
+                      await until(() => document.querySelector('#projDel').hidden);
+                      await wait(300);
+                      const projects = await (await fetch('/api/projects')).json();
+                      out.gone = !projects.projects.some(p => p.name === 'Пустой проект');
+                      out.active = projects.active;
+                      return out;
+                    })()
+                """, await_promise=True)
+                check("an empty project is deleted at once, without a picker",
+                      empty_project["lead"].startswith("Проект пуст") and not empty_project["pick"]
+                      and empty_project["gone"] and empty_project["active"] == "main", str(empty_project))
+
                 # Deleting a draft asks first, right at the cursor: two variants of one shot look
                 # the same as thumbnails, and the question must not jump to the middle of the screen.
                 popover = await cdp.evaluate(

@@ -186,17 +186,27 @@ class LibraryRoutes:
         item = self.pending.get(item_id)
         if item is None:
             raise web.HTTPNotFound()
+        if not await self.recycle_draft(item):
+            raise web.HTTPInternalServerError(text="Не удалось переместить файл в корзину: черновик оставлен на месте")
+        await self.broadcast({"type": "draft_removed", "id": item_id})
+        return web.json_response({"ok": True})
+
+    async def recycle_draft(self, item):
+        """A draft and its files: True when the record may be forgotten.
+
+        The files go to the Recycle Bin first; if one of them would not move, nothing is forgotten
+        (see `h_preview_delete` and `delete_project`, which keeps such a draft instead of losing it).
+        """
         paths = {path for path in (self.file_path(item), Path(item["local"]) if item.get("local") else None)
                  if path and path.exists()}
         gone = set(await asyncio.to_thread(send_to_recycle_bin, list(paths))) if paths else set()
         if paths - gone:
-            raise web.HTTPInternalServerError(text="Не удалось переместить файл в корзину: черновик оставлен на месте")
-        self.pending.pop(item_id, None)
+            return False
+        self.pending.pop(item["id"], None)
         with self.db.transaction():
-            self.drafts_repo.delete(item_id)
-            self.media_repo.delete(item_id)
-        await self.broadcast({"type": "draft_removed", "id": item_id})
-        return web.json_response({"ok": True})
+            self.drafts_repo.delete(item["id"])
+            self.media_repo.delete(item["id"])
+        return True
 
     async def delete_items(self, items):
         """Library items to the Recycle Bin (the original and the program's own copy), all files in one go."""
