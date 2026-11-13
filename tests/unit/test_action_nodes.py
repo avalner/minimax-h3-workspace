@@ -26,6 +26,61 @@ MODELS = {"action_unet": "MinimaxH3\\minimax_h3_hybrid_fl2va_ref2va_int8.safeten
           "upscaler": "MinimaxH3\\minimax_h3_latent_upscaler_3d_bf16.safetensors"}
 
 
+class ActionDmadTest(unittest.TestCase):
+    def test_every_published_name_of_the_action_dmad_is_accepted(self):
+        for name in ("minimax_h3_dmad_full_dareties_v4_step600_comfy_fro.safetensors",
+                     "MinimaxH3\\minimax_h3_fl2v_lightx2v_v0.1_dareties_v4_step600_comfy_fro.safetensors",
+                     "MinimaxH3/minimax_h3_dmad_full_dareties_v4_step600_comfy.safetensors",
+                     "MINIMAX_H3_DMAD_FULL_DARETIES_V4_STEP600_COMFY.SAFETENSORS"):
+            self.assertTrue(catalog.is_action_dmad(name), name)
+
+    def test_the_studio_draft_lora_is_never_taken_for_it(self):
+        draft = "MinimaxH3/minimax_h3_DMAD_4step_full_lora_avg_rank_39_bf16.safetensors"
+        self.assertFalse(catalog.is_action_dmad(draft), "это другая LoRA: 4 шага для черновика Видеостудии")
+
+    def test_other_trainings_with_a_similar_name_are_not_accepted(self):
+        for name in ("minimax_h3_dmad_full_dareties_v4_step600_comfy_fro_fulladaln.safetensors",
+                     "minimax_h3_dmad_full_dareties_v4_step600_comfy_rev6.safetensors",
+                     "pika_h3_flex_turbo_8step_hd_ref2va.safetensors"):
+            self.assertFalse(catalog.is_action_dmad(name), name)
+
+
+class ActionSetupTest(unittest.IsolatedAsyncioTestCase):
+    async def test_the_section_finds_the_file_under_any_name_and_lists_what_it_sees(self):
+        app = support.fresh_app()
+        app.model_names = {"action_unet": "a.safetensors"}
+        app.missing = []
+        seen = {"get": 0}
+
+        async def comfy(method, path, **kw):
+            if path == "/models/loras":
+                seen["get"] += 1
+                return 200, ["MinimaxH3/minimax_h3_DMAD_4step_full_lora_avg_rank_39_bf16.safetensors",
+                             "MinimaxH3/minimax_h3_dmad_full_dareties_v4_step600_comfy.safetensors"]
+            return 200, {}
+
+        app.comfy_json = comfy
+        s = await app.action_setup()
+        self.assertEqual(s["dmad"], "MinimaxH3/minimax_h3_dmad_full_dareties_v4_step600_comfy.safetensors")
+        self.assertTrue(any("DMAD_4step" in n for n in s["dmad_files"]),
+                        "в окне видно, какие файлы с DMAD нашлись: именно так путаница и объясняется")
+
+    async def test_the_section_says_nothing_found_when_only_the_draft_file_is_there(self):
+        app = support.fresh_app()
+        app.model_names = {"action_unet": "a.safetensors"}
+        app.missing = []
+
+        async def comfy(method, path, **kw):
+            if path == "/models/loras":
+                return 200, ["MinimaxH3/minimax_h3_DMAD_4step_full_lora_avg_rank_39_bf16.safetensors"]
+            return 200, {}
+
+        app.comfy_json = comfy
+        s = await app.action_setup()
+        self.assertIsNone(s["dmad"])
+        self.assertEqual(s["dmad_files"], ["MinimaxH3/minimax_h3_DMAD_4step_full_lora_avg_rank_39_bf16.safetensors"])
+
+
 class ActionPacksTest(unittest.TestCase):
     def test_both_packs_are_in_the_install_with_pinned_commits(self):
         packs = {p["name"]: p for p in catalog.NODE_PACKS}

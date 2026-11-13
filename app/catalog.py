@@ -317,9 +317,25 @@ VARIANT_LABELS = {
     "action_unet": {"int8": "обычная (int8)", "lite": "лёгкая (меньше памяти, чуть слабее)"},
 }
 
-# LoRA of the original action-scene workflow (a different DMAD file from the studio draft above): it has no public
-# download, so it is used only when the user already has it
+# LoRA of the original action-scene workflow — a DIFFERENT file from the studio's 4-step draft above, and it is not a
+# switch in «LoRA»: the file itself has to be in the loras folder. The same training (dareties v4, step 600, «fro») is
+# published under several names: the author's own page (civitai.com/models/2837571, version dmad_larryvrhv4_merge) drops
+# the «_fro» tail, on Hugging Face it comes with a «fl2v_lightx2v_v0.1_» prefix. Only the plain names: «…_fro_fulladaln»
+# and «…_rev6_…» are other files.
 ACTION_DMAD_LORA = "minimax_h3_dmad_full_dareties_v4_step600_comfy_fro"
+ACTION_DMAD_FILES = (ACTION_DMAD_LORA + ".safetensors",
+                     "minimax_h3_fl2v_lightx2v_v0.1_dareties_v4_step600_comfy_fro.safetensors",
+                     "minimax_h3_dmad_full_dareties_v4_step600_comfy.safetensors")
+
+
+def is_action_dmad(name):
+    """Whether this file is the action DMAD LoRA: any of its published names, in any folder and any case.
+
+    The Видеостудия's 4-step draft LoRA (minimax_h3_DMAD_4step_…) is a different training and must never be taken for
+    it: the action scene would come out wrong and the error would look like a quality problem.
+    """
+    base = str(name).replace("/", "\\").split("\\")[-1].strip().lower()
+    return base in ACTION_DMAD_FILES
 
 ROLE_TITLES = {
     "fast_unet": "Основная модель — Image-to-Video (FastH3)",

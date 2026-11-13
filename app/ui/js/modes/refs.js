@@ -23,6 +23,44 @@ const ICON_VID = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" str
 const ICON_AUD = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>';
 let REF_FUSED_CHECK = null;   // the references section re-checks its optional model after a download
 
+/* The DMAD LoRA of the action sections is a 3.9 GB file from Civitai, NOT the «DMAD 4 шагов» switch in «LoRA»:
+   the switch turns on a file that is already in the loras folder (a different training for the studio draft), while
+   the action scene needs its own file. The block below says that in plain words and gives the three steps. */
+function dmadHelp(box, seen) {
+  if (!box) return;
+  const list = (seen || []).length
+    ? `<br><span class="hint">ComfyUI видит файлы с «DMAD» в названии: ${esc(seen.slice(0, 5).join(', '))} — но это не тот файл.</span>`
+    : '';
+  box.innerHTML = `<div class="note warn" style="margin:8px 0"><span><b>Нужен отдельный файл DMAD — 3,9 ГБ.</b> Это не тот
+    «DMAD 4 шагов», который включает переключатель в разделе «LoRA»: для экшна нужна своя LoRA, и без файла сцены не
+    запустятся.${list}<br>
+    <b>1.</b> Нажмите «Открыть страницу», войдите на Civitai (регистрация бесплатная) и скачайте файл
+    <b>minimax_h3_dmad_full_dareties_v4_step600_comfy.safetensors</b> (3,9 ГБ; файлы на 500 МБ — другие LoRA).<br>
+    <b>2.</b> Когда он скачается, нажмите «Я скачал — поставить файл»: программа найдёт его в «Загрузках» и положит куда надо.
+    <span class="dmad-msg hint" style="display:block;margin-top:6px"></span>
+    <span style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+      <button class="btn mini pri dm-open" type="button">1. Открыть страницу</button>
+      <button class="btn mini dm-ok" type="button">2. Я скачал — поставить файл</button>
+      <button class="btn mini dm-dir" type="button">Открыть папку loras</button></span></span></div>`;
+  const msg = $('.dmad-msg', box);
+  const call = url => apiPost(url, {});
+  $('.dm-open', box).onclick = () => call('/api/dmad/open')
+    .then(() => { msg.textContent = 'Страница открылась в браузере. Скачайте файл на 3,9 ГБ, потом нажмите «Я скачал».'; })
+    .catch(e => { msg.textContent = e.message || String(e); });
+  $('.dm-dir', box).onclick = () => call('/api/dmad/folder')
+    .then(j => { msg.textContent = 'Папка открыта: ' + j.path; })
+    .catch(e => { msg.textContent = e.message || String(e); });
+  $('.dm-ok', box).onclick = async () => {
+    msg.textContent = 'Ищу файл и переношу его (3,9 ГБ, это может занять минуту)…';
+    try {
+      const j = await call('/api/dmad/install');
+      msg.textContent = 'Готово: файл на месте (' + j.name + ').';
+      toast('DMAD установлен');
+      box._after && box._after();
+    } catch (e) { msg.textContent = e.message || String(e); }
+  };
+}
+
 function makeRefMode(cfg) {
   const root = $('#view-' + cfg.mode);
   const ACT = !!cfg.action;   // «Экшн-видеостудия»: the same scenes as the studio, sampled by the action model
@@ -705,16 +743,16 @@ function makeRefMode(cfg) {
           <button type="button" data-a="action">Hybrid<small>как Экшн-сцены · держит быстрое движение</small></button></div>
           <label class="cw-chk" style="display:flex;gap:8px;align-items:center;margin-top:8px"><input type="checkbox" class="rm-apika"> Ускорение Pika: 8 шагов вместо 12 (только Singularity)</label>
           <div class="hint rm-amodel-hint">Если файлов Singularity нет, программа сама возьмёт Hybrid. Сцены считаются по одной, звук придумывает модель — своего аудио здесь нет.</div>
-          <div class="hint rm-admad" style="margin-top:6px"></div>`);
+          <div class="rm-admad" style="margin-top:6px"></div>`);
         grid.before(mr);
         // the action scene needs its DMAD LoRA: without the file the server refuses, so say it here, before a scene is sent
         root._check = async () => {
           const box = $('.rm-admad', root); if (!box) return;
           try {
             const a = await apiGet('/api/action/info');
-            box.style.color = a.dmad ? '' : 'var(--pink)';
-            box.textContent = a.dmad ? 'Файл DMAD на месте.' : 'Нужен файл DMAD (3,9 ГБ) в папке loras: он описан в разделе «Экшн-сцены», без него сцены не запустятся.';
-          } catch { box.textContent = ''; }
+            box.innerHTML = a.dmad ? '<span class="hint" style="color:var(--ok,#7bd88f)">✓ файл DMAD на месте</span>' : '';
+            if (!a.dmad) { box._after = root._check; dmadHelp(box, a.dmad_files); }
+          } catch { box.innerHTML = ''; }   // ComfyUI не отвечает: не пугаем ложным «файла нет»
         };
         const paintM = () => {
           $$('.rm-amodel button', root).forEach(b => b.classList.toggle('on', b.dataset.a === S.actionModel));
@@ -1077,7 +1115,12 @@ function makeRefMode(cfg) {
           + row(a.refiner, 'H3 Sigma Refiner (+1 финальный шаг)')
           + row(a.upscaler, 'апскейлер h3_upscaler_lms')
           + row(!!a.dmad, 'LoRA DMAD') + row(!!a.speed, 'LoRA Speed Slider')
-          + (a.faithful ? '' : `<span class="hint">${lack} Пока считается упрощённая схема: тот же график 8 + 4, но картинка грязнее.</span>`);
+          + (a.faithful ? '' : `<span class="hint">${lack} Пока считается упрощённая схема: тот же график 8 + 4, но картинка грязнее.</span>`)
+          + (a.dmad ? '' : '<div class="dmad-box"></div>');
+        if (!a.dmad) {   // the file is missing: three buttons that lead to it and put it in place
+          const d = $('.dmad-box', box); d._after = check;
+          dmadHelp(d, a.dmad_files);
+        }
       } catch { box.innerHTML = '<span class="hint">ComfyUI не отвечает</span>'; }
     };
     root._check = check;

@@ -877,10 +877,15 @@ class GenerateRoutes:
                     await self.resolve_models()
                 missing = {m["role"] for m in self.missing}
                 _, loras_all = await self.comfy_json("GET", "/models/loras")
-                dmad_a = next((n for n in loras_all or [] if catalog.ACTION_DMAD_LORA in n), None)
+                dmad_a = next((n for n in loras_all or [] if catalog.is_action_dmad(n)), None)
                 if not dmad_a:
-                    raise web.HTTPBadRequest(text="Для экшн-видео нужен файл DMAD (minimax_h3_dmad_full_dareties_v4_step600_comfy.safetensors) "
-                                                  "в папке loras. Он описан в разделе «Экшн-сцены».")
+                    seen = [n for n in (loras_all or []) if "dmad" in str(n).lower()]
+                    raise web.HTTPBadRequest(
+                        text="Для экшн-видео нужен отдельный файл LoRA DMAD (3,9 ГБ) "
+                             "«minimax_h3_dmad_full_dareties_v4_step600_comfy» в папке loras: это НЕ тот «DMAD 4 шагов», "
+                             "что включает переключатель в разделе «LoRA». "
+                             + ("ComfyUI видит похожие файлы: " + ", ".join(seen[:5]) + ". " if seen else "")
+                             + "Откройте раздел «Экшн-сцены»: там кнопки «открыть страницу» и «я скачал — поставить файл».")
                 a_loras = [(dmad_a, lora_strength(form, "dmad", 0.8))]
                 if "speed_slider_lora" not in missing and self.model_names.get("speed_slider_lora"):
                     a_loras.append((self.model_names["speed_slider_lora"], lora_strength(form, "speed", 4.0)))
@@ -1038,7 +1043,7 @@ class GenerateRoutes:
         _, oi = await self.comfy_json("GET", "/object_info/SelfLiftH3Sampler")
         _, oi2 = await self.comfy_json("GET", "/object_info/H3SigmaRefiner")
         _, loras = await self.comfy_json("GET", "/models/loras")
-        dmad = next((n for n in loras or [] if catalog.ACTION_DMAD_LORA in n), None)
+        dmad = next((n for n in loras or [] if catalog.is_action_dmad(n)), None)
         missing = {m["role"] for m in self.missing}
         have_up = "action_upscaler" not in missing
         nodes = bool(oi) and bool(oi2)
@@ -1046,6 +1051,9 @@ class GenerateRoutes:
             "faithful": nodes and have_up,
             "selflift": bool(oi), "refiner": bool(oi2), "refiner_def": (oi2 or {}).get("H3SigmaRefiner"),
             "upscaler": have_up, "dmad": dmad,
+            # what ComfyUI does see with «dmad» in the name: the 4-step draft LoRA is a different file, and seeing it
+            # in this list is exactly how the confusion shows itself to the user
+            "dmad_files": [n for n in (loras or []) if "dmad" in str(n).lower()][:10],
             "speed": None if "speed_slider_lora" in missing else self.model_names.get("speed_slider_lora"),
             # the window words the hint differently: the app's own ComfyUI gets the packs by itself, a user's does not
             "engine": self.config.get("engine"),
@@ -1067,7 +1075,7 @@ class GenerateRoutes:
             # on RunningHub only built-in nodes are assumed; LoRAs are used if the user's RH workflow has them
             rh_files = {n.replace("\\", "/").split("/")[-1].lower(): n for n in (getattr(self, "rh_models", None) or [])}
             speed = rh_files.get(catalog.VARIANTS["speed_slider_lora"]["v1.1"]["file"].lower())
-            dmad = next((n for b, n in rh_files.items() if catalog.ACTION_DMAD_LORA in b), None)
+            dmad = next((n for b, n in rh_files.items() if catalog.is_action_dmad(b)), None)
             s = {"faithful": False, "dmad": dmad, "speed": speed}
         else:
             s = await self.action_setup()

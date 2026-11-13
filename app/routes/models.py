@@ -12,6 +12,8 @@ from webcommon import (
 
 import asyncio
 import re
+import shutil
+import subprocess
 import sys
 import urllib.parse
 import webbrowser
@@ -73,6 +75,71 @@ class ModelRoutes:
             return web.json_response({"nodes": await self.nodes_status()})
         except aiohttp.ClientError:
             return web.json_response({"error": "ComfyUI не отвечает"}, status=503)
+
+    # ---------- the DMAD LoRA of the action section: a 3.9 GB file from Civitai, not a switch in «LoRA» ----------
+    DMAD_URL = "https://civitai.com/models/2837571?modelVersionId=3391964"   # the exact version «dmad_larryvrhv4_merge»
+    DMAD_SAVED_AS = "minimax_h3_dmad_full_dareties_v4_step600_comfy.safetensors"
+    DMAD_MIN_BYTES = 3_000_000_000   # the real file is 3.9 GB: anything of hundreds of MB is another LoRA (a «turbo» one)
+
+    def loras_dir(self):
+        """Where a LoRA belongs: the loras folder of the app's own ComfyUI, or of the user's one when it is known."""
+        if self.config.get("engine") == "managed":
+            root = self.comfy_root()
+            return root / "ComfyUI" / "models" / "loras" / "MinimaxH3" if root else None
+        ext = (self.config.get("ext_models_dir") or "").strip()
+        return Path(ext) / "loras" if ext else None
+
+    async def h_dmad_open(self, _req):
+        """Open the page of the exact DMAD version on Civitai in the user's browser (a fixed address, never from a request)."""
+        webbrowser.open(self.DMAD_URL)
+        return web.json_response({"ok": True, "url": self.DMAD_URL})
+
+    async def h_dmad_folder(self, _req):
+        """Open (and create) the folder the DMAD file belongs to, for a file downloaded by hand somewhere else."""
+        d = self.loras_dir()
+        if not d:
+            raise web.HTTPBadRequest(text="Папка вашего ComfyUI программе не известна: положите файл в models\\loras вашего ComfyUI.")
+        d.mkdir(parents=True, exist_ok=True)
+        try:
+            subprocess.Popen(["explorer", str(d)])
+        except Exception:
+            pass
+        return web.json_response({"ok": True, "path": str(d)})
+
+    async def h_dmad_install(self, _req):
+        """«Я скачал»: find the file in «Загрузки» or on the desktop and put it into the loras folder."""
+        d = self.loras_dir()
+        if not d:
+            raise web.HTTPBadRequest(text="Папка вашего ComfyUI программе не известна: положите файл в models\\loras вашего ComfyUI.")
+        names = {n.lower() for n in catalog.ACTION_DMAD_FILES}
+        names |= {n.rsplit(".", 1)[0] + " (1).safetensors" for n in names}   # a browser adds « (1)» to a repeated download
+
+        def work():
+            found = []
+            for base in (Path.home() / "Downloads", Path.home() / "Desktop"):
+                if base.is_dir():
+                    found += [f for f in base.iterdir() if f.is_file() and f.name.lower() in names]
+            if not found:
+                return None
+            src = max(found, key=lambda f: f.stat().st_size)   # the 3.9 GB file, not a small «turbo» LoRA with a similar name
+            if src.stat().st_size < self.DMAD_MIN_BYTES:
+                return {"small": src.name}
+            d.mkdir(parents=True, exist_ok=True)
+            dst = d / self.DMAD_SAVED_AS
+            if dst.exists():
+                return {"path": str(dst), "name": dst.name, "moved": False}
+            shutil.move(str(src), str(dst))
+            return {"path": str(dst), "name": dst.name, "moved": True}
+
+        res = await asyncio.to_thread(work)
+        if not res:
+            raise web.HTTPNotFound(text="Не нашёл файл в папках «Загрузки» и «Рабочий стол». Скачайте "
+                                        "minimax_h3_dmad_full_dareties_v4_step600_comfy.safetensors (3,9 ГБ) на странице Civitai "
+                                        "и нажмите эту кнопку снова; файл на 500 МБ (Turbo) не подходит.")
+        if res.get("small"):
+            raise web.HTTPBadRequest(text=f"Файл «{res['small']}» слишком маленький: это другая LoRA. Нужен файл на 3,9 ГБ "
+                                          "(на странице Civitai он один такой).")
+        return web.json_response({"ok": True, **res})
 
     async def h_models_files(self, req):
         """Files ComfyUI sees in the folder this model role lives in, judged for this role.
