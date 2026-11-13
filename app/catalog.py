@@ -4,11 +4,11 @@ Every model has a role (what the workflows use it for). A role can have several
 variants; `choose_models` picks one per role from the detected hardware.
 """
 
-COMFY_VERSION = "0.43.0"
+COMFY_VERSION = "0.45.0"   # 0.43.0 has neither RelayVSR (fast video upscale) nor MiniMaxH3ImageConditioning (H3 Image)
 MIN_DRIVER = 580  # the bundled PyTorch is built for CUDA 13
 COMFY_URL = ("https://github.com/Comfy-Org/ComfyUI/releases/download/"
              f"v{COMFY_VERSION}/ComfyUI_windows_portable_nvidia.7z")
-COMFY_SIZE = 2_040_000_000
+COMFY_SIZE = 2_071_479_423   # the v0.45.0 NVIDIA archive; 0.43.0 was 2_040_000_000
 COMFY_DIRNAME = "ComfyUI_windows_portable"
 
 # Downloaded as GitHub archives of a fixed commit, so users need no git.
@@ -222,6 +222,18 @@ VARIANTS = {
     "qwen_vae": {
         "bf16": _m("Comfy-Org/Qwen-Image-2.1", "vae/qwen_image_2.1_vae_bf16.safetensors", 0.68, "vae", sub=IMG_SUB),
     },
+    # MiniMax H3 Image (official ComfyUI build, Comfy-Org/MiniMax-H3-Image): pictures by text and edit by references.
+    # Its text encoder is the very same file as the video's «text_encoder» (qwen3vl_32b_minimax_h3_nvfp4_awq), so it is
+    # never downloaded twice. The model is tuned for 4-16 MP of area: below 8 MP the picture is noticeably grainy.
+    "h3img_unet": {
+        "w4a8": _m("Comfy-Org/MiniMax-H3-Image", "diffusion_models/minimax_h3_image_pruned_w4a8.safetensors", 12.55,
+                   "diffusion_models"),
+        "int8": _m("Comfy-Org/MiniMax-H3-Image", "diffusion_models/minimax_h3_image_pruned_int8_convrot.safetensors",
+                   20.98, "diffusion_models"),
+    },
+    "h3img_vae": {
+        "fp16": _m("Comfy-Org/MiniMax-H3-Image", "vae/minimax_h3_image_vae_fp16.safetensors", 1.17, "vae"),
+    },
     # FLUX.2 klein 4B (Apache 2.0, free for commercial use): edit a picture by text
     "flux_unet": {
         "fp8": _m("black-forest-labs/FLUX.2-klein-4b-fp8", "flux-2-klein-4b-fp8.safetensors", 4.07,
@@ -278,6 +290,8 @@ ROLE_MARKS = {
     "krea_unet": ["krea"],
     "qwen_unet": ["qwen"], "qwen_clip": ["qwen3vl", "qwen3-vl"], "qwen_vae": ["qwen"], "outpaint_lora": ["outpaint"],
     "flux_unet": ["flux"], "flux_clip": ["qwen_3", "qwen3"], "flux_vae": ["flux"],
+    # the H3 Image checkpoint is «minimax_h3_image_…»; the VAE sits in the same repository and carries «image_vae»
+    "h3img_unet": ["h3_image", "h3-image"], "h3img_vae": ["h3_image_vae", "image_vae"],
 }
 
 
@@ -315,6 +329,8 @@ VARIANT_LABELS = {
     "lipsync_unet": {"full": "v1.3 полная (самая тяжёлая)", "pruned": "v1.3 облегчённая", "lite": "v1.3 лёгкая (слабее качество)",
                      "v2": "v2 облегчённая — по отзывам, звук лучше", "v2_full": "v2 полная"},
     "action_unet": {"int8": "обычная (int8)", "lite": "лёгкая (меньше памяти, чуть слабее)"},
+    # the light W4A8 is the one for 12-16 GB cards; int8 is the heavier and slightly better one
+    "h3img_unet": {"w4a8": "лёгкая W4A8 (12,5 ГБ)", "int8": "обычная int8 (21 ГБ)"},
 }
 
 # LoRA of the original action-scene workflow — a DIFFERENT file from the studio's 4-step draft above, and it is not a
@@ -373,10 +389,13 @@ ROLE_TITLES = {
     "flux_unet": "Основная модель — Правка изображения для коммерции (FLUX.2 klein 4B)",
     "flux_clip": "Текстовый энкодер FLUX.2 klein (Qwen3 4B)",
     "flux_vae": "VAE для FLUX.2",
+    "h3img_unet": "Основная модель — Изображения MiniMax H3 Image (по тексту и правка по референсам)",
+    "h3img_vae": "VAE для MiniMax H3 Image",
 }
 
 MODE_TITLES = {"video": "Image-to-Video", "lipsync": "Lipsync", "refs": "Референсы", "actor": "Актёрская игра", "swap": "Замена персонажа", "action": "Экшн-сцены",
                "krea": "Изображение по тексту", "kreareal": "Изображение: реализм", "qwen": "Правка изображения", "flux": "Правка изображения: FLUX.2 (можно в коммерцию)",
+               "h3img": "Изображения MiniMax H3 Image (по тексту и по референсам)",
                "upscale": "Увеличение видео и изображений", "relayvsr": "Быстрое увеличение видео (RelayVSR)", "long": "Длинное видео"}
 
 # Which roles each mode needs.
@@ -395,6 +414,8 @@ MODE_ROLES = {
     "kreareal": ["kreareal_unet", "kreareal_lora", "krea_clip", "krea_vae"],
     "qwen": ["qwen_unet", "qwen_clip", "qwen_vae"],
     "flux": ["flux_unet", "flux_clip", "flux_vae"],
+    # H3 Image: the UNET and its VAE are new, the text encoder is the video's own file (never a second copy)
+    "h3img": ["h3img_unet", "text_encoder", "h3img_vae"],
     "upscale": ["seedvr_unet", "seedvr_vae"],
     "relayvsr": ["relayvsr_unet", "relayvsr_vae"],
 }
@@ -424,15 +445,17 @@ DEFAULT_CHOICE = {"fast_unet": "int8", "fused_unet": "int8", "lipsync_unet": "fu
                   "krea_unet": "int8", "krea_clip": "fp8", "krea_vae": "bf16", "kreareal_unet": "fp8", "kreareal_lora": "v2",
                   "qwen_unet": "int8", "qwen_clip": "int8", "qwen_vae": "bf16", "outpaint_lora": "v2",
                   "flux_unet": "fp8", "flux_clip": "bf16", "flux_vae": "bf16",
+                  "h3img_unet": "int8", "h3img_vae": "fp16",
                   "seedvr_unet": "int8", "seedvr_vae": "fp16", "relayvsr_unet": "x2", "relayvsr_vae": "x2"}
 
 
 PROFILES = {
-    "lite": {"title": "Лёгкий", "lipsync_unet": "lite", "action_unet": "lite",
+    "lite": {"title": "Лёгкий", "lipsync_unet": "lite", "action_unet": "lite", "h3img_unet": "w4a8",
              "about": "Самые лёгкие версии: меньше качать и меньше памяти, качество немного ниже"},
     "standard": {"title": "Стандарт", "lipsync_unet": "v2", "action_unet": "int8",
+                 "h3img_unet": "w4a8",
                  "about": "Облегчённая (pruned) Singularity v2: ~20 ГБ вместо 34, качество почти как у полной. Подходит для видеокарт 12–16 ГБ"},
-    "max": {"title": "Максимум", "lipsync_unet": "full", "action_unet": "int8",
+    "max": {"title": "Максимум", "lipsync_unet": "full", "action_unet": "int8", "h3img_unet": "int8",
             "about": "Полные модели, как в исходных workflow"},
 }
 
@@ -466,7 +489,8 @@ def choose_models(hw, profile=None):
     blackwell = (hw.get("compute_cap") or 0) >= 12
     profile = profile if profile in PROFILES else recommended_profile(hw)
     choice = dict(DEFAULT_CHOICE, lipsync_unet=PROFILES[profile]["lipsync_unet"],
-                  action_unet=PROFILES[profile]["action_unet"])
+                  action_unet=PROFILES[profile]["action_unet"],
+                  h3img_unet=PROFILES[profile].get("h3img_unet", "int8"))
     notes = []
 
     if blackwell and vram >= 16:
@@ -506,13 +530,13 @@ def model_entry(role, variant):
 
 
 # modes that appeared after the first release: the app offers them once after an update
-OFFER_MODES = ["flux", "long"]
+OFFER_MODES = ["flux", "long", "h3img"]
 
 
 # ---- own model files: does the file fit the rest of the mode (the speed-up LoRAs are made for ONE family of video models) ----
 MAIN_ROLE = {"video": "fast_unet", "lipsync": "lipsync_unet", "refs": "lipsync_unet", "actor": "lipsync_unet", "swap": "lipsync_unet",
              "long": "lipsync_unet", "action": "action_unet", "krea": "krea_unet", "qwen": "qwen_unet", "flux": "flux_unet",
-             "upscale": "seedvr_unet"}
+             "h3img": "h3img_unet", "upscale": "seedvr_unet"}
 ROLE_FAMILY = {"lipsync_unet": "ref2", "fast_unet": "fast", "action_unet": "hybrid",
                "ref2v_turbo_lora": "ref2", "pika_lora": "ref2", "swap_lora": "ref2", "sla_lora": "fast", "speed_slider_lora": "hybrid"}
 FAMILY_TITLE = {"ref2": "Ref2V / Singularity (референсы, Lipsync, студия)", "fast": "FastH3 (Image-to-Video)", "hybrid": "Hybrid FL2VA/Ref2VA (экшн)"}

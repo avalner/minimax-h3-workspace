@@ -633,7 +633,7 @@ class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, Agent
             if hit:
                 found.add(role)
         # modes added after a set-up was made: with your own ComfyUI they switch on by themselves when the files are there
-        self.auto_modes = {m for m in ("krea", "kreareal", "qwen", "flux", "upscale", "long") if self.config.get("engine") == "external"
+        self.auto_modes = {m for m in ("krea", "kreareal", "qwen", "flux", "h3img", "upscale", "long") if self.config.get("engine") == "external"
                            and all(r in found for r in catalog.MODE_ROLES[m])}
         needed = catalog.roles_for(self.modes())
         needed += [r for r in catalog.EXTRA_ROLES if r not in needed]  # optional models: listed, downloaded on demand
