@@ -878,15 +878,8 @@ class GenerateRoutes:
                 missing = {m["role"] for m in self.missing}
                 _, loras_all = await self.comfy_json("GET", "/models/loras")
                 dmad_a = next((n for n in loras_all or [] if catalog.is_action_dmad(n)), None)
-                if not dmad_a:
-                    seen = [n for n in (loras_all or []) if "dmad" in str(n).lower()]
-                    raise web.HTTPBadRequest(
-                        text="Для экшн-видео нужен отдельный файл LoRA DMAD (3,9 ГБ) "
-                             "«minimax_h3_dmad_full_dareties_v4_step600_comfy» в папке loras: это НЕ тот «DMAD 4 шагов», "
-                             "что включает переключатель в разделе «LoRA». "
-                             + ("ComfyUI видит похожие файлы: " + ", ".join(seen[:5]) + ". " if seen else "")
-                             + "Откройте раздел «Экшн-сцены»: там кнопки «открыть страницу» и «я скачал — поставить файл».")
-                a_loras = [(dmad_a, lora_strength(form, "dmad", 0.8))]
+                # without the file the scene still runs, only dirtier («песок»): the queue row says so instead of refusing
+                a_loras = [(dmad_a, lora_strength(form, "dmad", 0.8))] if dmad_a else []
                 if "speed_slider_lora" not in missing and self.model_names.get("speed_slider_lora"):
                     a_loras.append((self.model_names["speed_slider_lora"], lora_strength(form, "speed", 4.0)))
                 a_loras = [x for x in a_loras if x[1] is not None] + self.custom_loras("action")
@@ -906,7 +899,8 @@ class GenerateRoutes:
                 a_inputs = list(long_common) + [media_input(f"Референс {j + 1}", "image", comfy=name)
                                                 for j, name in enumerate(scene_refs.get(k, []))]
                 return await self.queue(graph, stages, {
-                    "mode": "long", "sub": f"экшн · сцена {k + 1} из {len(scenes)}" + (f" · проба {width}×{height}" if test else ""),
+                    "mode": "long", "sub": f"экшн · сцена {k + 1} из {len(scenes)}" + (f" · проба {width}×{height}" if test else "")
+                            + ("" if dmad_a else " · без DMAD"),
                     "prompt": scenes[k][0], "aspect": aspect, "q": quality,
                     "len": round((plan[k]["total"] - plan[k]["ov"]) / wf.FPS, 1), "res": f"{width}×{height}", "seed": seed,
                     "long": {"run": run, "part": k, "n": len(scenes), "draft": False, "test": test, "kind": "action"},
