@@ -1074,7 +1074,7 @@ async function askSavedQueue() {
     confirmBox('Продолжить очередь?', `В прошлый раз осталось ${r.count} незавершённых заданий (программу закрыли или пропало питание). Продолжить их? Задание, которое шло, начнётся заново. Если нажать «Отмена», они будут забыты.`, 'Продолжить', async () => {
       btn.removeEventListener('click', cancel);
       const j = await postJSON('/api/queue/resume');
-      (j.jobs || []).forEach(x => qAdd(x.prompt_id, x.mode, x.prompt));
+      (j.jobs || []).forEach(x => qAdd(x.prompt_id, x.mode, x.prompt, x.project ? { project: x.project } : null));
       if (j.kept) toast(j.error || ('Не удалось восстановить часть заданий: ' + j.kept + ' остались в сохранённой очереди'));
       else toast('Задания вернулись в очередь');
       goTo('queue');
@@ -1916,7 +1916,10 @@ const fileName = it => `h3_${it.mode}_${it.date.toISOString().slice(0, 16).repla
 const QSTAGE = { queued: 'ждёт своей очереди', load: 'загрузка моделей', encode: 'кодирование', sample: 'генерация', sample2: 'проход 2', upscale: 'апскейл',
   decode: 'сборка видео', save: 'сохранение', cloud_queued: 'в очереди RunningHub', cloud_run: 'считается в облаке', ffmpeg: 'сборка FFmpeg' };
 function qAdd(id, mode, prompt, extra) {
-  const j = window.h3State.addJob({ id, mode, prompt, ...(extra || {}) });
+  // A job belongs to the project it was submitted in — the same rule the server stamps its own
+  // record with. Captured here, once: switching the project later must not relabel the queue.
+  const o = { id, mode, prompt, project: PROJECTS_VIEW.active || '', ...(extra || {}) };
+  const j = window.h3State.addJob(o);
   (earlyEvents.get(id) || []).forEach(qHandle);   // events of this id that came before the panel
   return j;
 }
@@ -2006,7 +2009,10 @@ function qRender() {
     const big = live ? `<div class="q-big ${v.lvl}"><i style="width:${Math.round(v.p * 100)}%"></i></div><div class="pbox-chip ${v.lvl}"><span class="pbox-dot"></span><span>${run ? Math.round(v.p * 100) + '% · ' : ''}${esc(v.txt)}</span></div>` : '';
     const cmpB = j.state === 'done' && j.mode === 'upscale' && j.itemId ? `<button class="btn pri" data-q="cmp" data-id="${j.itemId}">До и после</button>` : '';
     const mn = MODE_NAME[j.mode] || 'Видео', pt = j.prompt.slice(0, 120) || 'без промпта';
-    return `<div class="q-row${cls}" data-id="${j.id}" role="button" tabindex="0" title="Открыть подробности задания" aria-label="${esc(mn + ': подробности')}"><div class="q-n">${n || (j.state === 'done' ? '✓' : '·')}</div><div><div class="q-t">${esc(pt === mn ? mn : mn + ': ' + pt)}</div>`
+    // the queue is the machine's and is shared by every project, so each row says which work it is for
+    const projName = (PROJECTS_VIEW.list.find(p => p.id === j.project) || {}).name || '';
+    const projBadge = projName ? `<span class="q-proj" title="Проект задания: ${esc(projName)}">${esc(projName)}</span>` : '';
+    return `<div class="q-row${cls}" data-id="${j.id}" role="button" tabindex="0" title="Открыть подробности задания" aria-label="${esc(mn + ': подробности')}"><div class="q-n">${n || (j.state === 'done' ? '✓' : '·')}</div><div><div class="q-t"><span class="q-tt">${esc(pt === mn ? mn : mn + ': ' + pt)}</span>${projBadge}</div>`
       + `<div class="q-s">${esc(st)}</div>${big}</div><div class="q-btns">${det}${cmpB || btn}</div></div>`;
   };
   box.innerHTML = window.h3State.count() ? act.map((j, i) => row(j, i + 1)).join('') + fin.map(j => row(j, 0)).join('')

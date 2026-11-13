@@ -251,7 +251,9 @@ body.first-run .pr-first{display:flex}
 .q-row.run{border-color:var(--accent)}
 .q-n{width:34px;height:34px;border-radius:50%;background:var(--surface-2);display:grid;place-items:center;font-weight:800;color:var(--muted)}
 .q-row.run .q-n{background:var(--grad);color:#fff}
-.q-t{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.q-t{display:flex;align-items:center;gap:8px;font-weight:700}
+.q-tt{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.q-proj{flex:0 0 auto;padding:1px 7px;border-radius:99px;background:var(--surface-2);border:1px solid var(--line);font-size:11px;font-weight:600;color:var(--muted);white-space:nowrap}
 .q-s{font-size:12.5px;color:var(--muted);margin-top:2px}
 .q-bar{height:5px;border-radius:9px;background:var(--surface-2);overflow:hidden;margin-top:7px}
 .q-bar i{display:block;height:100%;background:var(--grad);transition:width .4s}

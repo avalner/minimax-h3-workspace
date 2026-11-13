@@ -141,5 +141,14 @@ try { S.handle({ type: "stage", prompt_id: "j7", stage: "encode", step: 0 }); ch
 catch (e) { check("a throwing subscriber does not break the state", false, e.message); }
 sandbox.console = loud;
 
+/* the project a job was submitted in travels with its record: the queue is shared by every project */
+S.addJob({ id: "j9", mode: "video", project: "p1" });
+eq("a job keeps the project it was submitted in", S.get("j9").project, "p1");
+S.resync({ jobs: [{ prompt_id: "j9", state: "running", stage: "sample", step: 1, max: 4, project: "p2" }],
+           recent: [], results: [] });
+eq("a snapshot brings the project the server kept", S.get("j9").project, "p2");
+S.addJob({ id: "j10", mode: "video" });
+eq("a job without a project has none", S.get("j10").project, "");
+
 console.log(failed ? `\n${failed} failed` : "\nall state checks passed");
 process.exit(failed ? 1 : 0);

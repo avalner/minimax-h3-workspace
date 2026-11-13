@@ -1016,12 +1016,17 @@ class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, Agent
         that follow as updates, so a repeated or a missed event cannot leave it with a wrong state.
         """
         jobs = []
+        names = None
         for pid, job in list(self.jobs.items()):
             meta = job.get("meta") or {}
+            project = str(meta.get("project") or "")
+            if names is None:   # the queue is the machine's; each row still says which work it is for
+                names = {str(p["id"]): str(p["name"]) for p in self.projects()}
             jobs.append({"prompt_id": pid, "state": job.get("state") or "queued",
                          "stage": job.get("stage"), "step": job.get("step"), "max": job.get("step_max"),
                          "mode": meta.get("mode"), "finalizing": bool(job.get("finalizing")),
                          "prompt": str(meta.get("sub") or meta.get("prompt") or "")[:140],
+                         "project": project, "project_name": names.get(project, ""),
                          "agent": (meta.get("origin") or {}).get("kind") == "agent"})
         recent = self.recent_outcomes(limit=100)
         wanted = {rec["prompt_id"] for rec in recent}

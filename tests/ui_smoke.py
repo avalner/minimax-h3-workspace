@@ -677,14 +677,20 @@ async def run_page(base: str, browser: str, shots: Path):
                 # its result. This is the one-owner contract seen from the window: one row, one
                 # library card even if the event is repeated, and the finished row can be cleared.
                 snap = await cdp.evaluate(
-                    "(() => { onServerMessage({type: 'hello', engine: true,"
-                    " jobs: [{prompt_id: 'ui-job-1', mode: 'video', state: 'running', stage: 'sample', step: 2, max: 10}],"
+                    "(() => { const p = window.h3Projects.active();"
+                    " onServerMessage({type: 'hello', engine: true,"
+                    " jobs: [{prompt_id: 'ui-job-1', mode: 'video', state: 'running', stage: 'sample', step: 2, max: 10, project: p}],"
                     " recent: [], results: []});"
+                    " const row = document.querySelector('#qList .q-row');"
                     " return {rows: document.querySelectorAll('#qList .q-row').length,"
                     " badge: document.querySelector('#qBadge').textContent,"
-                    " state: (window.h3State.get('ui-job-1') || {}).state}; })()")
+                    " proj: (row && row.querySelector('.q-proj') || {}).textContent || '',"
+                    " projName: (PROJECTS_VIEW.list.find(x => x.id === p) || {}).name || '',"
+                    " state: (window.h3State.get('ui-job-1') || {}).state, active: p}; })()")
                 check("a snapshot puts the running job in the queue",
                       snap and snap["rows"] == 1 and snap["badge"] == "1" and snap["state"] == "running", str(snap))
+                check("a job that came back in a snapshot keeps its project in the row",
+                      snap["projName"] and snap["proj"] == snap["projName"], str(snap))
 
                 done = await cdp.evaluate(
                     "(() => { const item = {id: 'ui-media-1', url: '/ui/previews/video.mp4',"
@@ -706,6 +712,40 @@ async def run_page(base: str, browser: str, shots: Path):
                     " text: document.querySelector('#qList').textContent}; })()")
                 check("finished rows can be cleared and the empty message comes back",
                       cleared and cleared["rows"] == 0 and "Очередь пуста" in cleared["text"], str(cleared))
+
+                # The queue is the machine's and stays shared, but a row says which project its job was
+                # submitted in: the page's one door (`qAdd`) stamps the active project, and a job of
+                # another project is labelled with that project's name.
+                queue_proj = await cdp.evaluate("""
+                    (() => {
+                      const active = window.h3Projects.active();
+                      const other = PROJECTS_VIEW.list.find(p => p.id !== active);
+                      const nameOf = id => (PROJECTS_VIEW.list.find(p => p.id === id) || {}).name || '';
+                      qAdd('ui-job-3', 'video', 'из панели');                       // the door a panel uses
+                      qAdd('ui-job-4', 'video', 'другой проект', { project: other.id });
+                      const badge = id => {
+                        const row = document.querySelector('#qList .q-row[data-id="' + id + '"]');
+                        const b = row && row.querySelector('.q-proj');
+                        return b ? b.textContent : '';
+                      };
+                      const out = { active, otherId: other.id, otherName: other.name,
+                                    activeName: nameOf(active),
+                                    own: (window.h3State.get('ui-job-3') || {}).project,
+                                    badgeOwn: badge('ui-job-3'), badgeOther: badge('ui-job-4'),
+                                    rows: document.querySelectorAll('#qList .q-row').length };
+                      for (const id of ['ui-job-3', 'ui-job-4']) window.h3State.handle({ prompt_id: id,
+                        type: 'done', item: { id: 'm-' + id, url: '/ui/previews/video.mp4', mode: 'video',
+                          kind: 'video', date: new Date().toISOString(), prompt: 'очередь' } });
+                      window.h3State.removeFinished();
+                      return out;
+                    })()
+                """)
+                check("a job is put into the queue with the project it was submitted in",
+                      queue_proj["own"] == queue_proj["active"]
+                      and queue_proj["badgeOwn"] == queue_proj["activeName"], str(queue_proj))
+                check("a row of another project carries that project's name in the shared queue",
+                      queue_proj["rows"] == 2 and queue_proj["badgeOther"] == queue_proj["otherName"]
+                      and queue_proj["otherName"], str(queue_proj))
 
                 # Own workflows: a section that used to be wired while the page was parsed, now a
                 # module with a lazy mount. The form is built from the server's report; a stub stands

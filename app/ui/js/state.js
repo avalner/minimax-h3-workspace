@@ -17,7 +17,7 @@
  *
  * Contract (everything else is private):
  *   configure({ onResult, onChange })   callbacks; onResult receives a normalized result item
- *   addJob({ id, mode, prompt, detached, agent }) -> record (throws on an empty id)
+ *   addJob({ id, mode, prompt, project, detached, agent }) -> record (throws on an empty id)
  *   handle(message) -> record | null     a queue event (`stage`/`done`/`error`/`interrupted`)
  *   resync(hello) -> [record]            the first message of a socket: jobs + recent outcomes
  *   get(id) / has(id) / list() / active() / running() / finished() / count() / position(record)
@@ -36,7 +36,7 @@
 
   const FIELDS = ["mode", "prompt", "state", "stage", "step", "max", "scene", "nscenes", "t0",
                   "took", "itemId", "preview", "detached", "agent", "stopping", "msg",
-                  "lastEv", "stepT", "step1T"];
+                  "lastEv", "stepT", "step1T", "project"];
 
   const jobs = new Map();       // prompt id -> record, insertion order is the queue
   const outcomes = new Map();   // prompt id -> how the last run ended
@@ -80,12 +80,13 @@
     keys.forEach(k => outcomes.delete(k));
   }
 
-  function make({ id, mode, prompt, detached = false, agent = false } = {}) {
+  function make({ id, mode, prompt, project = "", detached = false, agent = false } = {}) {
     if (!id) throw new Error("state: a job needs an id");
     return {
       id, mode: mode || "", prompt: prompt || "",
       state: "queued", stage: "queued", step: null, max: null, scene: null, nscenes: null,
       t0: null, took: 0, itemId: null, preview: false,
+      project: project || "",   // the project the job was submitted in (the queue is shared)
       detached: !!detached, agent: !!agent, stopping: null, msg: "", lastEv: now(),
       seq: ++seq,
     };
@@ -213,9 +214,10 @@
       let j = jobs.get(raw.prompt_id);
       if (!j) {
         j = make({ id: raw.prompt_id, mode: raw.mode, prompt: raw.prompt || "",
-                   detached: !!raw.agent, agent: !!raw.agent });
+                   project: raw.project || "", detached: !!raw.agent, agent: !!raw.agent });
         jobs.set(j.id, j);
       }
+      if (raw.project) j.project = raw.project;   // the server keeps the project the job was stamped with
       if (raw.state === "running") {
         j.state = "running"; j.stage = raw.stage || j.stage || "queued";
         j.step = raw.step; j.max = raw.max;
