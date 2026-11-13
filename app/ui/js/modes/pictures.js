@@ -52,15 +52,17 @@ function imgPanel(el, o) {
   const zb = $q('.ip-zb'), hist = $q('.ip-hist'), hh = $q('.ip-hh');
   const dim = $q('.ip-dim');
   res.onload = () => { if (res.naturalWidth) { frame.style.aspectRatio = `${res.naturalWidth} / ${res.naturalHeight}`; dim.textContent = 'Размер: ' + dimTxt(res.naturalWidth, res.naturalHeight); } };
-  const refresh = () => {  // thumbnails of this section's earlier pictures: drafts first, then Library results
-    const mine = [...DRAFTS.filter(x => x.mode === o.mode && x.kind === 'image'),
-                  ...LIB.filter(x => x.mode === o.mode && x.kind === 'image' && !x.missing && x.url)]
-      .filter((x, i, a) => a.findIndex(y => y.id === x.id) === i)
-      .filter(x => !window.h3Projects || window.h3Projects.ok(x))
-      .sort((a, b) => b.date - a.date)
-      .filter((it, i) => it.preview || i < 12);
+  // the pictures of this section shown in its history: drafts first, then Library results
+  const picItems = () => [...DRAFTS.filter(x => x.mode === o.mode && x.kind === 'image'),
+                          ...LIB.filter(x => x.mode === o.mode && x.kind === 'image' && !x.missing && x.url)]
+    .filter((x, i, a) => a.findIndex(y => y.id === x.id) === i)
+    .filter(x => !window.h3Projects || window.h3Projects.ok(x))
+    .sort((a, b) => b.date - a.date)
+    .filter((it, i) => it.preview || i < 12);
+  const refresh = () => {  // thumbnails of this section's earlier pictures
+    const mine = picItems();
     hh.hidden = !mine.length;
-    hist.innerHTML = mine.map(it => `<button draggable="true" class="cw-th${last && last.id === it.id ? ' on' : ''}${it.preview ? ' draft' : ''}" data-id="${it.id}" type="button" title="${esc((it.preview ? 'Черновик, не в Библиотеке · ' : '') + fmtDate(it.date) + ((it.prompt || '') ? ' · ' + it.prompt.slice(0, 70) : ''))}"><img src="${it.url}" alt="" loading="lazy"></button>`).join('');
+    hist.innerHTML = mine.map(it => `<button draggable="true" class="cw-th${last && last.id === it.id ? ' on' : ''}${it.preview ? ' draft' : ''}" data-id="${it.id}" type="button" title="${esc((it.preview ? 'Черновик, не в Библиотеке · ' : '') + fmtDate(it.date) + ((it.prompt || '') ? ' · ' + it.prompt.slice(0, 70) : ''))}"><i class="cw-x" data-del="${it.id}" title="${it.preview ? 'Удалить черновик' : 'Удалить изображение из Библиотеки'}" role="button">✕</i><img src="${it.url}" alt="" loading="lazy"></button>`).join('');
   };
   IMG_PANELS.push(refresh);
   // which buttons fit the shown picture: a draft waits for «Применить изменения» / «Добавить в библиотеку»,
@@ -76,7 +78,31 @@ function imgPanel(el, o) {
     status.innerHTML = `${esc(fmtDate(it.date))} · Seed: <b style="font-family:var(--mono)">${esc(String(it.seed ?? '—'))}</b>` + (it.preview ? ' · <b>черновик</b>' : '');
     refreshActs(); refresh();
   };
-  hist.onclick = e => { const b = e.target.closest('.cw-th'); const it = b && (byId(b.dataset.id) || draftById(b.dataset.id)); if (it && !run) showItem(it); };
+  // the cross of a picture: the same question at the cursor as in «Прошлые клипы». Whatever was on the
+  // screen gives way to the next picture — or the frame goes empty instead of keeping a deleted file.
+  const clearShown = () => {
+    last = null; res.hidden = true; res.removeAttribute('src'); res.removeAttribute('draggable'); delete res.dataset.dragid;
+    acts.hidden = true; zb.hidden = true; empty.hidden = false; frame.style.aspectRatio = '16 / 9';
+    dim.textContent = ''; status.textContent = 'Изображение удалено.';
+    refreshActs(); refresh();
+  };
+  const deletePic = async (it, ev) => {
+    const wasShown = !!(last && last.id === it.id);
+    const at = ev && ev.clientX != null ? { x: ev.clientX, y: ev.clientY } : null;
+    if (!(await deleteClipItem(it, at))) return;
+    if (!wasShown) { refreshActs(); refresh(); return; }
+    const next = picItems()[0];
+    if (next) showItem(next); else clearShown();
+  };
+  hist.onclick = e => {
+    const del = e.target.closest('[data-del]');
+    if (del) {
+      const it = byId(del.dataset.del) || draftById(del.dataset.del);
+      if (it) deletePic(it, e);
+      return;
+    }
+    const b = e.target.closest('.cw-th'); const it = b && (byId(b.dataset.id) || draftById(b.dataset.id)); if (it && !run) showItem(it);
+  };
   res.onclick = zb.onclick = () => { if (res.src) zoomOpen(res.src); };
   const show = () => {
     if (!run) return;

@@ -219,10 +219,14 @@
 .mt-card{position:relative;padding:0;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--bg-2);cursor:pointer;text-align:left}
 .mt-card video,.mt-item video{display:block;width:100%;aspect-ratio:16/9;object-fit:cover;background:#000}
 .mt-card:hover{border-color:var(--pink)}
-.mt-card small{display:block;padding:4px 6px;color:var(--dim);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mt-card small{display:block;padding:4px 28px 4px 6px;color:var(--dim);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .mt-len{position:absolute;right:5px;top:5px;background:rgba(0,0,0,.65);color:#fff;border-radius:6px;padding:1px 6px;font-size:11px}
 .mt-x{position:absolute;right:5px;top:5px;z-index:2;width:20px;height:20px;border-radius:50%;display:grid;place-items:center;background:rgba(0,0,0,.55);color:#fff;font-size:11px;opacity:.75}
 .mt-x:hover{opacity:1;background:#c0303f}
+/* the trash can deletes the clip itself; the ✕ above it only hides the clip from this list */
+.mt-del{position:absolute;right:5px;bottom:3px;z-index:2;width:20px;height:20px;border-radius:6px;display:grid;place-items:center;background:rgba(0,0,0,.5);color:#fff;opacity:.7}
+.mt-del svg{width:13px;height:13px}
+.mt-del:hover{opacity:1;background:#c0303f}
 .mt-plus{position:absolute;left:5px;top:5px;background:var(--pink);color:#fff;border-radius:50%;width:20px;height:20px;display:grid;place-items:center;font-size:14px;line-height:1}
 .mt-strip{display:flex;gap:8px;min-height:60px;padding:4px 0 10px;overflow-x:auto}
 .mt-item{flex:none}

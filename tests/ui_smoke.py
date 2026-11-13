@@ -608,6 +608,89 @@ async def run_page(base: str, browser: str, shots: Path):
                       and form["before"] == "старый промпт", str(form))
                 check("a size typed into the paired fields is rounded to a multiple of 32",
                       form and form["width"] == "800", str(form))
+
+                # The delete cross is not only in «Прошлые клипы»: the picture sections, the own
+                # workflow's history and the clip cards of «Монтаж» ask the same question at the
+                # cursor through the page's one `deleteClipItem`, and the section keeps nothing of a
+                # picture it deleted. The server call is stood in for here (the list is what is tested).
+                deleted = await cdp.evaluate("""
+                    (async () => {
+                      const calls = [];
+                      const orig = window.deleteClipItem;
+                      window.deleteClipItem = async (it, at) => {
+                        calls.push({ id: it.id, x: at && at.x, y: at && at.y });
+                        if (it.preview) dropDraft(it.id); else dropLib(it.id);
+                        return true;
+                      };
+                      const wait = ms => new Promise(r => setTimeout(r, ms));
+                      const pic = '/ui/previews/krea.jpg', out = {};
+                      try {
+                        addDraft({ id: 'pic-a', kind: 'image', mode: 'krea', preview: true,
+                                   date: new Date(Date.now() - 5000), url: pic, prompt: 'первая' });
+                        addDraft({ id: 'pic-b', kind: 'image', mode: 'krea', preview: true,
+                                   date: new Date(), url: pic, prompt: 'вторая' });
+                        const ph = document.querySelector('#view-krea .ip-hist');
+                        ph.querySelector('.cw-th[data-id="pic-b"]').click();
+                        await wait(80);
+                        const px = ph.querySelector('.cw-th[data-id="pic-b"] .cw-x');
+                        out.pic = { cross: !!px, title: px ? px.title : '',
+                                    shown: !document.querySelector('#view-krea .ip-res').hidden };
+                        px.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 321, clientY: 234 }));
+                        await wait(200);
+                        out.pic.on = (ph.querySelector('.cw-th.on') || {}).dataset?.id || '';
+                        out.pic.left = [...ph.querySelectorAll('.cw-th')].map(t => t.dataset.id);
+                        out.pic.calls = calls.splice(0);
+
+                        addDraft({ id: 'cw-a', kind: 'image', mode: 'custom', wf: 'demo', preview: true,
+                                   date: new Date(Date.now() - 5000), url: pic, prompt: 'раз' });
+                        addDraft({ id: 'cw-b', kind: 'image', mode: 'custom', wf: 'demo', preview: true,
+                                   date: new Date(), url: pic, prompt: 'два' });
+                        const ch = document.querySelector('#cwHist');
+                        ch.querySelector('.cw-th[data-id="cw-b"]').click();
+                        await wait(80);
+                        const cx = ch.querySelector('.cw-th[data-id="cw-b"] .cw-x');
+                        out.cw = { cross: !!cx, on: (ch.querySelector('.cw-th.on') || {}).dataset?.id || '' };
+                        cx.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 333, clientY: 222 }));
+                        await wait(220);
+                        out.cw.after = (ch.querySelector('.cw-th.on') || {}).dataset?.id || '';
+                        out.cw.left = [...ch.querySelectorAll('.cw-th')].map(t => t.dataset.id);
+                        out.cw.calls = calls.splice(0);
+
+                        addDraft({ id: 'mt-a', kind: 'video', mode: 'video', preview: true, date: new Date(),
+                                   url: '/ui/previews/video.mp4', len: 5, prompt: 'в монтаже' });
+                        await wait(150);
+                        const box = document.querySelector('#view-montage .mt-lib');
+                        const card = box.querySelector('.mt-card[data-id="mt-a"]');
+                        const mx = card && card.querySelector('.mt-del');
+                        out.mt = { card: !!card, del: !!mx, icon: !!(mx && mx.querySelector('svg')),
+                                   hide: !!(card && card.querySelector('.mt-x')) };
+                        mx.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 355, clientY: 244 }));
+                        await wait(300);
+                        out.mt.left = [...box.querySelectorAll('.mt-card')].map(c => c.dataset.id);
+                        out.mt.strip = document.querySelectorAll('#view-montage .mt-item').length;
+                        out.mt.calls = calls.splice(0);
+                      } finally {
+                        window.deleteClipItem = orig;
+                        ['pic-a', 'pic-b', 'cw-a', 'cw-b', 'mt-a'].forEach(id => dropDraft(id));
+                      }
+                      return out;
+                    })()
+                """, await_promise=True)
+                check("a picture in «Прошлые изображения» has a delete cross at the cursor",
+                      deleted["pic"]["cross"] and "Удалить черновик" in deleted["pic"]["title"]
+                      and deleted["pic"]["calls"] == [{"id": "pic-b", "x": 321, "y": 234}], str(deleted["pic"]))
+                check("the picture on the screen gives way to the next one when it is deleted",
+                      deleted["pic"]["on"] == "pic-a" and "pic-b" not in deleted["pic"]["left"], str(deleted["pic"]))
+                check("a result of an own workflow can be deleted from its history",
+                      deleted["cw"]["cross"] and deleted["cw"]["on"] == "cw-b"
+                      and deleted["cw"]["after"] == "cw-a" and deleted["cw"]["calls"][0]["x"] == 333,
+                      str(deleted["cw"]))
+                check("a clip card of «Монтаж» has its own delete, apart from «убрать из списка»",
+                      deleted["mt"]["card"] and deleted["mt"]["del"] and deleted["mt"]["icon"]
+                      and deleted["mt"]["hide"] and "mt-a" not in deleted["mt"]["left"]
+                      and deleted["mt"]["strip"] == 0
+                      and deleted["mt"]["calls"] == [{"id": "mt-a", "x": 355, "y": 244}],
+                      str(deleted["mt"]))
                 await asyncio.sleep(0.3)
                 await cdp.screenshot(shots / "custom.png")
 

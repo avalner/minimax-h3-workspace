@@ -202,8 +202,18 @@ function cwHist() {
   const box = $('#cwHist'); if (!box) return;
   const mine = cwMine().filter((it, i) => it.preview || i < 16);
   $('#cwHH').hidden = !mine.length;
-  box.innerHTML = mine.map(it => `<button draggable="true" class="cw-th${it.id === CW.shown ? ' on' : ''}${it.preview ? ' draft' : ''}" data-id="${it.id}" type="button" title="${esc((it.label ? it.label + ' · ' : '') + fmtDate(it.date))}">${it.missing ? '<i>—</i>'
+  box.innerHTML = mine.map(it => `<button draggable="true" class="cw-th${it.id === CW.shown ? ' on' : ''}${it.preview ? ' draft' : ''}" data-id="${it.id}" type="button" title="${esc((it.label ? it.label + ' · ' : '') + fmtDate(it.date))}"><i class="cw-x" data-del="${it.id}" title="${it.preview ? 'Удалить черновик' : 'Удалить из Библиотеки'}" role="button">✕</i>${it.missing ? '<i>—</i>'
     : it.kind === 'image' ? `<img src="${it.url}" alt="" loading="lazy">` : `<video src="${it.url}#t=0.5" preload="metadata" muted"></video>`}${it.label ? `<span class="cw-lb">${esc(it.label)}</span>` : ''}</button>`).join('');
+}
+/* the picture or clip deleted from the history: the window goes back to the newest one left, or empties */
+function cwClearShown() {
+  CW.shown = null;
+  $('#cwWait').hidden = false; $('#cwWait').textContent = 'Здесь появится результат';
+  const v = $('#cwVideo'), im = $('#cwImage');
+  [v, im].forEach(x => { if (x) { x.hidden = true; x.removeAttribute('src'); } });
+  $('#cwActs').hidden = true; $('#cwZoomBtn').hidden = true; $('#cwBar').style.width = '0';
+  $('#cwTime').innerHTML = ''; $('#cwStatus').textContent = 'Результат удалён.';
+  cwHist();
 }
 /* a new result of this workflow appears in its history at once; the hook is the page's list of
    sections that show their own drafts, so it is taken back when the window closes */
@@ -261,6 +271,16 @@ function cwFinish(kind, ev) {
 function wireActions(scope) {
 scope.listen(body, 'click', async e => {
   const lb = e.target.closest('[data-lib]'); if (lb) { e.preventDefault(); cwPick(lb.dataset.lib); return; }
+  const del = e.target.closest('#cwHist [data-del]');
+  if (del) {
+    const it = byId(del.dataset.del) || draftById(del.dataset.del); if (!it) return;
+    const wasShown = CW.shown === it.id;
+    if (!(await deleteClipItem(it, { x: e.clientX, y: e.clientY }))) return;
+    // the page's own hooks redraw the history; the window shows what is left, or nothing at all
+    if (wasShown) { const mine = cwMine(); if (mine.length) cwShowLast(); else cwClearShown(); }
+    else cwHist();
+    return;
+  }
   if (e.target.closest('#cwZoomBtn') || e.target.closest('#cwImage')) { zoomOpen($('#cwImage').src); return; }
   const th = e.target.closest('.cw-th'); if (th) { const it = byId(th.dataset.id) || draftById(th.dataset.id); if (it) cwShow(it); return; }
   const act = e.target.closest('#cwActs [data-a]');
