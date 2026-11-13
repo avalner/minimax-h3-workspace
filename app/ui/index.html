@@ -1256,7 +1256,7 @@ H3C.configure({
   addDraftHook: fn => DRAFT_HOOKS.push(fn),
   removeDraftHook: fn => { const i = DRAFT_HOOKS.indexOf(fn); if (i >= 0) DRAFT_HOOKS.splice(i, 1); },
   keepDraft: it => keepDraftItem(it),
-  deleteDraft: it => deleteDraftItem(it),
+  deleteDraft: (it, at) => deleteDraftItem(it, at),
   projectOk: it => projectOk(it),
   openUpscale: it => openUpscale(it),
   addJob: (id, mode, prompt) => qAdd(id, mode, prompt),
@@ -2382,10 +2382,6 @@ function askDeleteDraft(it, at) {
     }
     const pop = draftDelPop;
     pop.innerHTML = '<div class="ddp-t">Удалить черновик?</div>'
-      + (String(it.prompt || '').trim() ? `<div class="ddp-p">${esc(it.prompt)}</div>`
-        : '<div class="ddp-p ddp-empty">Без промпта</div>')
-      + `<div class="ddp-m">${esc([MODE_NAME[it.mode] || it.mode, it.res, it.date instanceof Date ? fmtDate(it.date) : '']
-        .filter(Boolean).join(' · '))}</div>`
       + '<div class="ddp-b"><button type="button" class="btn" data-ddp="no">Отмена</button>'
       + '<button type="button" class="btn pri" data-ddp="yes">Удалить в корзину</button></div>';
     pop.hidden = false;

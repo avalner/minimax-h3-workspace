@@ -249,8 +249,8 @@ async def run_page(base: str, browser: str, shots: Path):
                 check("choosing another project in the header switches it back",
                       restored["name"] == "Основное" and restored["active"] == "main", str(restored))
 
-                # Deleting a draft asks first and shows the prompt of that very clip next to the
-                # cursor: two variants of one shot look the same as thumbnails.
+                # Deleting a draft asks first, right at the cursor: two variants of one shot look
+                # the same as thumbnails, and the question must not jump to the middle of the screen.
                 popover = await cdp.evaluate(
                     "(async () => {"
                     " const p = window.deleteDraftItem({ id: 'ui-pop', prompt: 'Промпт для проверки',"
@@ -262,11 +262,15 @@ async def run_page(base: str, browser: str, shots: Path):
                     " pop?.querySelector('[data-ddp=\"no\"]')?.click();"
                     " const result = await p;"
                     " return { shown: !!box, text, result, hidden: !!pop && pop.hidden,"
+                    "   left: box ? box.left : -1, top: box ? box.top : -1,"
                     "   inside: !!box && box.left >= 0 && box.top >= 0"
                     "     && box.right <= innerWidth && box.bottom <= innerHeight }; })()",
                     await_promise=True)
-                check("the delete cross asks first and shows the clip's prompt next to the cursor",
-                      popover["shown"] and "Промпт для проверки" in popover["text"] and popover["inside"]
+                check("the delete cross asks at the cursor, with a title and buttons only",
+                      popover["shown"] and "Удалить черновик?" in popover["text"]
+                      and "Промпт для проверки" not in popover["text"]
+                      and popover["inside"]
+                      and abs(popover["left"] - 434) <= 25 and abs(popover["top"] - 314) <= 25
                       and popover["result"] is False and popover["hidden"], str(popover))
 
                 empty_queue = await cdp.evaluate(

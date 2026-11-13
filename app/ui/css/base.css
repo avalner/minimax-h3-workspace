@@ -373,11 +373,9 @@ body.first-run .pr-first{display:flex}
 .app.nosb .tb-row1{grid-column:1/-1}
 
 
-/* ---------- deleting a draft: the prompt of that very clip next to the cursor ---------- */
-.ddp{position:fixed;z-index:200;width:min(360px,calc(100vw - 20px));background:var(--bg-2);border:1px solid var(--line);border-radius:12px;box-shadow:0 18px 40px rgba(0,0,0,.45);padding:12px}
+/* ---------- deleting a draft: the question next to the cursor ---------- */
+.ddp{position:fixed;z-index:200;width:auto;min-width:290px;max-width:calc(100vw - 20px);background:var(--bg-2);border:1px solid var(--line);border-radius:12px;box-shadow:0 18px 40px rgba(0,0,0,.45);padding:12px}
 .ddp[hidden]{display:none}
 .ddp-t{font-weight:700;font-size:12.5px;margin-bottom:6px}
-.ddp-p{font-size:12px;line-height:1.45;color:var(--text);background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:8px;max-height:170px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere}
-.ddp-p.ddp-empty{color:var(--dim)}
-.ddp-m{font-size:11px;color:var(--dim);margin:6px 0 10px}
 .ddp-b{display:flex;gap:8px;justify-content:flex-end}
+
