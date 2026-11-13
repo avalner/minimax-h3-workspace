@@ -159,6 +159,42 @@ class JobRepository:
     def count(self):
         return self.db.one("SELECT COUNT(*) AS n FROM jobs")["n"]
 
+    # -- how a job ended: the row stays after the job leaves the queue, so the details window and
+    # -- a reconnecting window can still answer. The queue is `active()`; these are the outcomes.
+
+    FINAL = ("succeeded", "failed", "canceled")
+    OUTCOME_KEEP = 300
+    OUTCOME_DAYS = 7.0
+
+    def outcomes(self, limit=100):
+        """The latest finished jobs, newest first: what a window may have missed while it was gone."""
+        rows = self.db.query("SELECT job_id, record_json FROM jobs "
+                             "WHERE state IN ('succeeded','failed','canceled') "
+                             "ORDER BY updated_at DESC LIMIT ?", (int(limit),))
+        return [self._record(row, row["job_id"]) for row in rows]
+
+    def note_message(self, prompt_id, message=""):
+        """Write how a job ended into its record, before the event is delivered. None when unknown."""
+        record = self.by_prompt(prompt_id) if prompt_id else None
+        if record is None:
+            return None
+        record.legacy = {**(record.legacy or {}), "message": message or ""}
+        self.save(record)
+        return record
+
+    def prune_outcomes(self, keep=None, days=None, now=None):
+        """Forget old outcomes: a week and a few hundred rows are enough for the details window."""
+        import time as _time
+        keep = self.OUTCOME_KEEP if keep is None else int(keep)
+        days = self.OUTCOME_DAYS if days is None else float(days)
+        cutoff = (now if now is not None else _time.time()) - days * 86400
+        self.db.execute("DELETE FROM jobs WHERE state IN ('succeeded','failed','canceled') "
+                        "AND updated_at < ?", (cutoff,))
+        self.db.execute(
+            "DELETE FROM jobs WHERE state IN ('succeeded','failed','canceled') AND job_id NOT IN ("
+            " SELECT job_id FROM jobs WHERE state IN ('succeeded','failed','canceled')"
+            " ORDER BY updated_at DESC LIMIT ?)", (keep,))
+
 
 class IdempotencyRepository:
     """A key is reserved before the remote call, so a retry after a crash does not render twice."""

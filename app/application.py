@@ -71,8 +71,6 @@ class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, Agent
         self.comfy_override = comfy_override.rstrip("/") if comfy_override else None
         self.port = port  # the port this window actually listens on: agents find it through agent.json
         self.agents = agentapi.AgentAPI(self, DATA_DIR, MAX_SECONDS)
-        self.recent = {}  # prompt_id -> how a job ended, for the short while after it left the queue
-        self.history = {}  # prompt_id -> what a failed or stopped job was made from (the details window asks later)
         self.session = None
         # the state of this folder: the database is opened once, and the older JSON files are imported
         # into it on the first start of this version (see storage.migrations for what and how)
@@ -450,12 +448,10 @@ class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, Agent
             entry = (hist or {}).get(pid)
             try:
                 if not entry:
-                    self.keep_meta(job)
                     self.jobs.pop(pid, None)
                     await self.broadcast({"type": "error", "prompt_id": pid, "message": (
                         "Задание пропало из очереди ComfyUI: связь с ним прерывалась. Запустите ещё раз.")})
                 elif entry.get("status", {}).get("status_str") == "error":
-                    self.keep_meta(job)
                     self.jobs.pop(pid, None)
                     await self.broadcast({"type": "error", "prompt_id": pid,
                                           "message": "ComfyUI закончил задание с ошибкой (связь с ним прерывалась)"})
@@ -571,7 +567,6 @@ class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, Agent
             # being written, so a replaced engine is not a reason to declare it lost
             self.try_set_job_state(self.jobs[jid], JobState.CANCELED if kind == "interrupted" else JobState.FAILED,
                                    error=message)
-            self.keep_meta(self.jobs.get(jid))
             self.jobs.pop(jid, None)
             await self.broadcast({"type": kind, "prompt_id": jid, **({"message": message} if message else {})})
 
@@ -668,12 +663,10 @@ class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, Agent
             hint = self.model_hint((job.get("meta") or {}).get("mode", ""), d.get("exception_message", ""))
             await self.broadcast({"type": "error", "prompt_id": pid,
                                   "message": f'{d.get("node_type", "")}: {d.get("exception_message", "").strip()}' + hint})
-            self.keep_meta(job)
             self.jobs.pop(pid, None)
         elif t == "execution_interrupted":
             self.try_set_job_state(job, JobState.CANCELED)
             await self.broadcast({"type": "interrupted", "prompt_id": pid})
-            self.keep_meta(job)
             self.jobs.pop(pid, None)
 
     async def send_stage(self, job, stage, step=None, total=None, node=None):
@@ -773,6 +766,19 @@ class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, Agent
         changed = record.apply(target, now=datetime.now().timestamp(), error=error)
         job["state"] = public_state(record.state)
         job["finalizing"] = record.state is JobState.FINALIZING
+        if changed and record.state.terminal:
+            # the outcome is a fact the moment it happens: write it down before any window hears about
+            # it, so the details window and the snapshot never depend on the order of events. A live
+            # job is written with the fields the window keeps (meta, stages); a job that is not in the
+            # queue any more keeps the record it already has.
+            if job.get("prompt_id") in self.jobs:
+                self.save_queue()
+            else:
+                try:
+                    self.jobs_repo.save(record)
+                except STORE_ERRORS as e:
+                    self.queue_save_error = str(e)
+                    self.note_error(f"Не удалось сохранить исход задания: {e}")
         return changed
 
     def try_set_job_state(self, job, target, *, error=None):
@@ -825,7 +831,6 @@ class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, Agent
         the copy and the Library record of the previous one instead of making a second pair.
         """
         pid = job["prompt_id"]
-        self.keep_meta(job)
         try:
             await self.media.finalize(job, notify=self.broadcast)
         except EmptyResult:
@@ -872,20 +877,35 @@ class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, Agent
         """
         await self.events.publish(payload)
 
-    def remember(self, payload):
-        """Keep the outcome of a job for a while: an agent asks about it after it has already left the queue.
+    def job_outcome(self, pid):
+        """How a job that has left the queue ended: the record in the database is the one owner.
 
-        Called by the event hub before anything is delivered, so the outcome exists even when no window
-        is open at that moment.
+        Returns the shape the window and the agent have always used (`state` in their words, `at`,
+        `message`, plus `meta`/`created` for the details window), or None when the job is unknown.
+        A succeeded job is normally found through the Library record first; this is the fallback for
+        failed and stopped ones, which have no Library item.
         """
-        kind = {"done": "done", "error": "error", "interrupted": "interrupted"}.get(payload.get("type", ""))
+        record = self.jobs_repo.by_prompt(pid) if pid else None
+        if record is None or record.state.value not in JobRepository.FINAL:
+            return None
+        return {"state": {"succeeded": "done", "failed": "error", "canceled": "interrupted"}[record.state.value],
+                "at": datetime.fromtimestamp(record.updated_at).isoformat(timespec="seconds"),
+                "message": (record.legacy or {}).get("message") or "",
+                "meta": (record.legacy or {}).get("meta") or {},
+                "created": record.created_at, "phase": record.state.value}
+
+    def remember(self, payload):
+        """Write how a job ended into its record, before the event is delivered.
+
+        The record is the one owner of what happened: the row of a finished job stays in `jobs` (the
+        queue is `active()`), so the details window and a reconnected window read the same facts, also
+        after a restart. Called by the event hub, so the outcome exists even when no window is open.
+        """
+        kind = {"done": "succeeded", "error": "failed", "interrupted": "canceled"}.get(payload.get("type", ""))
         pid = payload.get("prompt_id")
         if not kind or not pid:
             return
-        self.recent[pid] = {"state": kind, "at": datetime.now().isoformat(timespec="seconds"),
-                            "message": payload.get("message", "")}
-        while len(self.recent) > 200:
-            self.recent.pop(next(iter(self.recent)))
+        self.jobs_repo.note_message(pid, payload.get("message") or "")
 
     def ui_snapshot(self):
         """What a window may have missed: the live queue, the latest outcomes and their results.
@@ -902,7 +922,11 @@ class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, Agent
                          "mode": meta.get("mode"), "finalizing": bool(job.get("finalizing")),
                          "prompt": str(meta.get("sub") or meta.get("prompt") or "")[:140],
                          "agent": (meta.get("origin") or {}).get("kind") == "agent"})
-        recent = [{"prompt_id": pid, **rec} for pid, rec in list(self.recent.items())[-100:]]
+        recent = [{"prompt_id": record.prompt_id or record.backend_job_id,
+                   "state": {"succeeded": "done", "failed": "error", "canceled": "interrupted"}[record.state.value],
+                   "at": datetime.fromtimestamp(record.updated_at).isoformat(timespec="seconds"),
+                   "message": (record.legacy or {}).get("message") or ""}
+                  for record in reversed(self.jobs_repo.outcomes(limit=100))]
         wanted = {rec["prompt_id"] for rec in recent}
         results = []
         for item in (*self.library.items, *self.pending.values()):
@@ -911,14 +935,6 @@ class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, Agent
                 if len(results) >= 60:
                     break
         return {"type": "hello", "engine": self.comfy_online, "jobs": jobs, "recent": recent, "results": results}
-
-    def keep_meta(self, job):
-        """Remember what a job was made from after it leaves the queue: the details window may be opened later."""
-        if not job:
-            return
-        self.history[job["prompt_id"]] = {"meta": job.get("meta") or {}, "created": job.get("t0")}
-        while len(self.history) > 200:
-            self.history.pop(next(iter(self.history)))
 
     def public(self, item):
         p = self.file_path(item)

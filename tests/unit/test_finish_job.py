@@ -61,7 +61,10 @@ class FinishJobTest(unittest.IsolatedAsyncioTestCase):
         release.set()
         await task
         self.assertNotIn("p1", self.app.jobs)
-        self.assertIsNone(self.app.jobs_repo.by_prompt("p1"), "завершённое задание должно уйти из таблицы")
+        saved = self.app.jobs_repo.by_prompt("p1")
+        self.assertIsNotNone(saved, "исход задания не сохранился")
+        self.assertIs(saved.state, JobState.SUCCEEDED)
+        self.assertEqual(self.app.jobs_repo.active(), [], "завершённое задание осталось в очереди")
         self.assertEqual(len(self.app.library.items), 1)
 
     async def test_a_failed_registration_keeps_the_job_for_a_retry(self):

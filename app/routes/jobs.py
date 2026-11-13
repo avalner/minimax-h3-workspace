@@ -24,6 +24,7 @@ import workflows as wf
 from backends.base import BackendError, BackendUnavailable
 from domain.errors import JobConflict
 from domain.jobs import JobState, public_state
+from storage.repositories import JobRepository
 
 
 class JobRoutes:
@@ -68,11 +69,14 @@ class JobRoutes:
         return record
 
     def save_queue(self):
-        """Persist the live jobs. Called on every change of the job list.
+        """Persist the live jobs and keep the outcomes. Called on every change of the job list.
 
         The database is the queue now: a job is written when it is added and on every change, and its
-        row goes away when the job leaves memory (finished, cancelled, dropped). A failed write is
-        remembered and reported instead of raising into the caller's state change.
+        row goes away when the job leaves memory — unless the job has ended, in which case the row is
+        the record of *how* it ended (the queue itself is `active()`, which skips final states). Those
+        rows are pruned by age and count, so the details window works after a restart without a week
+        of history piling up. A failed write is remembered and reported instead of raising into the
+        caller's state change.
         """
         try:
             live = set()
@@ -85,9 +89,13 @@ class JobRoutes:
                         continue
                     self.jobs_repo.save(record)
                     live.add(record.job_id)
-                for row in self.db.query("SELECT job_id FROM jobs"):
-                    if row["job_id"] not in live and row["job_id"] not in waiting:
-                        self.jobs_repo.delete(row["job_id"])
+                for row in self.db.query("SELECT job_id, state FROM jobs"):
+                    if row["job_id"] in live or row["job_id"] in waiting:
+                        continue
+                    if row["state"] in JobRepository.FINAL:
+                        continue   # an outcome: the details window and the snapshot still ask about it
+                    self.jobs_repo.delete(row["job_id"])
+                self.jobs_repo.prune_outcomes()
             self.queue_save_error = None
         except STORE_ERRORS as e:
             self.queue_save_error = str(e)
@@ -187,8 +195,10 @@ class JobRoutes:
                 out.append({"prompt_id": pid, "mode": mode, "prompt": prompt, "state": "done"})
                 return True
             if done == "failed":
-                self.recent[pid] = {"state": "error", "at": datetime.now().isoformat(timespec="seconds"),
-                                    "message": "ComfyUI закончил это задание с ошибкой, пока окно было закрыто"}
+                message = "ComfyUI закончил это задание с ошибкой, пока окно было закрыто"
+                self.try_set_job_state(job, JobState.FAILED, error=message)
+                if record is not None:
+                    self.jobs_repo.note_message(pid, message)
                 out.append({"prompt_id": pid, "mode": mode, "prompt": prompt, "state": "error"})
                 return True
         resp = await self.queue(job["graph"], job.get("stages") or {}, meta, job.get("last_output", False),
@@ -259,20 +269,21 @@ class JobRoutes:
             out.update(state="done", meta=jobmeta.for_ui({k: v for k, v in items[0].items() if k not in drop}),
                        created=items[0].get("date"), items=items)
             return web.json_response(out)
-        kept = self.history.get(pid) or {}
-        if kept:
-            out.update(meta=jobmeta.for_ui(kept.get("meta")), created=kept.get("created"))
-        if pid in self.recent:
-            r = self.recent[pid]
-            out.update(state=r.get("state") or "unknown", message=r.get("message") or "")
-        elif not kept:
-            waiting = next((record for record in self.pending_resume
-                            if (record.prompt_id or record.backend_job_id) == pid), None)
-            if not waiting:
-                raise web.HTTPNotFound()
+        # the record of a job that has left the queue: it stays in the database as the outcome, so
+        # the details window answers the same before and after a restart (no second memory of it)
+        outcome = self.job_outcome(pid)
+        if outcome is not None:
+            out.update(state=outcome["state"], meta=jobmeta.for_ui(outcome["meta"]),
+                       created=outcome["created"], phase=outcome["phase"], message=outcome["message"])
+            return web.json_response(out)
+        # a job of an earlier run waits for «восстановить»: it is queued, not an outcome
+        waiting = next((record for record in self.pending_resume
+                        if (record.prompt_id or record.backend_job_id) == pid), None)
+        if waiting is not None:
             out.update(state="queued", meta=jobmeta.for_ui((waiting.legacy or {}).get("meta")),
                        created=waiting.created_at, phase=waiting.state.value)
-        return web.json_response(out)
+            return web.json_response(out)
+        raise web.HTTPNotFound()
 
     async def queue_cloud(self, rh, graph, stages, meta, preview=False, spec=None):
         if not self.config.get("rh_workflow_id"):
@@ -370,7 +381,6 @@ class JobRoutes:
             if pid in self.jobs:
                 job = self.jobs.get(pid)
                 self.try_set_job_state(job, JobState.FAILED, error=str(e))
-                self.keep_meta(job)
                 self.jobs.pop(pid, None)
                 await self.broadcast({"type": "error", "prompt_id": pid, "message": str(e)})
 
@@ -419,7 +429,6 @@ class JobRoutes:
                 await self.broadcast({"type": "notice", "text": text})
                 return {"state": "refused", "message": text}
             if record.state is JobState.CANCELED:   # a queued job is removed at once
-                self.keep_meta(job)
                 self.jobs.pop(pid, None)
                 await self.broadcast({"type": "interrupted", "prompt_id": pid})
                 return {"state": "canceled", "message": None}
@@ -430,7 +439,6 @@ class JobRoutes:
         # cloud tasks and jobs of an older run have no record: their own paths stay as they were
         if job.get("task"):
             self.try_set_job_state(job, JobState.CANCELED)
-            self.keep_meta(job)
             self.jobs.pop(pid, None)
             rh = self.rh()
             if rh:
@@ -443,7 +451,6 @@ class JobRoutes:
         if job["state"] == "queued":
             await self.comfy_json("POST", "/queue", json={"delete": [pid]})
             self.try_set_job_state(job, JobState.CANCELED)
-            self.keep_meta(job)
             self.jobs.pop(pid, None)
             await self.broadcast({"type": "interrupted", "prompt_id": pid})
             return {"state": "canceled", "message": None}
@@ -502,7 +509,6 @@ class JobRoutes:
             if entry.get("outputs") and entry.get("status", {}).get("status_str") != "error":
                 await self.finish_job(job)  # it finished just as we were cancelling: keep the clip
                 return True
-            self.keep_meta(job)
             self.jobs.pop(pid, None)
             await self.broadcast({"type": "interrupted", "prompt_id": pid})
         return True

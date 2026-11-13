@@ -30,7 +30,7 @@ class SnapshotTest(unittest.IsolatedAsyncioTestCase):
                                              record=support.job_record("p-run"))
         self.app.jobs["p-run"]["stage"] = "sample"
         self.app.jobs["p-run"]["step"], self.app.jobs["p-run"]["step_max"] = 3, 8
-        self.app.recent["p-done"] = {"state": "done", "at": "2026-11-12T10:00:00", "message": ""}
+        support.finished(self.app, "p-done")
         item = self.finished_item()
         snapshot = self.app.ui_snapshot()
         self.assertEqual(snapshot["type"], "hello")
@@ -41,7 +41,7 @@ class SnapshotTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("file", snapshot["results"][0], "снимок не должен отдавать внутренние ссылки на файл")
 
     async def test_a_draft_of_a_finished_picture_is_in_the_snapshot(self):
-        self.app.recent["p-draft"] = {"state": "done", "at": "2026-11-12T10:00:00", "message": ""}
+        support.finished(self.app, "p-draft")
         self.app.hold_preview({"id": "d1", "prompt_id": "p-draft", "kind": "image", "mode": "krea",
                                "date": "2026-11-12T10:00:00", "preview": True,
                                "file": {"filename": "pic.png", "subfolder": "", "type": "output"}})
@@ -50,7 +50,7 @@ class SnapshotTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(snapshot["results"][0]["preview"])
 
     async def test_an_old_result_is_not_pushed_again(self):
-        self.finished_item(media_id="old", pid="p-old")   # not in `recent`: the window does not need it
+        self.finished_item(media_id="old", pid="p-old")   # no outcome record: the window does not need it
         snapshot = self.app.ui_snapshot()
         self.assertEqual(snapshot["results"], [])
 

@@ -60,6 +60,7 @@ class JobDetailsTest(unittest.IsolatedAsyncioTestCase):
         record = JobRecord(job_id="j-wait", prompt_id="p-wait", state=JobState.QUEUED,
                            created_at=time.time(), updated_at=time.time(),
                            legacy={"meta": {"mode": "video", "sub": "Текст → видео · Fused Turbo"}})
+        self.app.jobs_repo.save(record)
         self.app.pending_resume = [record]
         body = await self.details("p-wait")
         self.assertEqual(body["state"], "queued")

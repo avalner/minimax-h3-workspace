@@ -150,8 +150,8 @@ app.config = Cfg({"allow_agents": True})
 app.port = 1234
 app.library = types.SimpleNamespace(items=[])
 app.pending_resume = []
-app.recent = {}
 app.file_path = lambda item: None
+app.job_outcome = lambda pid: None   # no finished job here: the record is the only owner
 app.jobs = {"p-run": {"meta": {"mode": "video", "prompt": "тест", "seed": 1}, "state": "running",
                       "stage": "sample", "step": 3, "step_max": 8, "t0": time.time() - 30,
                       "scenes": {"n": 4}, "scene_now": 2}}
@@ -169,7 +169,9 @@ queued = api.job_view("p-queued")
 assert queued["state"] == "queued" and queued["progress"]["stage"] == "queued", queued
 assert queued["queue_position"] == 0, queued
 
-app.recent["p-bad"] = {"state": "error", "at": "2026-11-11T10:00:00", "message": "нет модели"}
+app.job_outcome = lambda pid: ({"state": "error", "at": "2026-11-11T10:00:00",
+                                "message": "нет модели", "meta": {}, "created": 0.0,
+                                "phase": "failed"} if pid == "p-bad" else None)
 bad = api.job_view("p-bad")
 assert bad["state"] == "failed" and bad["error"]["message"] == "нет модели", bad
 

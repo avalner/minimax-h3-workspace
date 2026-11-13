@@ -112,6 +112,23 @@ def job(pid="p1", **extra):
     return record
 
 
+def finished(app, pid="p1", state=None, message="", meta=None):
+    """A job that ended: its row stays in the database as the outcome (the queue is `active()`).
+
+    There is no second copy of it in memory any more: the details window, the agent and the snapshot
+    all read this record.
+    """
+    from domain.jobs import JobState
+
+    record = job_record(pid, state=state or JobState.SUCCEEDED)
+    if meta is not None:
+        record.legacy = {"meta": meta}
+    app.jobs_repo.save(record)
+    if message:
+        app.jobs_repo.note_message(pid, message)
+    return record
+
+
 def saved(pid="old1", **extra):
     """A record of queue.json: what is left there after the program was closed."""
     record = {"graph": {"1": {"class_type": "Test", "inputs": {}}}, "stages": {},

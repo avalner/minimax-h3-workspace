@@ -191,19 +191,19 @@
 
 | файл | строка | код |
 | --- | --- | --- |
-| application.py | 454 | self.jobs.pop(pid, None) |
-| application.py | 459 | self.jobs.pop(pid, None) |
-| application.py | 572 | self.try_set_job_state(self.jobs[jid], JobState.CANCELED if kind == "interrupted" else JobState.FAILED, |
-| application.py | 575 | self.jobs.pop(jid, None) |
-| application.py | 672 | self.jobs.pop(pid, None) |
-| application.py | 677 | self.jobs.pop(pid, None) |
-| application.py | 745 | self.jobs[pid] = job |
-| application.py | 770 | job["state"] = public_state(target) |
-| application.py | 773 | changed = record.apply(target, now=datetime.now().timestamp(), error=error) |
-| application.py | 774 | job["state"] = public_state(record.state) |
-| application.py | 834 | self.jobs.pop(pid, None)   # there is nothing to wait for any more |
-| application.py | 840 | self.jobs.pop(pid, None)   # the result is registered: only now the job leaves the queue |
-| application.py | 900 | jobs.append({"prompt_id": pid, "state": job.get("state") or "queued", |
+| application.py | 451 | self.jobs.pop(pid, None) |
+| application.py | 455 | self.jobs.pop(pid, None) |
+| application.py | 568 | self.try_set_job_state(self.jobs[jid], JobState.CANCELED if kind == "interrupted" else JobState.FAILED, |
+| application.py | 570 | self.jobs.pop(jid, None) |
+| application.py | 666 | self.jobs.pop(pid, None) |
+| application.py | 670 | self.jobs.pop(pid, None) |
+| application.py | 738 | self.jobs[pid] = job |
+| application.py | 763 | job["state"] = public_state(target) |
+| application.py | 766 | changed = record.apply(target, now=datetime.now().timestamp(), error=error) |
+| application.py | 767 | job["state"] = public_state(record.state) |
+| application.py | 839 | self.jobs.pop(pid, None)   # there is nothing to wait for any more |
+| application.py | 845 | self.jobs.pop(pid, None)   # the result is registered: only now the job leaves the queue |
+| application.py | 920 | jobs.append({"prompt_id": pid, "state": job.get("state") or "queued", |
 | agentapi.py | 673 | running = job.get("state") == "running" |
 | services/jobs.py | 72 | record.apply(JobState.SUBMITTING, now=self._clock()) |
 | services/jobs.py | 77 | record.fail(str(e), now=self._clock()) |
@@ -217,45 +217,45 @@
 | services/jobs.py | 195 | record.cancel_confirmed(now=self._clock()) |
 | services/jobs.py | 210 | record.cancel_confirmed(now=self._clock())   # a queued job is removed at once |
 | services/media.py | 410 | record.succeed(now=self._clock()) |
-| routes/jobs.py | 137 | self.jobs[pid] = job |
-| routes/jobs.py | 170 | self.jobs[pid] = job |
-| routes/jobs.py | 179 | self.jobs[pid] = job |
-| routes/jobs.py | 184 | self.jobs.pop(pid, None) |
-| routes/jobs.py | 251 | out.update(state=job.get("state") or "queued", stage=job.get("stage"), step=job.get("step"), |
-| routes/jobs.py | 292 | self.jobs[pid] = {"prompt_id": pid, "state": "queued", "stages": {}, "stage": None, |
-| routes/jobs.py | 295 | self.set_job_state(self.jobs[pid], JobState.QUEUED) |
-| routes/jobs.py | 341 | self.jobs.pop(pid, None) |
-| routes/jobs.py | 374 | self.jobs.pop(pid, None) |
-| routes/jobs.py | 423 | self.jobs.pop(pid, None) |
-| routes/jobs.py | 434 | self.jobs.pop(pid, None) |
-| routes/jobs.py | 443 | if job["state"] == "queued": |
-| routes/jobs.py | 447 | self.jobs.pop(pid, None) |
-| routes/jobs.py | 506 | self.jobs.pop(pid, None) |
-| routes/jobs.py | 531 | if job["state"] == "running" and silent > 600: |
-| routes/jobs.py | 542 | self.jobs.pop(pid, None) |
-| routes/jobs.py | 553 | if job["state"] == "queued" and age > 240: |
-| routes/jobs.py | 559 | self.jobs.pop(pid, None) |
-| routes/jobs.py | 564 | elif job["state"] == "running" and silent > 900: |
-| routes/jobs.py | 570 | self.jobs.pop(pid, None) |
-| routes/jobs.py | 581 | self.jobs.pop(pid, None) |
+| routes/jobs.py | 145 | self.jobs[pid] = job |
+| routes/jobs.py | 178 | self.jobs[pid] = job |
+| routes/jobs.py | 187 | self.jobs[pid] = job |
+| routes/jobs.py | 192 | self.jobs.pop(pid, None) |
+| routes/jobs.py | 261 | out.update(state=job.get("state") or "queued", stage=job.get("stage"), step=job.get("step"), |
+| routes/jobs.py | 303 | self.jobs[pid] = {"prompt_id": pid, "state": "queued", "stages": {}, "stage": None, |
+| routes/jobs.py | 306 | self.set_job_state(self.jobs[pid], JobState.QUEUED) |
+| routes/jobs.py | 352 | self.jobs.pop(pid, None) |
+| routes/jobs.py | 384 | self.jobs.pop(pid, None) |
+| routes/jobs.py | 432 | self.jobs.pop(pid, None) |
+| routes/jobs.py | 442 | self.jobs.pop(pid, None) |
+| routes/jobs.py | 451 | if job["state"] == "queued": |
+| routes/jobs.py | 454 | self.jobs.pop(pid, None) |
+| routes/jobs.py | 512 | self.jobs.pop(pid, None) |
+| routes/jobs.py | 537 | if job["state"] == "running" and silent > 600: |
+| routes/jobs.py | 548 | self.jobs.pop(pid, None) |
+| routes/jobs.py | 559 | if job["state"] == "queued" and age > 240: |
+| routes/jobs.py | 565 | self.jobs.pop(pid, None) |
+| routes/jobs.py | 570 | elif job["state"] == "running" and silent > 900: |
+| routes/jobs.py | 576 | self.jobs.pop(pid, None) |
+| routes/jobs.py | 587 | self.jobs.pop(pid, None) |
 
 ## Черновики и Библиотека: 27
 
 | файл | строка | код |
 | --- | --- | --- |
-| application.py | 95 | self.pending = {}  # item id -> item; memory only, so a restart forgets them |
-| application.py | 908 | for item in (*self.library.items, *self.pending.values()): |
-| application.py | 944 | return self.library.get(item_id) or self.pending.get(item_id) |
-| application.py | 949 | self.pending[item["id"]] = item |
-| application.py | 950 | while len(self.pending) > PREVIEW_LIMIT: |
-| application.py | 951 | self.pending.pop(next(iter(self.pending))) |
+| application.py | 93 | self.pending = {}  # item id -> item; memory only, so a restart forgets them |
+| application.py | 932 | for item in (*self.library.items, *self.pending.values()): |
+| application.py | 960 | return self.library.get(item_id) or self.pending.get(item_id) |
+| application.py | 965 | self.pending[item["id"]] = item |
+| application.py | 966 | while len(self.pending) > PREVIEW_LIMIT: |
+| application.py | 967 | self.pending.pop(next(iter(self.pending))) |
 | services/media.py | 399 | self.library.repo.add(item)   # the row and the file are both there, or neither is shown |
 | services/media.py | 524 | existing = self.library.get(item["id"]) |
 | services/media.py | 527 | self.library.add(item)          # the row is written first: it may raise, the draft is kept |
 | services/media.py | 538 | self.library.save(item)     # one changed row: the path of the copy |
 | services/media.py | 556 | if library or self.library.get(item["id"]) is not None: |
-| routes/jobs.py | 256 | items = [self.public(x) for x in (*self.library.items, *self.pending.values()) if x.get("prompt_id") == pid] |
-| routes/jobs.py | 351 | self.library.add(item) |
+| routes/jobs.py | 266 | items = [self.public(x) for x in (*self.library.items, *self.pending.values()) if x.get("prompt_id") == pid] |
+| routes/jobs.py | 362 | self.library.add(item) |
 | routes/library.py | 138 | item = self.pending.get(iid) |
 | routes/library.py | 140 | known = self.library.get(iid) |
 | routes/library.py | 144 | if self.library.get(iid) is not None:   # the list was written, the draft was not dropped yet |
@@ -271,31 +271,27 @@
 | routes/library.py | 260 | item = self.library.get(req.match_info["id"]) |
 | routes/montage.py | 388 | self.library.add(item) |
 
-## Короткая память об исходах: 4
+## Короткая память об исходах: 0
 
 | файл | строка | код |
 | --- | --- | --- |
-| application.py | 885 | self.recent[pid] = {"state": kind, "at": datetime.now().isoformat(timespec="seconds"), |
-| application.py | 919 | self.history[job["prompt_id"]] = {"meta": job.get("meta") or {}, "created": job.get("t0")} |
-| routes/jobs.py | 190 | self.recent[pid] = {"state": "error", "at": datetime.now().isoformat(timespec="seconds"), |
-| routes/jobs.py | 266 | r = self.recent[pid] |
 
 ## Фоновые задачи: 50
 
 | файл | строка | код |
 | --- | --- | --- |
-| application.py | 179 | self.hw = await asyncio.to_thread(engine.detect_hardware) |
-| application.py | 184 | await asyncio.to_thread(self.llm.stop) |
-| application.py | 251 | self.packs_task = self.tasks.spawn("install-nodes", self.install_missing_packs()) |
-| application.py | 254 | self.ws_task = self.tasks.spawn("comfy-ws", self.comfy_ws_loop()) |
-| application.py | 255 | self.guard_task = self.tasks.spawn("gpu-watch", self.guard_loop()) |
-| application.py | 256 | self.watchdog_task = self.tasks.spawn("lost-watch", self.jobs_watchdog())  # jobs ComfyUI has lost, not a hung card |
-| application.py | 321 | await asyncio.to_thread(self.llm.stop) |
-| application.py | 335 | worker = asyncio.ensure_future(asyncio.to_thread(func, *args)) |
-| application.py | 500 | self.hw = await asyncio.to_thread(engine.detect_hardware) |
-| application.py | 539 | gpu = await asyncio.to_thread(self.monitor.gpu) |
-| application.py | 1011 | raw = await asyncio.to_thread(path.read_bytes) |
-| application.py | 1065 | gpu = await asyncio.to_thread(self.monitor.gpu) |
+| application.py | 177 | self.hw = await asyncio.to_thread(engine.detect_hardware) |
+| application.py | 182 | await asyncio.to_thread(self.llm.stop) |
+| application.py | 249 | self.packs_task = self.tasks.spawn("install-nodes", self.install_missing_packs()) |
+| application.py | 252 | self.ws_task = self.tasks.spawn("comfy-ws", self.comfy_ws_loop()) |
+| application.py | 253 | self.guard_task = self.tasks.spawn("gpu-watch", self.guard_loop()) |
+| application.py | 254 | self.watchdog_task = self.tasks.spawn("lost-watch", self.jobs_watchdog())  # jobs ComfyUI has lost, not a hung card |
+| application.py | 319 | await asyncio.to_thread(self.llm.stop) |
+| application.py | 333 | worker = asyncio.ensure_future(asyncio.to_thread(func, *args)) |
+| application.py | 496 | self.hw = await asyncio.to_thread(engine.detect_hardware) |
+| application.py | 535 | gpu = await asyncio.to_thread(self.monitor.gpu) |
+| application.py | 1027 | raw = await asyncio.to_thread(path.read_bytes) |
+| application.py | 1081 | gpu = await asyncio.to_thread(self.monitor.gpu) |
 | agentapi.py | 320 | gpu = await asyncio.to_thread(app.monitor.gpu) |
 | services/engines.py | 89 | await asyncio.to_thread(process.stop)   # a worker thread: terminate + wait 15 s + taskkill |
 | services/engines.py | 109 | await asyncio.to_thread(self.process.restart) |
@@ -311,10 +307,10 @@
 | routes/agent.py | 185 | model, proj, models = await asyncio.to_thread(ag.find_gguf, folder, body.get("model"), self.hw.get("vram_gb")) |
 | routes/agent.py | 355 | sid = await asyncio.to_thread(self.skills.save_upload, files) |
 | routes/generate.py | 733 | return web.json_response(await asyncio.to_thread(work)) |
-| routes/jobs.py | 139 | self.tasks.spawn(f"cloud:{pid}", self.poll_cloud(rh, pid), replace=True) |
-| routes/jobs.py | 296 | self.tasks.spawn(f"cloud:{pid}", self.poll_cloud(rh, pid), replace=True) |
-| routes/jobs.py | 428 | self.tasks.spawn(f"cancel:{pid}", self.interrupt_watch(pid), replace=True) |
-| routes/jobs.py | 451 | self.tasks.spawn(f"cancel:{pid}", self.interrupt_watch(pid), replace=True) |
+| routes/jobs.py | 147 | self.tasks.spawn(f"cloud:{pid}", self.poll_cloud(rh, pid), replace=True) |
+| routes/jobs.py | 307 | self.tasks.spawn(f"cloud:{pid}", self.poll_cloud(rh, pid), replace=True) |
+| routes/jobs.py | 437 | self.tasks.spawn(f"cancel:{pid}", self.interrupt_watch(pid), replace=True) |
+| routes/jobs.py | 458 | self.tasks.spawn(f"cancel:{pid}", self.interrupt_watch(pid), replace=True) |
 | routes/library.py | 57 | return await asyncio.to_thread(p.read_bytes) |
 | routes/library.py | 183 | gone = set(await asyncio.to_thread(send_to_recycle_bin, todo)) if todo else set() |
 | routes/lora.py | 240 | dl = asyncio.create_task(civitai_client.download_file_stream(self.session, url, str(dest), token)) |
@@ -339,7 +335,7 @@
 
 | файл | строка | код |
 | --- | --- | --- |
-| application.py | 862 | atomic_write_json(d / f"state_{lg['part']}{sfx}.json", |
+| application.py | 867 | atomic_write_json(d / f"state_{lg['part']}{sfx}.json", |
 | webcommon.py | 210 | path.write_text(CLIP_HELPER, encoding="utf-8-sig") |
 | webcommon.py | 254 | path.write_bytes(data) |
 | agentapi.py | 190 | atomic_write_json(self._meta_path(asset_id), meta) |

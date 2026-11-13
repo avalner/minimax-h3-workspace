@@ -25,7 +25,6 @@ class JobViewTest(unittest.TestCase):
         app.port = 0
         app.library = types.SimpleNamespace(items=[])
         app.pending_resume = []
-        app.recent = {}
         app.jobs = {}
         app.file_path = lambda item: None
         self.app = app
@@ -66,7 +65,9 @@ class JobViewTest(unittest.TestCase):
         self.assertIsNone(self.api.job_view("nope"))
 
     def test_a_finished_job_keeps_the_old_shape(self):
-        self.app.recent["p4"] = {"state": "error", "at": "2026-11-12T10:00:00", "message": "нет модели"}
+        self.app.job_outcome = lambda pid: ({  # the record of a job that ended (the app reads it)
+            "state": "error", "at": "2026-11-12T10:00:00", "message": "нет модели",
+            "meta": {}, "created": 0.0, "phase": "failed"} if pid == "p4" else None)
         view = self.api.job_view("p4")
         self.assertEqual(view["state"], "failed")
         self.assertEqual(view["error"], {"code": "JOB_FAILED", "message": "нет модели"})

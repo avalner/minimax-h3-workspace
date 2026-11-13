@@ -130,7 +130,10 @@ class QueueResumeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(body["jobs"][0]["state"], "done")
         self.assertEqual(len(self.app.library.items), 1, "результат прошлого запуска не попал в Библиотеку")
         self.assertEqual(self.waiting(), [])
-        self.assertIsNone(self.app.jobs_repo.by_prompt("old1"), "завершённое задание осталось в очереди")
+        kept = self.app.jobs_repo.by_prompt("old1")
+        self.assertIsNotNone(kept, "исход задания не сохранился")
+        self.assertIs(kept.state, JobState.SUCCEEDED)
+        self.assertEqual(self.app.jobs_repo.active(), [], "завершённое задание осталось в очереди")
 
     async def test_a_finished_job_whose_result_cannot_be_written_stays_for_the_next_start(self):
         self.seed(support.saved("old1"))
@@ -172,7 +175,7 @@ class QueueResumeTest(unittest.IsolatedAsyncioTestCase):
         self.app.queue = no_submit
         body = json.loads((await self.app.h_queue_resume(None)).text)
         self.assertEqual(body["jobs"][0]["state"], "error")
-        self.assertIn("old1", self.app.recent)
+        self.assertEqual(self.app.job_outcome("old1")["state"], "error")
         self.assertEqual(self.waiting(), [])
 
     async def test_a_job_of_an_earlier_run_is_submitted_again_when_the_engine_forgot_it(self):

@@ -136,18 +136,18 @@ class AppEventTest(unittest.IsolatedAsyncioTestCase):
         gate = asyncio.Event()
         ws = FakeSocket(block=gate)
         sub = self.app.events.attach(ws, hello={"type": "hello"})
-        job = support.job("p1")
+        job = support.job("p1", record=support.job_record("p1"))
         self.app.jobs["p1"] = job
         await asyncio.wait_for(self.app.finish_job(job), timeout=5)
         self.assertEqual(len(self.app.library.items), 1, "замерзшее окно задержало запись результата")
-        self.assertEqual(self.app.recent["p1"]["state"], "done")
+        self.assertEqual(self.app.job_outcome("p1")["state"], "done")
         await self.app.events.detach(sub)
 
     async def test_a_finished_job_is_not_lost_without_any_window(self):
-        job = support.job("p2")
+        job = support.job("p2", record=support.job_record("p2"))
         self.app.jobs["p2"] = job
         await self.app.finish_job(job)
-        self.assertEqual(self.app.recent["p2"]["state"], "done", "исход записан только в окно")
+        self.assertEqual(self.app.job_outcome("p2")["state"], "done", "исход записан только в окно")
         self.assertEqual(len(self.app.library.items), 1, "результат не попал в Библиотеку без окна")
         self.assertEqual(self.app.events.windows(), 0)
 

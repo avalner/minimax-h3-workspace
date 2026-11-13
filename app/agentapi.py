@@ -703,7 +703,9 @@ class AgentAPI:
                                  "scenes": None, "percent": 0.0},
                     "queue_position": None, "elapsed": None, "results": []}
         items = [it for it in app.library.items if it.get("prompt_id") == job_id]
-        recent = (getattr(app, "recent", None) or {}).get(job_id)
+        # without a Library item the record is the answer: it keeps how the job ended (a failed or
+        # stopped one has no media), so the agent sees the same fact as the window
+        recent = app.job_outcome(job_id) if hasattr(app, "job_outcome") else None
         if not items and not recent:
             return None
         state = "done" if items else {"done": "done", "error": "failed", "interrupted": "canceled"}.get(
