@@ -845,6 +845,7 @@ function buildInpaint(scope) {
   gridResize($('.grid', root));
   const drop = $('#ipDrop');
   const edit = $('.ip-edit', root), imgC = $('.ip-img', root), overC = $('.ip-over', root);
+  const fitEl = $('.ip-fit', root), stageEl = $('.ip-stage', root);   // the picture box and the window it is seen in
   const selC = $('.ip-sel', root), sctx = selC.getContext('2d');
   const ictx = imgC.getContext('2d'), octx = overC.getContext('2d');
   let mode = 'select', brush = 36, hasMask = false;
@@ -910,8 +911,17 @@ function buildInpaint(scope) {
     }, null, 'move'),
   };
   let altHeld = false;
-  const cursorNow = () => {   // the arrow only where it will actually move something, in any tool
-    if (mode === 'hand' || spaceHeld) { overC.style.cursor = panning ? 'grabbing' : 'grab'; return; }   // «Рука» / Space
+  const cursorNow = () => {
+    // «Рука» и зажатый пробел: лапа, а во время переноса — сжатая лапа. Курсор ставится и холсту, и панели:
+    // как только панель захватывает указатель (setPointerCapture), браузер спрашивает курсор у неё, а не у холста,
+    // и без этого лапа превращалась в обычную стрелку ровно в тот момент, когда начинали двигать картинку.
+    // Перенос важнее инструмента: если пробел отпустили посреди переноса, лапа остаётся сжатой до конца.
+    if (panning) { overC.style.cursor = 'grabbing'; stageEl.style.cursor = 'grabbing'; return; }
+    if (mode === 'hand' || spaceHeld) {
+      overC.style.cursor = 'grab'; stageEl.style.cursor = 'grab';
+      return;
+    }
+    stageEl.style.cursor = '';
     if (altHeld && sel) { overC.style.cursor = CUR.move; return; }
     if (hoverPt && (mode === 'paint' || mode === 'erase')) { overC.style.cursor = 'none'; return; }   // the ring is the cursor
     overC.style.cursor = CUR[mode] || 'crosshair';
@@ -968,7 +978,6 @@ function buildInpaint(scope) {
      in every direction — the picture can be pushed past the edges, the way a drawing program moves the canvas — and
      zoom keeps the point under the pointer where it is. Pan and zoom are one CSS transform on `.ip-fit`, so the
      picture itself stays in its own pixels and nothing about the mask changes. */
-  const fitEl = $('.ip-fit', root), stageEl = $('.ip-stage', root);
   const zoomIn = $('.ip-zoom', root), zoomV = $('.ip-zoomv', root);
   let zoom = 100, pan = { x: 0, y: 0 };
   const ZOOM_MAX = 300;   // 300 % of the stage's width: for a 4000 px picture in a 1400 px window that is about 1:1

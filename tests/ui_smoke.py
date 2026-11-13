@@ -1089,6 +1089,15 @@ async def run_page(base: str, browser: str, shots: Path):
                   await sleep(50);
                   const p1 = view._view().pan;
                   const movedFromEmpty = p1.x !== p0.x && p1.y !== p0.y;
+                  // while the picture is being dragged the cursor must stay the closed hand, and the open hand
+                  // when the drag is over: the stage holds the pointer during a drag, so it needs the cursor too
+                  view.querySelector('.ip-mode button[data-m="hand"]').click();
+                  const c0 = stage.style.cursor || getComputedStyle(stage).cursor;
+                  ptr(stage, 'pointerdown', r2.left + 200, r2.top + 200);
+                  const c1 = stage.style.cursor;
+                  const c1o = over.style.cursor;
+                  ptr(stage, 'pointerup', r2.left + 200, r2.top + 200);
+                  const c2 = stage.style.cursor;
                   // and the canvas moves freely: the same drag repeated pushes it out of the window, not to an edge
                   let p2 = null;
                   for (let i = 0; i < 4; i++) {
@@ -1102,7 +1111,7 @@ async def run_page(base: str, browser: str, shots: Path):
                   await setZ(100);
                   view.querySelector('.ip-mode button[data-m="select"]').click();
                   return { on, paintOff, moved, same, back, paintOn, handOn, movedFromEmpty,
-                    freeX, freeY }; })()""", await_promise=True)
+                    freeX, freeY, c0, c1, c1o, c2 }; })()""", await_promise=True)
                 check("Space turns the hand on and gives the tool back on release",
                       hand and hand["on"] and hand["paintOff"] and hand["back"] and hand["paintOn"], str(hand))
                 check("the hand moves the picture and paints nothing",
@@ -1111,6 +1120,9 @@ async def run_page(base: str, browser: str, shots: Path):
                       hand and hand["handOn"] and hand["movedFromEmpty"], str(hand))
                 check("the canvas moves freely in both directions, with no edge to stop at",
                       hand and hand["freeX"] == 400 and hand["freeY"] == 200, str(hand))
+                check("the hand cursor stays a closed hand for the whole drag",
+                      hand and hand["c0"] == "grab" and hand["c1"] == "grabbing" and hand["c1o"] == "grabbing"
+                      and hand["c2"] == "grab", str(hand))
                 # The wheel stays the page's business: a plain wheel must not zoom the picture and must not be
                 # swallowed, or the page around the editor stops scrolling. Shift + wheel is the one that zooms.
                 wheel = await cdp.evaluate("""(async () => {
