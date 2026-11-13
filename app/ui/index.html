@@ -3353,8 +3353,11 @@ async function bmOpen(id) {
     if (au instanceof File) { await window.h3Lipsync.loadAudio(au); MEM.audio = au; }
   }
   setTimeout(apply, 800);  // adding a picture re-fits the format: put the saved choice back after that
-  // the stage remembers the clip it was saved with: show it again, so the result is visible at once
+  // the stage remembers the clip it was saved with: show it again, so the result is visible at once.
+  // `previewPanel` falls back to the newest clip of the project if that one has been deleted.
   if (b.mode === 'video') window.h3Video?.showItem?.(b.s && b.s.shownId);
+  else if (b.mode === 'lipsync') window.h3Lipsync?.showItem?.(b.s && b.s.shownId);
+  else if (window.RM && window.RM[b.mode] && window.RM[b.mode].prev) window.RM[b.mode].prev.show?.(b.s && b.s.shownId);
   toast('Этап открыт: «' + b.name + '»');
 }
 async function bmDelete(id) {

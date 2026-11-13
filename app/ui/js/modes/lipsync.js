@@ -24,8 +24,12 @@
   let ui = null;   // { update, refresh } — built with the panel on the first visit
   const update = () => { if (ui) ui.update(); };
   const refresh = () => { if (ui) ui.refresh(); };
+  /* the clip of a saved stage: the page asks for it when the stage is opened */
+  const showItem = id => ui && ui.refresh.show ? ui.refresh.show(id) : false;
 
-const L = { aspect: '9:16', q: '1080p', refSize: 'max', start: 0, end: 0, dur0: 0, refs: 0, len: () => Math.max(0, L.end - L.start) };
+const L = { aspect: '9:16', q: '1080p', refSize: 'max', start: 0, end: 0, dur0: 0, refs: 0,
+            len: () => Math.max(0, L.end - L.start),
+            shownId: null };   // the clip in the player: a stage saves it and brings it back
 const MAX_LEN = 15, REC_LEN = 12;
 
 
@@ -328,6 +332,7 @@ function stop() {
     target: () => $('#refs .ref img'),
     meta: () => ({ mode: 'lipsync', prompt: $('#lPrompt').value.trim(), sub: `${L.refs} реф. · аудио ${L.len().toFixed(1)} с` }),
     onDone: item => addToLib(item),
+    onShow: item => { L.shownId = item.id; },   // the stage remembers the clip that was on the screen
     validate: () => !L.dur0 ? 'Загрузите аудио' : !L.refs ? 'Добавьте хотя бы один референс — лицо персонажа' : L.len() > MAX_LEN ? `Фрагмент длиннее ${MAX_LEN} с — укоротите` : !$('#lPrompt').value.trim() ? 'Напишите промпт' : '',
   });
   const lUpd = paramsCard($('#lParams'), L, {
@@ -412,7 +417,7 @@ function stop() {
 
   window.h3Lipsync = {
     get state() { return L; },
-    update, refresh, edit, repeat, select, audioClip, loadAudio,
+    update, refresh, edit, repeat, select, audioClip, loadAudio, showItem,
   };
 
   window.h3Modes.register("lipsync", {

@@ -368,6 +368,70 @@ async def run_page(base: str, browser: str, shots: Path):
                       and swap_stage["n0"] == "0" and swap_stage["n1"] == "1"
                       and swap_stage["n2"] == "0" and swap_stage["item"].strip() != "", str(swap_stage))
 
+                # A stage remembers the clip that was on the screen, and opening it brings the clip back
+                # (only the video section did that). The player is the same shared panel everywhere,
+                # so each section keeps the id its own `onShow` wrote and the page asks it to show again.
+                restored_clip = await cdp.evaluate("""
+                    (async () => {
+                      const wait = ms => new Promise(r => setTimeout(r, ms));
+                      addDraft({ id: 'ls-ui-clip', kind: 'video', mode: 'lipsync', preview: true,
+                                 date: new Date(), url: '/ui/previews/lipsync.mp4', len: 3, prompt: 'губы' });
+                      addDraft({ id: 'rf-ui-clip', kind: 'video', mode: 'refs', preview: true,
+                                 date: new Date(), url: '/ui/previews/refs.mp4', len: 5, prompt: 'рефы' });
+                      const stage = await window.postStage({ id: 'ui-ls-stage', mode: 'lipsync', name: 'Губы',
+                        s: { aspect: '9:16', shownId: 'ls-ui-clip' }, prompt: 'губы',
+                        date: new Date().toISOString() });
+                      await window.postStage({ id: 'ui-rf-stage', mode: 'refs', name: 'Рефы',
+                        s: { aspect: '16:9', shownId: 'rf-ui-clip' }, prompt: 'рефы',
+                        date: new Date().toISOString() });
+                      // the clip of this stage is gone: the newest clip of the project takes its place
+                      await window.postStage({ id: 'ui-rf-gone', mode: 'refs', name: 'Без клипа',
+                        s: { shownId: 'no-such-clip' }, date: new Date().toISOString() });
+                      const out = { saved: (stage.s || {}).shownId };
+                      await window.bmOpen('ui-ls-stage'); await wait(500);
+                      const lv = document.querySelector('#lPreview .result');
+                      out.ls = { hidden: !!(lv && lv.hidden), src: lv ? lv.getAttribute('src') : '',
+                                 id: window.h3Lipsync.state.shownId };
+                      await window.bmOpen('ui-rf-stage'); await wait(500);
+                      const rv = document.querySelector('#view-refs .rm-preview .result');
+                      out.rf = { hidden: !!(rv && rv.hidden), src: rv ? rv.getAttribute('src') : '',
+                                 id: window.RM.refs.S.shownId };
+                      await window.bmOpen('ui-rf-gone'); await wait(500);
+                      out.fallback = { src: rv.getAttribute('src'), hidden: rv.hidden,
+                                       id: window.RM.refs.S.shownId };
+                      // the video section did this before: the clip must also survive the delayed
+                      // apply() of the stage (it fires ~0,8 s later and used to empty the player)
+                      addDraft({ id: 'vd-ui-clip', kind: 'video', mode: 'video', preview: true,
+                                 date: new Date(), url: '/ui/previews/video.mp4', len: 5, prompt: 'видео' });
+                      await window.postStage({ id: 'ui-vd-stage', mode: 'video', name: 'Видео',
+                        s: { shownId: 'vd-ui-clip' }, date: new Date().toISOString() });
+                      await window.bmOpen('ui-vd-stage'); await wait(1100);
+                      const vv = document.querySelector('#vPreview .result');
+                      out.vd = { hidden: vv.hidden, src: vv.getAttribute('src'),
+                                 id: window.h3Video.state.shownId };
+                      const rest = (await (await fetch('/api/stages')).json()).stages
+                        .filter(s => ['lipsync', 'refs', 'video'].includes(s.mode));
+                      for (const s of rest) await window.bmDelete(s.id);
+                      dropDraft('ls-ui-clip'); dropDraft('rf-ui-clip'); dropDraft('vd-ui-clip');
+                      return out;
+                    })()
+                """, await_promise=True)
+                check("a stage keeps the id of the clip it was saved with",
+                      restored_clip["saved"] == "ls-ui-clip", str(restored_clip["saved"]))
+                check("opening a lipsync stage brings its clip back into the player",
+                      not restored_clip["ls"]["hidden"] and "lipsync.mp4" in restored_clip["ls"]["src"]
+                      and restored_clip["ls"]["id"] == "ls-ui-clip", str(restored_clip["ls"]))
+                check("opening a refs stage brings its clip back into the player",
+                      not restored_clip["rf"]["hidden"] and "refs.mp4" in restored_clip["rf"]["src"]
+                      and restored_clip["rf"]["id"] == "rf-ui-clip", str(restored_clip["rf"]))
+                check("a stage whose clip was deleted shows the newest one instead of an empty player",
+                      not restored_clip["fallback"]["hidden"]
+                      and "refs.mp4" in restored_clip["fallback"]["src"]
+                      and restored_clip["fallback"]["id"] == "rf-ui-clip", str(restored_clip["fallback"]))
+                check("the clip a video stage brings back stays after the stage finishes opening",
+                      not restored_clip["vd"]["hidden"] and "video.mp4" in restored_clip["vd"]["src"]
+                      and restored_clip["vd"]["id"] == "vd-ui-clip", str(restored_clip["vd"]))
+
                 # the previous version kept stages in localStorage: on the first start of this one
                 # they are uploaded to the active project and the browser copy is dropped
                 await cdp.evaluate(

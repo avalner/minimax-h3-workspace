@@ -672,7 +672,9 @@ function previewPanel(el, st, opts) {
 
   queueMicrotask(refreshHist);   // LIB is declared later in the script: the history is filled once everything is ready
   const update = () => {
-    if (!run && $('.res', frame).hidden) resetFrame();
+    // a clip on the screen stays there: a parameter change (or the delayed apply of a stage) must not
+    // wipe it — the frame is reset only when there is nothing to show
+    if (!run && !shown && $('.res', frame).hidden) resetFrame();
     const effQ = st.effQ ? st.effQ() : st.q, [w, h] = resFor(st.aspect, effQ);
     if (!run) go.lastChild.textContent = goText();
     frame.style.aspectRatio = `${w}/${h}`;
