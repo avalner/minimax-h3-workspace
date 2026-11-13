@@ -43,7 +43,17 @@ function dmadHelp(box, seen) {
       <button class="btn mini dm-ok" type="button">2. Я скачал — поставить файл</button>
       <button class="btn mini dm-dir" type="button">Открыть папку loras</button></span></span></div>`;
   const msg = $('.dmad-msg', box);
-  const call = url => apiPost(url, {});
+  // 404 means the page is newer than the server it talks to: a reload of the window is not enough, the program restarts
+  const call = async url => {
+    try { return await apiPost(url, {}); }
+    catch (e) {
+      const text = String((e && e.message) || e);
+      if (/^404|not found|не найдено/i.test(text)) {
+        throw new Error('Программа ещё работает на старой версии: закройте её и откройте заново — кнопки DMAD появятся.');
+      }
+      throw new Error(text);
+    }
+  };
   $('.dm-open', box).onclick = () => call('/api/dmad/open')
     .then(() => { msg.textContent = 'Страница открылась в браузере. Скачайте файл на 3,9 ГБ, потом нажмите «Я скачал».'; })
     .catch(e => { msg.textContent = e.message || String(e); });
