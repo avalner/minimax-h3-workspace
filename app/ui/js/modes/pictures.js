@@ -56,6 +56,7 @@ function imgPanel(el, o) {
     const mine = [...DRAFTS.filter(x => x.mode === o.mode && x.kind === 'image'),
                   ...LIB.filter(x => x.mode === o.mode && x.kind === 'image' && !x.missing && x.url)]
       .filter((x, i, a) => a.findIndex(y => y.id === x.id) === i)
+      .filter(x => !window.h3Projects || window.h3Projects.ok(x))
       .sort((a, b) => b.date - a.date)
       .filter((it, i) => it.preview || i < 12);
     hh.hidden = !mine.length;

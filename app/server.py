@@ -151,6 +151,7 @@ def build_app(comfy_override=None, port=None):
         web.post("/api/results/clean", state.h_results_clean),
         web.get("/api/library", state.h_library),
         web.post("/api/preview/keep", state.h_preview_keep),
+        web.delete("/api/preview/{id}", state.h_preview_delete),
         web.get("/api/projects", state.h_projects),
         web.post("/api/projects", state.h_project_create),
         web.post("/api/projects/active", state.h_project_active),

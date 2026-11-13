@@ -349,3 +349,22 @@ body.first-run .pr-first{display:flex}
 @media (max-width:1000px){#modeBar{display:none}}
 @media (max-height:760px){.side-foot{gap:6px;padding:9px 11px}.side-foot .stat{font-size:11.5px}}
 @media (max-width:1100px){.grid{grid-template-columns:1fr}.preview{position:static}.gresize{display:none}}
+
+/* ---------- projects: the bar above the section title ---------- */
+.tb-proj{grid-column:2;grid-row:1;display:flex;align-items:center;gap:8px;min-width:0;padding:8px clamp(20px,2.2vw,44px) 0 56px;position:relative}
+.proj-cur{display:flex;align-items:center;gap:6px;max-width:min(46vw,360px);padding:4px 10px;border:1px solid var(--line);border-radius:999px;background:transparent;color:var(--text);font:inherit;font-size:12px;cursor:pointer}
+.proj-cur:hover{background:rgba(var(--surface-rgb),.6)}
+.proj-dot{flex:none;width:8px;height:8px;border-radius:50%;background:var(--accent)}
+.proj-nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.proj-car{flex:none;opacity:.6;font-size:10px}
+.proj-all{flex:none;padding:3px 10px;border:1px solid var(--line);border-radius:999px;background:transparent;color:var(--muted);font:inherit;font-size:11px;cursor:pointer}
+.proj-all.on{color:var(--text);border-color:var(--accent);background:var(--accent-soft)}
+.proj-pop{position:absolute;top:100%;left:56px;z-index:60;min-width:280px;max-height:60vh;overflow:auto;background:var(--bg-2);border:1px solid var(--line);border-radius:12px;box-shadow:0 18px 40px rgba(0,0,0,.38);padding:6px}
+.proj-item{display:block;width:100%;text-align:left;padding:8px 10px;border:0;background:transparent;color:var(--text);font:inherit;font-size:13px;border-radius:8px;cursor:pointer}
+.proj-item:hover{background:rgba(var(--surface-rgb),.7)}
+.proj-item.on{background:var(--accent-soft);font-weight:600}
+.proj-item .pmark{float:right;color:var(--accent)}
+.proj-sep{height:1px;background:var(--line);margin:6px 4px}
+.proj-new{display:flex;gap:6px;padding:6px 4px 2px}
+.proj-new input{flex:1;min-width:0;padding:6px 8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text);font:inherit;font-size:12px}
+@media (max-width:760px){.tb-proj{grid-column:1/-1;padding:8px 16px 0}}

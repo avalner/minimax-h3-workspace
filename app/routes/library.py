@@ -173,6 +173,31 @@ class LibraryRoutes:
             return web.json_response({"error": "Не удалось переместить файл в корзину"}, status=500)
         return web.json_response({"ok": True, "recycled": res["recycled"]})
 
+    async def h_preview_delete(self, req):
+        """Delete a draft: the record, its media row and its files (files go to the Recycle Bin).
+
+        Only a draft: an item that reached the Library is deleted there, where it is visible. A file
+        that could not be recycled leaves the draft in place — the window must not show a draft whose
+        clip is still on the disk but no longer reachable.
+        """
+        item_id = str(req.match_info["id"])
+        if self.library.get(item_id) is not None:
+            raise web.HTTPConflict(text="Этот клип уже в Библиотеке: удаляйте его там")
+        item = self.pending.get(item_id)
+        if item is None:
+            raise web.HTTPNotFound()
+        paths = {path for path in (self.file_path(item), Path(item["local"]) if item.get("local") else None)
+                 if path and path.exists()}
+        gone = set(await asyncio.to_thread(send_to_recycle_bin, list(paths))) if paths else set()
+        if paths - gone:
+            raise web.HTTPInternalServerError(text="Не удалось переместить файл в корзину: черновик оставлен на месте")
+        self.pending.pop(item_id, None)
+        with self.db.transaction():
+            self.drafts_repo.delete(item_id)
+            self.media_repo.delete(item_id)
+        await self.broadcast({"type": "draft_removed", "id": item_id})
+        return web.json_response({"ok": True})
+
     async def delete_items(self, items):
         """Library items to the Recycle Bin (the original and the program's own copy), all files in one go."""
         todo, files = [], {}

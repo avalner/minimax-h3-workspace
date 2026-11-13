@@ -176,6 +176,7 @@ scope.listen(document, 'pointerdown', e => {
 scope.listen(document, 'dblclick', e => { if (e.target.closest('#cwRs')) { body.style.removeProperty('--cw-rw'); try { localStorage.removeItem('h3-cw-rw'); } catch {} } });
 }
 const cwMine = () => [...DRAFTS, ...LIB].filter(x => x.mode === 'custom' && (x.wf ? x.wf === CW.id : x.sub === CW.rep.name))
+  .filter(x => !window.h3Projects || window.h3Projects.ok(x))
   .filter((x, i, a) => a.findIndex(y => y.id === x.id) === i).sort((a, b) => b.date - a.date);
 function cwFit(w, h) {  // the window takes the shape of the picture, never taller than 68% of the screen
   const f = $('#cwFrame'); if (!f || !w || !h) return;

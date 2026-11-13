@@ -72,6 +72,7 @@
     const hid = hidden();
     const seen = new Set(), all = [...DRAFTS.filter(it => it.kind !== 'image' && !it.missing && it.url),
                                  ...LIB.filter(it => it.kind !== 'image' && !it.missing && it.url)]
+      .filter(it => !window.h3Projects || window.h3Projects.ok(it))
       .filter(it => !seen.has(it.id) && seen.add(it.id));
     const vids = all.filter(it => !hid.includes(it.id)), nh = all.length - vids.length;
     $('.mt-hid', root).innerHTML = nh ? `Убрано из списка: ${nh} · <button type="button" class="a-change" data-showall>Вернуть все</button>` : '';

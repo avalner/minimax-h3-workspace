@@ -215,6 +215,40 @@ async def run_page(base: str, browser: str, shots: Path):
                     "document.querySelectorAll('.view.active').length === 1")
                 check("exactly one section is active", one_view)
 
+                project_ready = await cdp.wait_for(
+                    "document.querySelector('#projName')?.textContent === 'Основное'", timeout=10)
+                project_bar = await cdp.evaluate(
+                    "(() => ({ bar: !!document.querySelector('#tbProj .proj-cur'),"
+                    " all: !!document.querySelector('#projAll'),"
+                    " pop: !!document.querySelector('#projPop') }))()")
+                check("the header shows which project new results belong to",
+                      project_ready and project_bar["bar"] and project_bar["all"] and project_bar["pop"],
+                      str(project_bar))
+                toggled = await cdp.evaluate(
+                    "(() => { const b = document.querySelector('#projAll'); b.click();"
+                    " const on = b.classList.contains('on'); b.click();"
+                    " return on && !b.classList.contains('on'); })()")
+                check("the project filter switches to all projects and back", toggled)
+                created = await cdp.evaluate(
+                    "(async () => { document.querySelector('#projCur').click();"
+                    " document.querySelector('#projNewName').value = 'Тестовый проект';"
+                    " document.querySelector('#projNewOk').click();"
+                    " await new Promise(r => setTimeout(r, 500));"
+                    " const active = (await (await fetch('/api/projects')).json()).active;"
+                    " return { name: document.querySelector('#projName').textContent, active }; })()",
+                    await_promise=True)
+                check("a project can be created from the header and becomes active",
+                      created["name"] == "Тестовый проект" and created["active"] != "main", str(created))
+                restored = await cdp.evaluate(
+                    "(async () => { document.querySelector('#projCur').click();"
+                    " const item = [...document.querySelectorAll('.proj-item')].find(b => b.textContent.includes('Основное'));"
+                    " item.click(); await new Promise(r => setTimeout(r, 400));"
+                    " const active = (await (await fetch('/api/projects')).json()).active;"
+                    " return { name: document.querySelector('#projName').textContent, active }; })()",
+                    await_promise=True)
+                check("choosing another project in the header switches it back",
+                      restored["name"] == "Основное" and restored["active"] == "main", str(restored))
+
                 empty_queue = await cdp.evaluate(
                     "(() => { const q = document.querySelector('#qList'); return !!q && /Очередь пуста/.test(q.textContent); })()")
                 check("the queue starts empty with its own message", empty_queue)

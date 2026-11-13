@@ -143,6 +143,10 @@ class MediaRepository:
         row = self.db.one("SELECT payload FROM media WHERE media_id=?", (media_id,))
         return MediaRecord.from_dict(json.loads(row["payload"])) if row else None
 
+    def delete(self, media_id):
+        """Forget a file record (a deleted draft): `job_results` rows point at it with SET NULL."""
+        self.db.execute("DELETE FROM media WHERE media_id=?", (media_id,))
+
 
 class ResultRepository:
     """Which engine output a job produced — unique, so registering it twice is harmless."""
