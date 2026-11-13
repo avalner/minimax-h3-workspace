@@ -184,16 +184,20 @@ function paramsCard(el, st, opts) {
 const SZ_ROW = `<div class="row sz-row"><div class="row-l">Свой размер <span class="hint">(необязательно)</span></div>
   <div class="path on" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button class="btn sz-p" data-p="0" type="button" title="Обычный размер (около 1 МП): быстро, как эскиз" style="padding:6px 12px;font-size:12.5px">Эскиз</button><button class="btn sz-p" data-p="2k" type="button" title="Сразу 2К: по длинной стороне 2048" style="padding:6px 12px;font-size:12.5px">2К</button><input class="sz-w" inputmode="numeric" placeholder="ширина" style="width:90px"> <span>×</span> <input class="sz-h" inputmode="numeric" placeholder="высота" style="width:90px"> <button class="btn sz-reset" type="button" hidden style="padding:6px 12px;font-size:12.5px">Сбросить</button></div>
   <div class="hint sz-hint">Размер подстраивается под шаг модели, кратно 32: например, 1920×1080 станет 1920×1088. Пусто — размер по формату выше.</div></div>`;
-function szWire(el, st, onChange, getBase) {
+function szWire(el, st, onChange, getBase, lim) {
   const iw = $('.sz-w', el), ih = $('.sz-h', el), hint = $('.sz-hint', el), rs = $('.sz-reset', el);
   const def = hint.textContent;
+  // `lim` (an object or a function returning one) is the model's own ceiling: MiniMax H3 Image works up to 20 MP
+  // and 8192 per side, while the other picture models are made for about 1-2 MP
+  const limit = () => (typeof lim === 'function' ? lim() : lim) || {};
   const apply = () => {
     const a = parseInt(iw.value, 10), b = parseInt(ih.value, 10);
     if (a >= 64 && b >= 64) {
-      let k = a * b > 2200000 ? Math.sqrt(2200000 / (a * b)) : 1;
-      const r = v => Math.min(2048, Math.max(256, Math.round(v * k / 32) * 32));
+      const L = limit(), high = L.high || 2048, maxPx = L.maxPx || 2200000, big = L.bigMp || 1.5;
+      let k = a * b > maxPx ? Math.sqrt(maxPx / (a * b)) : 1;
+      const r = v => Math.min(high, Math.max(256, Math.round(v * k / 32) * 32));
       st.cw = r(a); st.ch = r(b); iw.value = st.cw; ih.value = st.ch;
-      hint.textContent = `Будет ${st.cw}×${st.ch}` + (st.cw !== a || st.ch !== b ? ` (округлено с ${a}×${b}, шаг 32)` : '') + (st.cw * st.ch > 1500000 ? '. Это больше 1,5 МП: дольше и больше видеопамяти.' : '');
+      hint.textContent = `Будет ${st.cw}×${st.ch}` + (st.cw !== a || st.ch !== b ? ` (округлено с ${a}×${b}, шаг 32)` : '') + (st.cw * st.ch > big * 1e6 ? `. Это больше ${big} МП: дольше и больше видеопамяти.` : '');
     } else { st.cw = st.ch = 0; hint.textContent = def; }
     rs.hidden = !(st.cw || st.ch);
     onChange();

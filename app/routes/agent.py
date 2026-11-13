@@ -228,7 +228,7 @@ class AgentRoutes:
                 await send({"type": "status", "text": "У этой модели нет файла «зрения» (mmproj) — изображения она не увидит"})
             # frames cut out of a video are the last pictures of a message and are not hero pictures (Picture N)
             ctx["images"] = sum(max(0, len(m.get("images") or []) - int(m.get("frames") or 0)) for m in messages if m["role"] == "user")
-            active = self.skills.active(ag.chat_text(messages), target)
+            active = self.skills.active(ag.chat_text(messages), target, ctx.get("model"))
             if target == "actor" and not any(s["id"] == "akterskaya-igra" for s in active):
                 # this mode is acting-first: its skill is always on here
                 active += [s for s in self.skills.list() if s["id"] == "akterskaya-igra" and s["mode"] != "off"]

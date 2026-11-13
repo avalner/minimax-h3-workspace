@@ -23,6 +23,22 @@ const IMG_STAGE = {
   sample: ['Рисуем', 0.25], upscale: ['Увеличиваем изображение…', 0.5], sample2: ['Второй проход: добавляем детали', 0.5], decode: ['Собираем изображение…', 0.92], save: ['Сохраняем…', 0.98],
 };
 
+/* MiniMax H3 Image: its own area in megapixels and its own ceiling (the model is made for 4-16 MP, while Krea and
+   Qwen work at about 1-2 MP). `h3Size` repeats the server's `workflows.h3img_size`: sides in steps of 32. */
+const H3IMG_MPS = ['4', '8', '16'];
+const H3IMG_LIM = { high: 8192, maxPx: 20000000, bigMp: 16.5 };
+const h3Size = (aspect, mp) => {
+  const [aw, ah] = String(aspect || '1:1').split(':').map(Number).map(v => (v > 0 ? v : 1));
+  const px = (parseFloat(mp) || 4) * 1e6, r = v => Math.max(32, Math.round(v / 32) * 32);
+  return [r(Math.sqrt(px * aw / ah)), r(Math.sqrt(px * ah / aw))];
+};
+const h3Mp = v => (H3IMG_MPS.includes(String(v)) ? String(v) : '8');
+// ComfyUI 0.45 is the first with MiniMaxH3ImageConditioning: an older engine cannot run this model at all
+const comfyTooOld = v => {
+  const m = /^(\d+)\.(\d+)/.exec(String(v || ''));
+  return !!m && (+m[1] < 1 || (+m[1] === 0 && +m[2] < 45));
+};
+
 // one result window for both sections: sends the job, follows the progress, shows the picture
 function imgPanel(el, o) {
   el.innerHTML = `
@@ -218,9 +234,9 @@ function imgJobSeed(root, S, seed) {
 
 /* --- Krea 2: by text --- */
 function buildKrea(scope) {
-  const root = $('#view-krea'), S = { aspect: '16:9', style: 'plain', scale: '2k', engine: 'krea' };
+  const root = $('#view-krea'), S = { aspect: '16:9', style: 'plain', scale: '2k', engine: 'krea', mp: '4' };
   root.innerHTML = `
-    <div class="head"><div><h1>Изображение по тексту</h1><p>Опишите изображение словами — модель Krea 2 нарисует его. Загрузить своё изображение здесь нельзя: для этого раздел «Правка изображения»</p></div>
+    <div class="head"><div><h1>Изображение по тексту</h1><p>Опишите изображение словами — его нарисует Krea 2, FLUX.2 klein, Qwen 2.1 или MiniMax H3 Image. Загрузить своё изображение здесь нельзя: для этого раздел «Правка изображения»</p></div>
       <div class="mode-pill"><i></i><span>Krea 2 · 1 МП</span></div></div>
     <div class="grid"><div class="col">
       <div class="card"><div class="card-h"><h3><span class="n">1</span>Промпт</h3><span class="counter kr-count">0 символов</span></div>
@@ -238,9 +254,9 @@ function buildKrea(scope) {
         <div class="ta-foot"><span class="hint">Лучше писать подробно, одним абзацем. Помощник в разделе «Агент» умеет писать такие промпты</span></div></div>
       <div class="card"><div class="card-h"><h3><span class="n">2</span>Параметры</h3></div>
         <div class="row"><div class="row-l">Модель</div>
-          <div class="seg kr-eng" style="grid-template-columns:repeat(3,1fr)"><button data-e="krea">Krea 2<small>лучшее качество, можно в коммерцию</small></button><button data-e="flux">FLUX.2 klein<small>можно в коммерцию</small></button><button data-e="qwen">Qwen 2.1<small>текст на изображении, не для коммерции</small></button></div>
+          <div class="seg kr-eng" style="grid-template-columns:repeat(2,1fr)"><button data-e="krea">Krea 2<small>лучшее качество, можно в коммерцию</small></button><button data-e="flux">FLUX.2 klein<small>можно в коммерцию</small></button><button data-e="qwen">Qwen 2.1<small>текст на изображении, не для коммерции</small></button><button data-e="h3img">MiniMax-H3-Image<small>крупно, до 16 МП</small></button></div>
           <div class="hint kr-enghint" hidden></div>
-          <div class="hint" style="margin-top:6px">Лицензии: <b>Krea 2</b> и <b>FLUX.2 klein</b> можно использовать в коммерции (Krea 2 — если годовой доход компании меньше 1 млн $). <b>Qwen 2.1</b> только для творчества, не для коммерции.</div></div>
+          <div class="hint" style="margin-top:6px">Лицензии: <b>Krea 2</b> и <b>FLUX.2 klein</b> можно использовать в коммерции (Krea 2 — если годовой доход компании меньше 1 млн $). <b>Qwen 2.1</b> только для творчества, не для коммерции. <b>MiniMax-H3-Image</b> — открытая community-лицензия: коммерческое использование до 1 млн $ годовой выручки (иначе нужно отдельное разрешение MiniMax), в ЕС, Великобритании, Южной Корее и США модель не лицензирована.</div></div>
         <div class="row kr-neg" hidden><div class="row-l">Негативный промпт <span class="hint">что не должно быть на изображении</span></div>
           <textarea class="kr-negtxt" rows="2" placeholder="Пусто — быстрее и легче для видеокарты. Если нужно, впишите, например: blurry, low quality, extra fingers, text, watermark"></textarea><div class="hint" style="margin-top:4px">Негативный промпт замедляет Qwen примерно вдвое и требует больше видеопамяти. Заполняйте, только если без него не получается.</div></div>
         <div class="row kr-stylerow"><div class="row-l">Стиль</div>
@@ -248,8 +264,12 @@ function buildKrea(scope) {
           <div class="hint kr-realhint" hidden></div></div>
         <div class="row kr-scale" hidden><div class="row-l">Размер результата</div>
           <div class="seg" style="grid-template-columns:1fr 1fr"><button data-sc="2k">Около 2K<small>быстрее</small></button><button data-sc="4k">4K<small>дольше и нужно больше видеопамяти</small></button></div></div>
+        <div class="row kr-mprow" hidden><div class="row-l">Размер результата</div>
+          <div class="seg kr-mp" style="grid-template-columns:repeat(3,1fr)"><button data-mp="4">4 МП<small>быстрее, видно зерно</small></button><button data-mp="8">8 МП<small>чисто</small></button><button data-mp="16">16 МП<small>самое чистое, дольше</small></button></div>
+          <div class="hint">Модель рассчитана на 4–16 МП: ниже 8 МП заметно зерно. Площадь считается по выбранному формату, свой размер можно задать ниже.</div></div>
         <div class="row"><div class="row-l">Формат <span class="resv"></span></div><div class="chips kr-asp"></div></div>
         ${SZ_ROW}
+        <div class="note kr-h3hint" hidden style="margin-top:10px"><span>В промпте картинки называются <b>&lt;Picture 1&gt;</b>…<b>&lt;Picture 5&gt;</b>, и первая задаёт форму результата. <b>Негативного промпта у MiniMax-H3-Image нет</b> — всё нужное пишите в положительной форме. Модель: MiniMax-H3-Image (Powered by MiniMax-H3-Image).</span></div>
         ${imgSeedBox()}</div>
     </div><div class="preview kr-prev"></div></div>`;
   gridResize($('.grid', root));
@@ -257,43 +277,56 @@ function buildKrea(scope) {
     return `<button class="chip" data-a="${id}"><i class="ar" style="width:${w * k}px;height:${h * k}px"></i>${name}${name !== id ? ` <small>${id}</small>` : ''}</button>`; }).join('');
   const krForm = text => { const fd = new FormData(); fd.append('prompt', text);
     fd.append('preview', '1');   // the Library waits for «Добавить в библиотеку»
-    fd.append('aspect', S.aspect); fd.append('style', S.engine === 'krea' ? S.style : 'plain'); fd.append('scale', S.scale); fd.append('engine', S.engine); if (S.cw && S.ch) { fd.append('width', S.cw); fd.append('height', S.ch); } if (S.engine === 'qwen') fd.append('negative', $('.kr-negtxt', root).value.trim()); imgSeedForm(S, fd); return fd; };
+    fd.append('aspect', S.aspect); fd.append('style', S.engine === 'krea' ? S.style : 'plain'); fd.append('scale', S.scale); fd.append('engine', S.engine); if (S.engine === 'h3img') fd.append('mp', S.mp); if (S.cw && S.ch) { fd.append('width', S.cw); fd.append('height', S.ch); } if (S.engine === 'qwen') fd.append('negative', $('.kr-negtxt', root).value.trim()); imgSeedForm(S, fd); return fd; };
   const P = imgPanel($('.kr-prev', root), {
     mode: 'krea', url: '/api/generate/krea', promptText: () => $('.kr-prompt', root).value.trim(),
     validate: () => $('.kr-prompt', root).value.trim() ? '' : 'Напишите промпт',
-    form: () => { const fd = new FormData(); fd.append('prompt', $('.kr-prompt', root).value.trim()); fd.append('preview', '1'); fd.append('aspect', S.aspect); fd.append('style', S.engine === 'krea' ? S.style : 'plain'); fd.append('scale', S.scale); fd.append('engine', S.engine); if (S.cw && S.ch) { fd.append('width', S.cw); fd.append('height', S.ch); } if (S.engine === 'qwen') fd.append('negative', $('.kr-negtxt', root).value.trim()); imgSeedForm(S, fd); return fd; },
+    form: () => { const fd = new FormData(); fd.append('prompt', $('.kr-prompt', root).value.trim()); fd.append('preview', '1'); fd.append('aspect', S.aspect); fd.append('style', S.engine === 'krea' ? S.style : 'plain'); fd.append('scale', S.scale); fd.append('engine', S.engine); if (S.engine === 'h3img') fd.append('mp', S.mp); if (S.cw && S.ch) { fd.append('width', S.cw); fd.append('height', S.ch); } if (S.engine === 'qwen') fd.append('negative', $('.kr-negtxt', root).value.trim()); imgSeedForm(S, fd); return fd; },
     two: () => S.engine === 'krea' && S.style === 'real',
   });
   const upd = () => {
+    const h3 = S.engine === 'h3img';
+    const base = h3 ? h3Size(S.aspect, S.mp) : IMG_SIZES[S.aspect];
     $$('.kr-asp .chip', root).forEach(c => c.classList.toggle('on', c.dataset.a === S.aspect));
-    const [w, h] = S.cw && S.ch ? [S.cw, S.ch] : IMG_SIZES[S.aspect], k = S.style === 'real' ? (S.scale === '4k' ? 2.5 : 1.5) : 1;
+    const [w, h] = S.cw && S.ch ? [S.cw, S.ch] : base, k = S.style === 'real' ? (S.scale === '4k' ? 2.5 : 1.5) : 1;
     $('.resv', root).textContent = `${Math.round(w * k)}×${Math.round(h * k)}`; P.ratio(w, h);
     $$('[data-st]', root).forEach(b => b.classList.toggle('on', b.dataset.st === S.style));
     $$('[data-sc]', root).forEach(b => b.classList.toggle('on', b.dataset.sc === S.scale));
     $('.kr-scale', root).hidden = !(S.engine === 'krea' && S.style === 'real');
+    $('.kr-mprow', root).hidden = !h3;
+    $$('.kr-mp button', root).forEach(b => b.classList.toggle('on', b.dataset.mp === S.mp));
+    $$('.sz-p', root).forEach(b => b.hidden = h3);   // «Эскиз» и «2К» — это про 1-2 МП, у H3 Image другой счёт
     $$('.kr-eng button', root).forEach(b => b.classList.toggle('on', b.dataset.e === S.engine));
     $('.kr-stylerow', root).hidden = S.engine !== 'krea'; $('.kr-neg', root).hidden = S.engine !== 'qwen';
-    $('.mode-pill span', root).textContent = { krea: 'Krea 2 · 1 МП', flux: 'FLUX.2 klein · 1 МП', qwen: 'Qwen Image 2.1 · 1 МП' }[S.engine];
+    $('.kr-h3hint', root).hidden = !h3;
+    $('.mode-pill span', root).textContent = h3 ? `MiniMax-H3-Image · ${S.mp} МП`
+      : { krea: 'Krea 2 · 1 МП', flux: 'FLUX.2 klein · 1 МП', qwen: 'Qwen Image 2.1 · 1 МП' }[S.engine];
   };
+  const H3_FILE_HINT = 'Положите в папки моделей вашего ComfyUI: minimax_h3_image_pruned_w4a8.safetensors (diffusion_models), minimax_h3_image_vae_fp16.safetensors (vae) и энкодер qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors (text_encoders). Потом обновите раздел «Модели». Для этой модели нужен ComfyUI 0.45 или новее.';
   async function krEngCheck() {
     const hint = $('.kr-enghint', root); hint.hidden = true;
     if (S.engine === 'krea') return;
-    const role = S.engine === 'flux' ? 'flux' : 'qwen';
+    const role = S.engine === 'flux' ? 'flux' : S.engine === 'h3img' ? 'h3img' : 'qwen';
     try {
       const st = await apiGet('/api/status');
       const miss = (st.models || []).filter(m => m.role.startsWith(role) && !m.have);
-      if (!(st.modes || []).includes(role) || miss.length) {
+      const old = S.engine === 'h3img' && comfyTooOld(st.comfy_version);
+      if (!(st.modes || []).includes(role) || miss.length || old) {
         hint.hidden = false;
-        hint.textContent = st.engine === 'managed'
-          ? `Для этой модели нужны ещё файлы. Откройте «Модели» и нажмите «Добавить ${role === 'flux' ? 'Правка изображения: FLUX.2' : 'Правка изображения'}».`
-          : role === 'flux'
-            ? 'Положите в папки моделей вашего ComfyUI: flux-2-klein-4b-fp8.safetensors (diffusion_models), qwen_3_4b.safetensors (text_encoders) и flux2-vae.safetensors (vae). Потом обновите раздел «Модели».'
-            : 'Для Qwen 2.1 нужны её модели (раздел «Правка изображения»). Проверьте «Модели».';
+        hint.textContent = old
+          ? `Нужен ComfyUI 0.45 или новее: в ${st.comfy_version || 'этой версии'} нет ноды MiniMaxH3ImageConditioning. Обновите ComfyUI (в портативной сборке — update\\update_comfyui.bat), потом перезапустите программу.`
+          : st.engine === 'managed'
+            ? `Для этой модели нужны ещё файлы. Откройте «Модели» и нажмите «Добавить ${role === 'flux' ? 'Правка изображения: FLUX.2' : role === 'h3img' ? 'Изображения MiniMax H3 Image' : 'Правка изображения'}».`
+            : role === 'flux'
+              ? 'Положите в папки моделей вашего ComfyUI: flux-2-klein-4b-fp8.safetensors (diffusion_models), qwen_3_4b.safetensors (text_encoders) и flux2-vae.safetensors (vae). Потом обновите раздел «Модели».'
+              : role === 'h3img' ? H3_FILE_HINT
+              : 'Для Qwen 2.1 нужны её модели (раздел «Правка изображения»). Проверьте «Модели».';
       }
     } catch {}
   }
   root.addEventListener('click', async e => {
     const en = e.target.closest('.kr-eng button'); if (en) { S.engine = en.dataset.e; upd(); krEngCheck(); return; }
+    const mpb = e.target.closest('.kr-mp button'); if (mpb) { S.mp = mpb.dataset.mp; upd(); return; }
     const sc = e.target.closest('[data-sc]'); if (sc) { S.scale = sc.dataset.sc; upd(); return; }
     const b = e.target.closest('[data-st]'); if (!b) return;
     S.style = b.dataset.st; upd();
@@ -311,7 +344,7 @@ function buildKrea(scope) {
     } catch {}
   });
   $('.kr-asp', root).onclick = e => { const c = e.target.closest('.chip'); if (c) { S.aspect = c.dataset.a; S.cw = S.ch = 0; $('.sz-w', root).value = $('.sz-h', root).value = ''; $('.sz-reset', root).hidden = true; upd(); } };
-  szWire(root, S, () => upd(), () => IMG_SIZES[S.aspect]);
+  szWire(root, S, () => upd(), () => IMG_SIZES[S.aspect], () => (S.engine === 'h3img' ? H3IMG_LIM : null));
   $('.kr-prompt', root).oninput = e => $('.kr-count', root).textContent = e.target.value.length + ' символов';
 
   /* --- list of prompts: a series of pictures, one queue job per prompt --- */
@@ -364,13 +397,21 @@ function buildKrea(scope) {
   };
   const fillList = text => { kbMode(true); $('.kr-prompt', root).value = text; $('.kr-prompt', root).oninput({ target: $('.kr-prompt', root) }); K.removed.clear(); kbRender(); };
   imgSeedWire(root, S); upd();
-  IMG.krea = { fillList, fill: it => { if (it.engine) S.engine = it.engine; else if (/^(Картинка|Изображение) \(FLUX/.test(it.sub || '')) S.engine = 'flux'; else if (/^(Картинка|Изображение) \(Qwen/.test(it.sub || '')) S.engine = 'qwen'; else S.engine = 'krea'; $('.kr-prompt', root).value = it.prompt || ''; $('.kr-prompt', root).oninput({ target: $('.kr-prompt', root) }); if (IMG_SIZES[it.aspect]) S.aspect = it.aspect; upd(); } };
+  IMG.krea = { fillList, fill: it => {
+    if (it.engine) S.engine = it.engine;
+    else if (/^Изображение \(MiniMax H3/.test(it.sub || '')) S.engine = 'h3img';
+    else if (/^(Картинка|Изображение) \(FLUX/.test(it.sub || '')) S.engine = 'flux';
+    else if (/^(Картинка|Изображение) \(Qwen/.test(it.sub || '')) S.engine = 'qwen';
+    else S.engine = 'krea';
+    if (S.engine === 'h3img') S.mp = h3Mp(it.mp || (/^\s*(\d+)\s*МП/i.exec(it.q || '') || [])[1]);
+    $('.kr-prompt', root).value = it.prompt || ''; $('.kr-prompt', root).oninput({ target: $('.kr-prompt', root) }); if (IMG_SIZES[it.aspect]) S.aspect = it.aspect; upd(); } };
   // задание из очереди: промпт, модель, стиль, формат, размер и seed — всё, что записано в его параметрах
   IMG.krea.fillJob = m => {
     const sub = String(m.sub || '');
-    S.engine = /FLUX\.2/i.test(sub) ? 'flux' : /Qwen/i.test(sub) ? 'qwen' : 'krea';
+    S.engine = /MiniMax H3 Image/i.test(sub) ? 'h3img' : /FLUX\.2/i.test(sub) ? 'flux' : /Qwen/i.test(sub) ? 'qwen' : 'krea';
     S.style = S.engine === 'krea' && /реализм/i.test(sub) ? 'real' : 'plain';
     if (S.style === 'real') S.scale = /^4K$/i.test(m.q || '') ? '4k' : '2k';
+    if (S.engine === 'h3img') S.mp = h3Mp(m.mp || (/^\s*(\d+)\s*МП/i.exec(m.q || '') || [])[1]);
     if (IMG_SIZES[m.aspect]) S.aspect = m.aspect;
     kbMode(false);
     $('.kr-prompt', root).value = m.prompt || '';
@@ -440,7 +481,7 @@ function buildImgEdit(scope) {
 
 /* --- Qwen Image 2.1: edit a picture, character sheet --- */
 function buildQwen(scope) {
-  const root = $('#view-qwen'), S = { kind: 'edit', size: '1', aspect: '', aspectOut: '16:9', headless: true, bg: 'grey', panels: 4, engine: 'qwen', frames: true, line: 'white' };
+  const root = $('#view-qwen'), S = { kind: 'edit', size: '1', aspect: '', aspectOut: '16:9', headless: true, bg: 'grey', panels: 4, engine: 'qwen', frames: true, line: 'white', mp: '8' };
   root.innerHTML = `
     <div class="pr-bar"><button class="pr-back" type="button" data-imgedit>← Все варианты редактирования</button></div>
     <div class="head"><div><h1>Редактирование изображений</h1><p>Правьте готовые изображения: изменить по описанию, закрасить место (инпейнт), убрать фон, расширить картинку, собрать лист персонажа</p></div>
@@ -451,6 +492,8 @@ function buildQwen(scope) {
           <label class="drop" id="qwDrop"><input type="file" accept="image/*"><div class="ph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="1.6"/><path d="m21 15-5-5L5 21"/></svg><b>Ваше изображение</b><span>перетащите или нажмите</span></div><span class="tag" hidden>Исходная</span><button class="x" type="button">✕</button></label>
           <label class="drop qw-s2" id="qwDrop2" title="Ещё одно изображение (референс, по желанию)"><input type="file" accept="image/*"><div class="ph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></div><span class="tag" hidden>2</span><button class="x" type="button">✕</button></label>
           <label class="drop qw-s3" id="qwDrop3" title="Ещё одно изображение (референс, по желанию)"><input type="file" accept="image/*"><div class="ph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></div><span class="tag" hidden>3</span><button class="x" type="button">✕</button></label>
+          <label class="drop qw-s4" id="qwDrop4" title="Ещё одно изображение (референс, только для MiniMax H3 Image)"><input type="file" accept="image/*"><div class="ph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></div><span class="tag" hidden>4</span><button class="x" type="button">✕</button></label>
+          <label class="drop qw-s5" id="qwDrop5" title="Ещё одно изображение (референс, только для MiniMax H3 Image)"><input type="file" accept="image/*"><div class="ph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></div><span class="tag" hidden>5</span><button class="x" type="button">✕</button></label>
         </div>
         <div class="hresize" id="qwResize" title="Потяните вверх или вниз, чтобы изменить высоту картинок. Двойной клик — вернуть как было"></div>
         <div class="hint qw-morehint" style="margin-top:8px"></div></div>
@@ -462,7 +505,7 @@ function buildQwen(scope) {
             <div class="row qw-lnrow" style="margin-top:10px"><div class="row-l">Линия между кадрами</div>
               <div class="seg qw-ln" style="grid-template-columns:repeat(3,1fr)"><button data-ln="white">Тонкая белая</button><button data-ln="black">Тонкая чёрная</button><button data-ln="none">Без линии</button></div></div>
             <div class="hint" style="margin-top:6px">Кадры пишите по одному в строке: «1: ...», «2: ...» (2, 3, 4, 6, 8 или 9 кадров). Каждый кадр сохраняется отдельно в полном размере; в Библиотеку кадры добавляются кнопкой. FLUX.2 рисует кадр за секунды, Qwen 2.1 заметно дольше (минуты на кадр).</div></div>
-          <div class="row" style="margin-bottom:12px"><div class="row-l">Модель</div><div class="seg qw-eng" style="grid-template-columns:1fr 1fr"><button data-e="qwen">Qwen 2.1<small>для творчества, не для коммерции</small></button><button data-e="flux">FLUX.2 klein<small>можно в коммерцию</small></button></div>
+          <div class="row" style="margin-bottom:12px"><div class="row-l">Модель</div><div class="seg qw-eng" style="grid-template-columns:repeat(3,1fr)"><button data-e="qwen">Qwen 2.1<small>для творчества, не для коммерции</small></button><button data-e="flux">FLUX.2 klein<small>можно в коммерцию</small></button><button data-e="h3img">MiniMax-H3-Image<small>крупно и по картинкам</small></button></div>
             <div class="hint qw-fluxhint" hidden></div></div>
           <div class="qw-ptxt">
           <textarea class="qw-prompt" placeholder="Что изменить и что оставить. Например: Этот человек сидит в кафе у окна и пьёт кофе. Лицо, причёска и одежда как на изображении."></textarea>
@@ -472,6 +515,9 @@ function buildQwen(scope) {
           <div class="note qw-outlora" hidden style="margin-top:10px"><span>Края получаются аккуратнее с LoRA «Расширение изображения» (159 МБ): она ждёт в разделе <b>Модели</b>. Пока её нет, программа дорисует края по-старому — тоже аккуратно, но проще.</span></div>
           <div class="qw-szwrap" style="margin-top:12px">${SZ_ROW}</div>
           <div class="row qw-editonly qw-sizerow" style="margin-top:12px"><div class="row-l">Размер результата</div><div class="seg qw-size" style="grid-template-columns:1fr 1fr"><button data-s="1">Обычный<small>~1 МП, быстро</small></button><button data-s="2">Крупный<small>~2 МП, дольше</small></button></div></div></div>
+        <div class="row qw-mprow" hidden style="margin-top:12px"><div class="row-l">Размер результата</div>
+          <div class="seg qw-mp" style="grid-template-columns:repeat(3,1fr)"><button data-mp="4">4 МП<small>быстрее, видно зерно</small></button><button data-mp="8">8 МП<small>чисто</small></button><button data-mp="16">16 МП<small>самое чистое, дольше</small></button></div>
+          <div class="hint">MiniMax H3 Image рассчитан на 4–16 МП: ниже 8 МП заметно зерно. Площадь листа или кадра делится между панелями.</div></div>
         <div class="qw-sheet" style="margin-top:14px" hidden>
           <div class="note"><span>Нужен персонаж на изображении (лучше в полный рост, но портрет тоже подойдёт). Потом лист можно взять как референс в других разделах.</span></div>
           <div class="row"><div class="row-l">Сколько видов</div><div class="seg qw-pn" style="grid-template-columns:1fr 1fr"><button data-p="4">4 панели<small>полный рост спереди и сзади, два портрета</small></button><button data-p="6">6 панелей<small>полный рост спереди, в 3/4, сбоку, сзади + 2 портрета</small></button></div></div>
@@ -479,16 +525,18 @@ function buildQwen(scope) {
           <div class="row"><div class="row-l">Фон</div><div class="seg qw-bg" style="grid-template-columns:repeat(3,1fr)"><button data-b="grey">Серый</button><button data-b="white">Белый</button><button data-b="black">Чёрный</button></div></div>
           <div class="row"><div class="row-l">Особые приметы <span class="hint">необязательно</span></div><div class="path on"><input class="qw-marks" spellcheck="false" placeholder="например: жёлтые очки, шрам на брови"></div></div></div>
         ${imgSeedBox()}
-        <div class="hint" style="margin-top:10px">Модель Qwen Image 2.1 — только для некоммерческого использования (лицензия Qwen Research).</div></div>
+        <div class="hint" style="margin-top:10px">Модель Qwen Image 2.1 — только для некоммерческого использования (лицензия Qwen Research). <b>MiniMax-H3-Image</b> (Powered by MiniMax-H3-Image) — открытая community-лицензия: коммерческое использование до 1 млн $ годовой выручки (иначе нужно отдельное разрешение MiniMax), в ЕС, Великобритании, Южной Корее и США модель не лицензирована. Негативного промпта у неё нет, а картинки называются <b>&lt;Picture 1&gt;</b>…<b>&lt;Picture 5&gt;</b>, и первая задаёт форму результата.</div></div>
     </div><div class="preview qw-prev"></div></div>`;
   gridResize($('.grid', root));
   const drop = $('#qwDrop');
   wireDrop(drop, () => {});
-  const drop2 = $('#qwDrop2'), drop3 = $('#qwDrop3');
-  szWire($('.qw-szwrap', root), S, () => upd(), () => IMG_SIZES[S.aspect] || [1376, 768]);
-  wireDrop(drop2, () => {}); wireDrop(drop3, () => {});
-  wireSlotSwap([drop, drop2, drop3]);
-  $('#qwClrAll', root).onclick = () => clearSlots([drop, drop2, drop3]);
+  const drop2 = $('#qwDrop2'), drop3 = $('#qwDrop3'), drop4 = $('#qwDrop4'), drop5 = $('#qwDrop5');
+  const DROPS = [drop, drop2, drop3, drop4, drop5];
+  szWire($('.qw-szwrap', root), S, () => upd(), () => IMG_SIZES[S.aspect] || [1376, 768],
+         () => (S.engine === 'h3img' ? H3IMG_LIM : null));
+  DROPS.slice(1).forEach(d => wireDrop(d, () => {}));
+  wireSlotSwap(DROPS);
+  $('#qwClrAll', root).onclick = () => clearSlots(DROPS);
   const P = imgPanel($('.qw-prev', root), {
     mode: 'qwen', url: '/api/generate/qwen',
     promptText: () => S.kind === 'sheet' ? 'Лист персонажа' : S.kind === 'bg' ? 'Убрать фон' : $('.qw-prompt', root).value.trim(),
@@ -509,11 +557,15 @@ function buildQwen(scope) {
       }
       if (drop._file) fd.append('image', drop._file);
       if (S.kind === 'bg') { fd.append('size', S.size); imgSeedForm(S, fd); return fd; }
-      if (S.kind === 'story') { fd.append('frames', S.frames ? '1' : '0'); fd.append('line', S.line); } fd.append('engine', S.kind === 'sheet' ? 'qwen' : S.engine);
+      if (S.kind === 'story') { fd.append('frames', S.frames ? '1' : '0'); fd.append('line', S.line); }
+      // the sheet runs on Qwen or on MiniMax H3 Image, never on FLUX.2; the area in MP is H3 Image's own count
+      const h3 = S.engine === 'h3img';
+      fd.append('engine', S.kind === 'sheet' ? (h3 ? 'h3img' : 'qwen') : S.engine);
+      if (h3) fd.append('size', S.mp);
       if (S.kind !== 'sheet' && S.cw && S.ch) { fd.append('width', S.cw); fd.append('height', S.ch); }
-      if (S.kind !== 'sheet') { if (drop2._file) fd.append('image2', drop2._file); if (drop3._file) fd.append('image3', drop3._file); }
+      if (S.kind !== 'sheet') DROPS.slice(1).forEach((d, i) => { if (d._file) fd.append('image' + (i + 2), d._file); });
       if (S.kind === 'sheet') { fd.append('panels', S.panels); fd.append('headless', S.headless ? '1' : '0'); fd.append('background', S.bg); fd.append('marks', $('.qw-marks', root).value.trim()); }
-      else if (S.kind !== 'bg') { fd.append('prompt', $('.qw-prompt', root).value.trim()); fd.append('size', S.size); fd.append('aspect', S.aspect); }
+      else if (S.kind !== 'bg') { fd.append('prompt', $('.qw-prompt', root).value.trim()); if (!h3) fd.append('size', S.size); fd.append('aspect', S.aspect); }
       imgSeedForm(S, fd); return fd;
     },
     // «Применить изменения»: the result becomes the picture to edit and the work goes on with it
@@ -566,14 +618,22 @@ function buildQwen(scope) {
     return loraOn;
   };
   const upd = () => {
-    const isBg = S.kind === 'bg', isOut = S.kind === 'outpaint';
+    const isBg = S.kind === 'bg', isOut = S.kind === 'outpaint', h3 = S.engine === 'h3img';
+    const fewSlots = S.kind === 'sheet' || isBg || isOut;   // one picture only
     $$('.qw-asp .chip', root).forEach(c => { c.classList.toggle('on', isOut ? c.dataset.qa === S.aspectOut : c.dataset.qa === S.aspect); c.hidden = isOut && !c.dataset.qa; });
     $$('.qw-kind button', root).forEach(b => b.classList.toggle('on', b.dataset.k === S.kind));
     $('.qw-edit', root).hidden = S.kind === 'sheet'; $('.qw-sheet', root).hidden = S.kind !== 'sheet';
-    $$('.qw-s2, .qw-s3', root).forEach(x => x.hidden = S.kind === 'sheet' || isBg || isOut); $('.qw-slots', root).classList.toggle('one', S.kind === 'sheet' || isBg || isOut); $('.qw-morehint', root).hidden = S.kind === 'sheet' || isBg || isOut;
-    $('.qw-morehint', root).innerHTML = S.kind === 'story'
-      ? 'Раскадровка: 1-е изображение — герой (или лист персонажа), 2-я — локация, 3-я — по желанию. В тексте они называются <b>&lt;image1&gt;</b>, <b>&lt;image2&gt;</b>, <b>&lt;image3&gt;</b> (для FLUX.2: «image 1», «image 2»).'
-      : 'Референсы (по желанию): 1-е изображение — то, что меняем, 2-я и 3-я — например, герой, предмет или одежда. В тексте они называются <b>&lt;image2&gt;</b>, <b>&lt;image3&gt;</b> (для FLUX.2: «image 2», «image 3»).';
+    $$('.qw-s2, .qw-s3', root).forEach(x => x.hidden = fewSlots);
+    // the 4th and 5th pictures exist only for MiniMax H3 Image: the other models take three at most
+    $$('.qw-s4, .qw-s5', root).forEach(x => x.hidden = fewSlots || !h3);
+    $('.qw-slots', root).classList.toggle('one', fewSlots);
+    $('.qw-slots', root).classList.toggle('five', h3 && !fewSlots);
+    $('.qw-morehint', root).hidden = fewSlots;
+    $('.qw-morehint', root).innerHTML = h3
+      ? `${S.kind === 'story' ? 'Раскадровка' : 'Правка'}: картинки в тексте называются <b>&lt;Picture 1&gt;</b>…<b>&lt;Picture 5&gt;</b>; <b>первая задаёт форму результата</b> (или возьмите формат ниже). Первая — то, что правим, остальные — герой, место, стиль.`
+      : S.kind === 'story'
+        ? 'Раскадровка: 1-е изображение — герой (или лист персонажа), 2-я — локация, 3-я — по желанию. В тексте они называются <b>&lt;image1&gt;</b>, <b>&lt;image2&gt;</b>, <b>&lt;image3&gt;</b> (для FLUX.2: «image 1», «image 2»).'
+        : 'Референсы (по желанию): 1-е изображение — то, что меняем, 2-я и 3-я — например, герой, предмет или одежда. В тексте они называются <b>&lt;image2&gt;</b>, <b>&lt;image3&gt;</b> (для FLUX.2: «image 2», «image 3»).';
     $('.qw-storyopts', root).hidden = S.kind !== 'story';
     $('.qw-lnrow', root).hidden = !S.frames;
     $$('.qw-fr button', root).forEach(b => b.classList.toggle('on', (b.dataset.fr === '1') === S.frames));
@@ -581,9 +641,13 @@ function buildQwen(scope) {
     $('.qw-ptxt', root).hidden = isBg;
     $('.qw-eng', root).closest('.row').hidden = isBg || isOut;   // these two run on Qwen 2.1 only
     $('.qw-asprow', root).hidden = S.kind === 'story' || isBg || (S.engine === 'flux' && !isOut);
-    $('.qw-asphint', root).textContent = isOut ? 'картинка останется целиком, края дорисуются до этого формата' : 'по умолчанию как у вашего изображения';
-    $('.qw-size', root).closest('.row').hidden = isOut;   // outpaint draws at the canvas size, «Размер результата» does not apply
-    $('.qw-szwrap', root).hidden = isOut || isBg;         // ...and neither does a size of the user's own
+    $('.qw-asphint', root).textContent = isOut ? 'картинка останется целиком, края дорисуются до этого формата'
+      : h3 ? 'необязательно: без него форму задаёт первая картинка' : 'по умолчанию как у вашего изображения';
+    $('.qw-size', root).closest('.row').hidden = isOut || h3;   // 1/2 МП — счёт Qwen; у H3 Image своя площадь в МП
+    $('.qw-mprow', root).hidden = !h3 || isBg || isOut;
+    $$('.qw-mp button', root).forEach(b => b.classList.toggle('on', b.dataset.mp === S.mp));
+    $$('.sz-p', root).forEach(b => b.hidden = h3);
+    $('.qw-szwrap', root).hidden = isOut || isBg;
     // the outpaint LoRA wants a description of the scene, not an instruction: the hint under the field says so
     $('.qw-tahint', root).textContent = isOut
       ? 'Опишите сцену: что уже есть в кадре и что естественно продолжается по краям — без слов «расширь» и «дорисуй».'
@@ -592,14 +656,23 @@ function buildQwen(scope) {
     $('.qw-outlora', root).hidden = !isOut || loraOn === true;
     $$('.qw-editonly', root).forEach(r => { if (!r.classList.contains('qw-asprow') && !r.classList.contains('qw-sizerow')) r.hidden = S.kind === 'story' || isOut || (S.engine === 'flux' && r.contains($('.qw-asp', root))); });
     $('.qw-prompt', root).placeholder = isOut ? 'Что на картинке и что продолжается по краям. Например: светлая комната с белыми стенами и деревянным полом; комната продолжается вправо и влево, тот же дневной свет. Можно оставить пустым.'
-      : S.kind === 'story' && S.frames ? '1: первый кадр по-английски...\n2: второй кадр...\n(героя и место называйте image 1, image 2). Или попросите Агента (Раскадровка → По кадрам).' : S.kind === 'story' ? 'Расскажите историю по кадрам: первый кадр — …, второй кадр — …. Героя и место называйте <image1>, <image2>. Или попросите Агента (Раскадровка) написать промпт.' : 'Что изменить и что оставить. Например: Этот человек сидит в кафе у окна и пьёт кофе. Лицо, причёска и одежда как на изображении.';
+      : S.kind === 'story' && S.frames ? (h3 ? '1: первый кадр по-английски...\n2: второй кадр...\n(героя и место называйте <Picture 1>, <Picture 2>). Или попросите Агента (Раскадровка → По кадрам).'
+        : '1: первый кадр по-английски...\n2: второй кадр...\n(героя и место называйте image 1, image 2). Или попросите Агента (Раскадровка → По кадрам).')
+      : S.kind === 'story' ? (h3 ? 'Расскажите историю по кадрам: первый кадр — …, второй кадр — …. Героя и место называйте <Picture 1>, <Picture 2>. Или попросите Агента (Раскадровка) написать промпт.'
+        : 'Расскажите историю по кадрам: первый кадр — …, второй кадр — …. Героя и место называйте <image1>, <image2>. Или попросите Агента (Раскадровка) написать промпт.')
+      : 'Что изменить и что оставить. Например: Этот человек сидит в кафе у окна и пьёт кофе. Лицо, причёска и одежда как на изображении.';
     $$('.qw-size button', root).forEach(b => b.classList.toggle('on', b.dataset.s === S.size));
     $$('.qw-head button', root).forEach(b => b.classList.toggle('on', (b.dataset.h === '1') === S.headless));
     $$('.qw-bg button', root).forEach(b => b.classList.toggle('on', b.dataset.b === S.bg));
     $$('.qw-eng button', root).forEach(b => b.classList.toggle('on', b.dataset.e === S.engine));
+    $('.mode-pill span', root).textContent = { qwen: 'Qwen Image 2.1', flux: 'FLUX.2 klein',
+      h3img: `MiniMax-H3-Image · ${S.mp} МП` }[S.engine];
     $$('.qw-pn button', root).forEach(b => b.classList.toggle('on', +b.dataset.p === S.panels));
-    if (S.kind === 'sheet') S.panels === 6 ? P.ratio(2112, 960) : P.ratio(1920, 1088);
-    else if (S.kind === 'story') P.ratio(1920, 1088);
+    if (S.kind === 'sheet') {
+      const sz = h3 ? h3Size(S.panels === 6 ? '11:5' : '16:9', S.mp) : (S.panels === 6 ? [2112, 960] : [1920, 1088]);
+      P.ratio(sz[0], sz[1]);
+    }
+    else if (S.kind === 'story') P.ratio(...(h3 ? h3Size('16:9', Math.min(+h3Mp(S.mp), S.frames ? 8 : 16)) : [1920, 1088]));
     if (S.kind !== 'sheet' && S.cw && S.ch) P.ratio(S.cw, S.ch);
   };
   /* One task per screen: a card of «Редактирование изображений» opens this page with the task already chosen.
@@ -627,27 +700,41 @@ function buildQwen(scope) {
     head.textContent = HEAD0.h1; headSub.textContent = HEAD0.sub;
     if (stepH) stepH.innerHTML = HEAD0.step;
   };
+  // the default area of MiniMax H3 Image: a sheet or a whole storyboard is big, a single edit is 8 MP
+  const h3DefaultMp = () => (S.kind === 'sheet' || (S.kind === 'story' && !S.frames) ? '16' : '8');
   root.addEventListener('click', e => {
     const fr = e.target.closest('.qw-fr button'), ln = e.target.closest('.qw-ln button');
-    if (fr) { S.frames = fr.dataset.fr === '1'; upd(); return; }
+    if (fr) { S.frames = fr.dataset.fr === '1'; if (S.engine === 'h3img') S.mp = h3DefaultMp(); upd(); return; }
     if (ln) { S.line = ln.dataset.ln; upd(); return; }
     const qa = e.target.closest('.qw-asp .chip'); if (qa) { if (S.kind === 'outpaint') S.aspectOut = qa.dataset.qa; else S.aspect = qa.dataset.qa; upd(); return; }
+    const mpb = e.target.closest('.qw-mp button');
+    if (mpb) { S.mp = mpb.dataset.mp; upd(); return; }
     const k = e.target.closest('.qw-kind button'), s = e.target.closest('.qw-size button'), h = e.target.closest('.qw-head button'), b = e.target.closest('.qw-bg button'), pn = e.target.closest('.qw-pn button'), en = e.target.closest('.qw-eng button');
-    if (en) { S.engine = en.dataset.e; upd(); qwFluxCheck(); return; }
-    if (pn) S.panels = +pn.dataset.p; else if (k) S.kind = k.dataset.k; else if (s) S.size = s.dataset.s; else if (h) S.headless = h.dataset.h === '1'; else if (b) S.bg = b.dataset.b; else return;
+    if (en) { S.engine = en.dataset.e; if (S.engine === 'h3img') S.mp = h3DefaultMp(); upd(); qwModelCheck(); return; }
+    if (pn) S.panels = +pn.dataset.p; else if (k) { S.kind = k.dataset.k; if (S.engine === 'h3img') S.mp = h3DefaultMp(); } else if (s) S.size = s.dataset.s; else if (h) S.headless = h.dataset.h === '1'; else if (b) S.bg = b.dataset.b; else return;
     upd();
   });
-  async function qwFluxCheck() {
+  /* Is the chosen picture model installed? FLUX.2 and MiniMax H3 Image are separate modes with their own files, and
+     H3 Image needs ComfyUI 0.45 (the node MiniMaxH3ImageConditioning appeared there). Qwen is the section's own model. */
+  async function qwModelCheck() {
     const hint = $('.qw-fluxhint', root); hint.hidden = true;
-    if (S.engine !== 'flux') return;
+    if (S.engine === 'qwen') return;
+    const role = S.engine === 'flux' ? 'flux' : 'h3img';
     try {
       const st = await apiGet('/api/status');
-      const miss = (st.models || []).filter(m => m.role.startsWith('flux') && !m.have);
-      if (!(st.modes || []).includes('flux') || miss.length) {
+      const miss = (st.models || []).filter(m => m.role.startsWith(role) && !m.have);
+      const old = role === 'h3img' && comfyTooOld(st.comfy_version);
+      if (!(st.modes || []).includes(role) || miss.length || old) {
         hint.hidden = false;
-        hint.textContent = st.engine === 'managed'
-          ? 'Для этой модели нужны ещё три файла (около 12 ГБ). Откройте «Модели» и нажмите «Добавить Правка изображения: FLUX.2».'
-          : 'Положите в папки моделей вашего ComfyUI: flux-2-klein-4b-fp8.safetensors (diffusion_models), qwen_3_4b.safetensors (text_encoders) и flux2-vae.safetensors (vae). Потом обновите раздел «Модели».';
+        hint.textContent = old
+          ? `Нужен ComfyUI 0.45 или новее: в ${st.comfy_version || 'этой версии'} нет ноды MiniMaxH3ImageConditioning. Обновите ComfyUI (в портативной сборке — update\\update_comfyui.bat), потом перезапустите программу.`
+          : role === 'flux'
+            ? (st.engine === 'managed'
+              ? 'Для этой модели нужны ещё три файла (около 12 ГБ). Откройте «Модели» и нажмите «Добавить Правка изображения: FLUX.2».'
+              : 'Положите в папки моделей вашего ComfyUI: flux-2-klein-4b-fp8.safetensors (diffusion_models), qwen_3_4b.safetensors (text_encoders) и flux2-vae.safetensors (vae). Потом обновите раздел «Модели».')
+            : (st.engine === 'managed'
+              ? 'Для MiniMax H3 Image нужны ещё файлы (около 14 ГБ: модель и VAE; текстовый энкодер у программы уже есть). Откройте «Модели» и нажмите «Добавить Изображения MiniMax H3 Image».'
+              : 'Положите в папки моделей вашего ComfyUI: minimax_h3_image_pruned_w4a8.safetensors (diffusion_models), minimax_h3_image_vae_fp16.safetensors (vae) и энкодер qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors (text_encoders). Потом обновите раздел «Модели». Для этой модели нужен ComfyUI 0.45 или новее.');
       }
     } catch {}
   }
@@ -671,12 +758,15 @@ function buildQwen(scope) {
     else if (sub === 'Убрать фон') S.kind = 'bg';
     else if (sub.startsWith('Расширение')) { S.kind = 'outpaint'; $('.qw-prompt', root).value = outText(it.prompt); }
     else { S.kind = 'edit'; $('.qw-prompt', root).value = it.prompt || ''; }
+    if (S.engine === 'h3img') S.mp = h3Mp(it.mp || (/^\s*(\d+)\s*МП/i.exec(it.q || '') || [])[1]);
     upd();
   } };
   // задание из очереди: что делали (правка, лист, раскадровка), по какому промпту, модель, формат и seed
   IMG.qwen.fillJob = m => {
     const sub = String(m.sub || '');
-    IMG.qwen.fill({ ...m, engine: /FLUX\.2/i.test(sub) ? 'flux' : 'qwen' });
+    // the model the job was made with: the meta says it, an older record only by the words of `sub`
+    const engine = m.engine === 'h3img' || /MiniMax H3 Image/i.test(sub) ? 'h3img' : /FLUX\.2/i.test(sub) ? 'flux' : 'qwen';
+    IMG.qwen.fill({ ...m, engine });
     if (m.aspect && IMG_SIZES[m.aspect]) S.aspect = m.aspect;
     imgJobSeed(root, S, m.seed);
     upd();

@@ -66,6 +66,7 @@ DEFAULT_SKILL_SETTINGS = {
     "flux2-klein": {"mode": "off", "keywords": []},
     "storyboard": {"mode": "off", "keywords": []},
     "qwen-image-2-1-director-prompt": {"mode": "off", "keywords": []},
+    "minimax-h3-image": {"mode": "off", "keywords": []},
     "akterskaya-igra": {"mode": "auto", "keywords": [
         "актер", "актёр", "диалог", "реплик", "эмоци", "игра", "драм", "ссор", "спор", "плач", "слез", "слёз",
         "прощан", "признан", "разговор", "говорит", "говорят", "кричит", "шепчет", "обид", "ревн", "страх",
@@ -75,7 +76,10 @@ DEFAULT_SKILL_SETTINGS = {
 
 # "Prompt for" targets that make pictures: which skill writes the prompt for each
 IMAGE_SKILLS = {"plist": "krea-2", "krea": "krea-2", "fluxt": "flux2-klein", "qwent": "qwen-image-2-1-director-prompt",
-                "qwen": "qwen-image-2-1-director-prompt", "sheet": "karta-personazha", "sheet6": "karta-personazha",
+                "qwen": "qwen-image-2-1-director-prompt",
+                # MiniMax H3 Image: its own rules (8-16 MP, <Picture N>, no negative prompt)
+                "h3t": "minimax-h3-image", "h3e": "minimax-h3-image",
+                "sheet": "karta-personazha", "sheet6": "karta-personazha",
                 "story": "storyboard"}
 AGENT_TARGETS = ("video", "lipsync", "refs", "actor", "swap", "action", "long") + tuple(IMAGE_SKILLS)
 # long extra reference files that would not fit next to the rest into the model's context
@@ -130,9 +134,13 @@ class Skills:
         all_s[sid] = cur
         self.config.update(skills=all_s)
 
-    def active(self, chat_text, target="video"):
+    def active(self, chat_text, target="video", model=None):
         if target in IMAGE_SKILLS:  # a picture prompt: only its own skill, the video skills would mislead the model
-            return [s for s in self.list() if s["id"] == IMAGE_SKILLS[target]]
+            ids = [IMAGE_SKILLS[target]]
+            if model == "h3img" and target in ("story", "sheet", "sheet6"):
+                # a storyboard / sheet for MiniMax H3 Image needs its own writing rules too (tags <Picture N>, 8-16 MP)
+                ids.append("minimax-h3-image")
+            return [s for s in self.list() if s["id"] in ids]
         text = chat_text.lower()
         res = []
         for s in self.list():
@@ -242,14 +250,16 @@ def system_prompt(skills_text, target, ctx):
             "(он выбирается в разделе). Если нужны реалистичные люди или фото, добавь, что в разделе есть стиль «Реализм».\n"
             "- Картинки, приложенные к чату, это образцы настроения и композиции, их не пересказывай подробно.")
     elif target == "story" and ctx.get("frames"):
+        h3s = ctx.get("model") == "h3img"
         mode_rules = (
-            f"Режим приложения: РАСКАДРОВКА ПО КАДРАМ ({'Qwen Image 2.1' if ctx.get('model') == 'qwen' else 'FLUX.2 klein'}). Каждый кадр рисуется ОТДЕЛЬНОЙ картинкой, а лист склеивает "
+            f"Режим приложения: РАСКАДРОВКА ПО КАДРАМ ({'MiniMax H3 Image' if h3s else 'Qwen Image 2.1' if ctx.get('model') == 'qwen' else 'FLUX.2 klein'}). Каждый кадр рисуется ОТДЕЛЬНОЙ картинкой, а лист склеивает "
             "программа. Используй скилл «storyboard», раздел «Режим по кадрам».\n"
             "- Ответ: одной строкой по-русски сколько кадров; затем ОДИН блок prompt, в котором каждый кадр на своей строке: "
             "`1: ...`, `2: ...` и так далее. Число кадров строго 2, 3, 4, 6, 8 или 9 (если пользователь назвал другое число, "
             "выбери ближайшее из этих и скажи об этом). Каждая строка это полный самостоятельный английский промпт ОДНОГО кадра: "
             "стиль, героя (одинаково во всех кадрах), действие, план, свет. Никаких рамок, листов, линий и текста на картинке.\n"
-            + ("- Ссылки на картинки в тексте: " + ('пиши <image1>, <image2>, <image3> (Qwen)' if ctx.get("model") == "qwen" else 'пиши "image 1", "image 2", "image 3" без скобок (FLUX)') + ".\n")
+            + ("- Ссылки на картинки в тексте: " + ('пиши <Picture 1>, <Picture 2>, <Picture 3> (MiniMax H3 Image)' if h3s
+               else '<image1>, <image2>, <image3> (Qwen)' if ctx.get("model") == "qwen" else 'пиши "image 1", "image 2", "image 3" без скобок (FLUX)') + ".\n")
             + ("- К чату ПРИЛОЖЕНЫ картинки (%d): они подгружаются как референсы. <image1> первая приложенная (герой или лист "
                "персонажа), <image2> вторая (локация), <image3> третья. В КАЖДОЙ строке пиши героя и ссылкой (\"the character from "
                "image 1\") и коротко словами (одежда, причёска, цвета), пиши, что кадр новая композиция, а не копия image 2, и "
@@ -258,7 +268,7 @@ def system_prompt(skills_text, target, ctx):
                "или локация, одной строкой подскажи приложить их (скрепка).")
         )
     elif target == "story":
-        model = {"krea": "Krea 2", "flux": "FLUX.2 klein", "qwen": "Qwen Image 2.1"}.get(ctx.get("model"), "Krea 2")
+        model = {"krea": "Krea 2", "flux": "FLUX.2 klein", "qwen": "Qwen Image 2.1", "h3img": "MiniMax H3 Image"}.get(ctx.get("model"), "Krea 2")
         mode_rules = (
             f"Режим приложения: РАСКАДРОВКА (одна картинка 16:9 из нескольких кадров, модель {model}). Используй скилл "
             f"«storyboard» и в разделе «Шаг 4» ОДИН шаблон: для {model}. Пользователь рассказывает историю по кадрам.\n"
@@ -266,18 +276,46 @@ def system_prompt(skills_text, target, ctx):
             "стрелок и любого текста на картинке, без слов про видео. Негатив не выводи (у Qwen он вписывается в приложении). "
             "Русскую версию не выводи.\n"
             "- Если пользователь не назвал число кадров и не перечислил кадры, возьми 6.\n"
-            + ("- К чату ПРИЛОЖЕНЫ картинки (%d): они подгружаются в генерацию как референсы. Порядок задан пользователем: "
-               "<image1> первая приложенная (обычно герой или лист персонажа), <image2> вторая (обычно локация), <image3> третья. "
-               "Ссылайся на них в промпте как <image1>, <image2> (для FLUX.2 пиши \"image 1\", \"image 2\"), героя и место "
-               "словами не описывай, пиши \"the character from <image1>\", \"the location from <image2>\", \"same art style as "
-               "<image1>\". Это работает только для Qwen 2.1 и FLUX.2 klein: если выбрана Krea 2, одной строкой скажи переключить "
-               "модель. Используй раздел скилла про референсы." % n_img
+            + (("- К чату ПРИЛОЖЕНЫ картинки (%d): они подгружаются в генерацию как референсы, до пяти. Порядок задан "
+                "пользователем: <Picture 1> первая (обычно герой или лист персонажа), <Picture 2> вторая (обычно локация), "
+                "<Picture 3> третья; первая задаёт форму листа. Ссылайся на них как на <Picture 1>, <Picture 2>, героя и место "
+                "словами не описывай: пиши \"the character from <Picture 1>\", \"the location from <Picture 2>\", \"same art "
+                "style as <Picture 1>\"." % n_img) if n_img and ctx.get("model") == "h3img" else
+               ("- К чату ПРИЛОЖЕНЫ картинки (%d): они подгружаются в генерацию как референсы. Порядок задан пользователем: "
+                "<image1> первая приложенная (обычно герой или лист персонажа), <image2> вторая (обычно локация), <image3> третья. "
+                "Ссылайся на них в промпте как <image1>, <image2> (для FLUX.2 пиши \"image 1\", \"image 2\"), героя и место "
+                "словами не описывай, пиши \"the character from <image1>\", \"the location from <image2>\", \"same art style as "
+                "<image1>\". Это работает только для Qwen 2.1 и FLUX.2 klein: если выбрана Krea 2, одной строкой скажи переключить "
+                "модель. Используй раздел скилла про референсы." % n_img)
                if n_img and ctx.get("model") != "krea" else
                "- Картинки, приложенные к чату, это образцы стиля или героя: кратко опиши героя словами, в раскадровку по тексту "
                "они не подгружаются. Если нужна точность по картинкам, подскажи выбрать Qwen 2.1 или FLUX.2 klein." if n_img else
                "- Если у пользователя есть карта персонажа или локация, одной строкой подскажи приложить их (скрепка) и выбрать "
                "Qwen 2.1 или FLUX.2 klein: тогда герой и место возьмутся с картинок.")
         )
+    elif target == "h3t":
+        mode_rules = (
+            "Режим приложения: КАРТИНКА ПО ТЕКСТУ (MiniMax H3 Image, раздел «Изображение по тексту», модель MiniMax H3 Image). "
+            "Нужен промпт для ОДНОЙ КАРТИНКИ, это не видео: без таймкодов, шотов и звука. Используй скилл «minimax-h3-image».\n"
+            "- Ответ: только английский промпт одним блоком prompt, подробный, на весь кадр (80-250 слов). Негативного промпта у "
+            "модели нет: не выводи его и не пиши «no …, without …» списком. Русскую версию и настройки модели не выводи.\n"
+            "- Одной строкой перед блоком подскажи формат кадра из 16:9, 9:16, 1:1, 4:3, 3:4, 3:2, 2:3, 21:9 и размер: 8 МП "
+            "(около минуты) или 16 МП (самое чистое, дольше). 4 МП даёт зерно — только для пробы.\n"
+            "- Картинки, приложенные к чату, здесь только образцы настроения: не пересказывай их подробно. Если пользователю нужно "
+            "сделать по ним (стиль, герой, место), одной строкой подскажи цель «Правка изображения → MiniMax H3 Image».")
+    elif target == "h3e":
+        mode_rules = (
+            f"Режим приложения: ПРАВКА ПО КАРТИНКАМ (MiniMax H3 Image, раздел «Правка изображения» → «Править по описанию», "
+            f"модель MiniMax H3 Image). К чату приложено картинок: {n_img}, в приложении можно до 5. Они подаются как <Picture 1>, "
+            "<Picture 2>… в порядке слотов, и первая задаёт форму результата. Используй скилл «minimax-h3-image».\n"
+            "- Для КАЖДОЙ картинки скажи её роль и что не брать (например: <Picture 1> — то, что правим; <Picture 2> герой с "
+            "сохранением лица и одежды; место — словами). Пользователь тегов не пишет, расставляешь их ты. Если роли не названы, "
+            "угадай по описанию и в конце одной строкой скажи, в каком порядке класть картинки в слоты.\n"
+            "- Если картинка одна и это правка, напиши инструкцию: что изменить и что обязательно сохранить (лицо, причёска, "
+            "одежда, поза, композиция, свет). Одна правка за раз.\n"
+            "- Ответ: один английский блок prompt, подробный. Негатив не выводи. Размеры и настройки не выводи; одной строкой "
+            "подскажи формат кадра и размер (8 или 16 МП; 4 МП даёт зерно) и что картинок не больше 5.\n"
+            + ("- КАРТИНОК В ЧАТЕ НЕТ: попроси приложить их (скрепка или «Из Библиотеки»), не выдумывай." if not n_img else ""))
     elif target == "fluxt":
         mode_rules = (
             "Режим приложения: КАРТИНКА ПО ТЕКСТУ (FLUX.2 klein, раздел «Картинка по тексту», модель FLUX.2 klein). Нужен промпт "
@@ -432,6 +470,20 @@ def system_prompt(skills_text, target, ctx):
             align = "картинок нет - T2VA, без строки выравнивания"
         mode_rules = (f"Режим приложения: ГЕНЕРАЦИЯ ВИДЕО (FastH3: текст / первый кадр / первый и последний кадр). "
                       f"Сейчас {align}. Длительность клипа {dur or 5} с - таймкоды шотов не выходят за неё.")
+    if ctx.get("model") == "h3img" and target in ("story", "sheet", "sheet6"):
+        # the user chose MiniMax H3 Image for this storyboard / sheet: its rules override the model words above
+        mode_rules += (
+            "\n\nМОДЕЛЬ ЭТОГО ЗАПРОСА — MiniMax H3 Image (важнее любых упоминаний Krea 2, FLUX.2 и Qwen выше). Применяй скилл "
+            "«minimax-h3-image» вместе с остальными:\n"
+            "- Промпт английский, подробный, связным описанием всего кадра; негатива нет. Структуру (панели, кадры, сетка, без "
+            "текста и подписей) бери из скилла «storyboard» / «Карта персонажа», а язык описания — из «minimax-h3-image».\n"
+            "- Картинки из чата называй <Picture 1>, <Picture 2>… (до 5), а НЕ <image1> и не \"image 1\". Герой с картинки: "
+            "\"the character from <Picture 1>, keeping the face, hairstyle and outfit exactly\"; стиль: \"in the style of "
+            "<Picture 1>\"; место: \"in the location from <Picture 2>\".\n"
+            "- В «По кадрам» и «Одним листом» картинки из чата подгружаются как референсы (Picture N); в листе персонажа по "
+            "описанию картинки не подгружаются, поэтому опиши героя словами. Если нужен лист ПО ГОТОВОЙ картинке, одной строкой "
+            "подскажи «Правка изображения» → «Лист персонажа» → модель MiniMax H3 Image.\n"
+            "- Каждый кадр и лист рисуются крупно (8-16 МП), поэтому описывай детали, которые будут видны: одежда, материалы, свет.")
     intro = ("Ты - агент-художник внутри приложения Minimax H3 Workspace. Пользователь описывает картинку или правку, может приложить "
              "картинки. Ты пишешь готовый промпт для модели картинок по правилам скилла ниже."
              if target in IMAGE_SKILLS else

@@ -762,6 +762,30 @@ async def run_page(base: str, browser: str, shots: Path):
                 check("a picture panel filled before opening keeps the prompt",
                       pictures and pictures["qprompt"] == "правка картинки", str(pictures))
 
+                # MiniMax H3 Image sits in the model switch of both picture sections: it counts in megapixels
+                # (4/8/16) instead of the 1/2 MP of the other models, and it is the only model that takes five
+                # pictures (the first one is the picture to edit and gives the shape of the result).
+                h3img = await cdp.evaluate(
+                    "(() => { const kr = document.querySelector('#view-krea .kr-eng button[data-e=\"h3img\"]');"
+                    " const qw = document.querySelector('#view-qwen .qw-eng button[data-e=\"h3img\"]');"
+                    " if (!kr || !qw) return {missing: [!kr, !qw]};"
+                    " kr.click(); qw.click();"
+                    " const out = {krmp: !document.querySelector('#view-krea .kr-mprow').hidden,"
+                    "  qwmp: !document.querySelector('#view-qwen .qw-mprow').hidden,"
+                    "  pill: (document.querySelector('#view-krea .mode-pill span') || {}).textContent || '',"
+                    "  five: document.querySelector('#view-qwen .qw-slots').classList.contains('five'),"
+                    "  s4: !document.querySelector('#qwDrop4').hidden, s5: !document.querySelector('#qwDrop5').hidden,"
+                    "  hint: !document.querySelector('#view-krea .kr-h3hint').hidden};"
+                    " document.querySelector('#view-qwen .qw-eng button[data-e=\"qwen\"]').click();"
+                    " out.backMp = document.querySelector('#view-qwen .qw-mprow').hidden;"
+                    " out.backS5 = document.querySelector('#qwDrop5').hidden;"
+                    " return out; })()")
+                check("the H3 Image button shows the megapixel switch in both picture sections",
+                      h3img and h3img["krmp"] and h3img["qwmp"] and "4 МП" in h3img["pill"], str(h3img))
+                check("H3 Image offers five picture slots and gives them back",
+                      h3img and h3img["five"] and h3img["s4"] and h3img["s5"] and h3img["hint"]
+                      and h3img["backMp"] and h3img["backS5"], str(h3img))
+
                 # The picture editor is one page of task cards: a card opens its own screen and the
                 # screen goes back to the cards. Inpaint lives under that page, not in the menu.
                 hub = await cdp.evaluate(
@@ -887,6 +911,12 @@ async def run_page(base: str, browser: str, shots: Path):
                 await asyncio.sleep(0.4)
                 if opened:
                     await cdp.screenshot(shots / "imgedit-inpaint.png")
+                # and the editor on MiniMax-H3-Image: five picture slots and the megapixel switch
+                await cdp.evaluate(
+                    "(() => { document.querySelector('#view-imgedit [data-task=\"edit\"]')?.click();"
+                    " document.querySelector('#view-qwen .qw-eng button[data-e=\"h3img\"]')?.click(); })()")
+                await asyncio.sleep(0.4)
+                await cdp.screenshot(shots / "imgedit-h3img.png")
 
                 # The page's own event entry, without a ComfyUI: a snapshot of a running job, then
                 # its result. This is the one-owner contract seen from the window: one row, one

@@ -431,6 +431,8 @@ setTimeout(() => document.documentElement.classList.add('booted'), 1500);
               <button data-t="fluxt">Изображение по тексту<small>FLUX.2 klein</small></button>
               <button data-t="qwent">Изображение по тексту<small>Qwen 2.1</small></button>
               <button data-t="qwen">Правка изображения<small>Qwen, нужно изображение</small></button>
+              <button data-t="h3t">Изображение по тексту<small>MiniMax H3 Image, 8–16 МП</small></button>
+              <button data-t="h3e">Правка изображения<small>MiniMax H3 Image, до 5 картинок</small></button>
               <button data-t="story">Раскадровка<small>история в кадрах на одном изображении</small></button>
               <button data-t="sheet">Лист персонажа<small>4 панели, Krea 2</small></button>
               <button data-t="sheet6">Лист персонажа ×6<small>6 панелей, Krea 2</small></button>
@@ -438,8 +440,8 @@ setTimeout(() => document.documentElement.classList.add('booted'), 1500);
             <div class="seg" id="agStoryF" hidden style="grid-template-columns:1fr 1fr;margin-top:10px">
               <button data-f="1">По кадрам<small>кадры отдельно + лист</small></button><button data-f="0">Одним листом<small>одно изображение сразу</small></button>
             </div>
-            <div class="seg" id="agStoryM" hidden style="grid-template-columns:repeat(3,1fr);margin-top:10px">
-              <button data-m="krea">Krea 2<small>можно в коммерцию</small></button><button data-m="flux">FLUX.2 klein<small>для коммерции</small></button><button data-m="qwen">Qwen 2.1<small>не для коммерции</small></button>
+            <div class="seg" id="agStoryM" hidden style="grid-template-columns:repeat(2,1fr);margin-top:10px">
+              <button data-m="krea">Krea 2<small>можно в коммерцию</small></button><button data-m="flux">FLUX.2 klein<small>для коммерции</small></button><button data-m="qwen">Qwen 2.1<small>не для коммерции</small></button><button data-m="h3img">MiniMax H3 Image<small>крупный лист, по картинкам</small></button>
             </div>
             <small class="hint" id="agCtx" style="display:block;margin-top:8px"></small>
           </div>
@@ -613,6 +615,7 @@ setTimeout(() => document.documentElement.classList.add('booted'), 1500);
               <button class="mcard" data-m="kreareal"><i></i><b>Изображение: реализм</b><span>Krea 2 для реалистичных людей и фото (в «Изображении по тексту», +15 ГБ)</span><small></small></button>
               <button class="mcard" data-m="qwen"><i></i><b>Правка изображения</b><span>Qwen: изменить своё изображение, лист персонажа</span><small></small></button>
               <button class="mcard" data-m="flux"><i></i><b>Правка изображения: можно в коммерцию</b><span>FLUX.2 klein: изменить своё изображение со свободной лицензией (+12 ГБ)</span><small></small></button>
+              <button class="mcard" data-m="h3img"><i></i><b>Изображения MiniMax-H3-Image</b><span>Крупные картинки до 16 МП и правка по 5 референсам (+14 ГБ; нужен ComfyUI 0.45+). Лицензия: коммерция до 1 млн $ выручки, в ЕС, Великобритании, Южной Корее и США не лицензирована</span><small></small></button>
               <button class="mcard" data-m="upscale"><i></i><b>Увеличение видео и изображений</b><span>Увеличить готовое видео и добавить чёткости (долго, но по желанию)</span><small></small></button>
               <button class="mcard" data-m="relayvsr"><i></i><b>Быстрое увеличение видео (RelayVSR)</b><span>Увеличить готовое видео в 2 раза за минуты. Только видео, до ~10 с</span><small></small></button>
             </div>
@@ -1309,7 +1312,7 @@ const refsEl = $('#refs');
 
 /* ---------- SETUP & MODELS view ---------- */
 const GB = b => b < 1e9 ? Math.round(b / 1e6) + ' МБ' : (b / 1e9).toFixed(1).replace(/\.0$/, '') + ' ГБ';
-const MODE_ORDER = ['video', 'lipsync', 'refs', 'actor', 'swap', 'action', 'long', 'krea', 'kreareal', 'qwen', 'flux', 'upscale', 'relayvsr'];
+const MODE_ORDER = ['video', 'lipsync', 'refs', 'actor', 'swap', 'action', 'long', 'krea', 'kreareal', 'qwen', 'flux', 'h3img', 'upscale', 'relayvsr'];
 // start with one mode: a full set is ~100 GB, most people need one task to begin with
 let setupInfo = null, setupOpt = 'new', setupProfile = null, setupModes = ['video'];
 const SETUP_STEPS = [['comfy', 'ComfyUI'], ['nodes', 'Ноды'], ['start', 'Запуск ComfyUI'], ['models', 'Модели']];
@@ -1582,7 +1585,7 @@ function renderModels(s) {
   $('#mlist').innerHTML = s.models.map(m => {
     const optional = !m.modes.length;
     const st = m.have ? '<span class="st ok">✓ есть</span>' : optional ? '<span class="st opt">необязательно</span>' : '<span class="st miss">нет</span>';
-    const modes = m.modes.map(x => ({ video: 'Image-to-Video', lipsync: 'Lipsync', refs: 'Референсы', actor: 'Актёрская игра', swap: 'Замена персонажа', action: 'Экшн', long: 'Видеостудия', krea: 'Изображение по тексту', kreareal: 'Изображение: реализм', qwen: 'Правка изображения', flux: 'Правка: FLUX.2', upscale: 'Увеличение', relayvsr: 'Быстрое увеличение' })[x]).join(', ') || 'дополнительно';
+    const modes = m.modes.map(x => ({ video: 'Image-to-Video', lipsync: 'Lipsync', refs: 'Референсы', actor: 'Актёрская игра', swap: 'Замена персонажа', action: 'Экшн', long: 'Видеостудия', krea: 'Изображение по тексту', kreareal: 'Изображение: реализм', qwen: 'Правка изображения', flux: 'Правка: FLUX.2', h3img: 'Изображения H3 Image', upscale: 'Увеличение', relayvsr: 'Быстрое увеличение' })[x]).join(', ') || 'дополнительно';
     return `<div class="m"><b>${esc(m.name.split('\\').pop())}<small>${esc(m.title)} · ${modes}<br>Нужен файл: <span class="mf" title="Нажмите, чтобы скопировать имя">${esc(m.file || '')}</span> · положить в папку ${esc(m.folder || '')} вашего ComfyUI (подойдёт и любая подпапка в ней)${m.marks ? ` · в названии: ${esc(m.marks)}` : ''}</small></b><span class="hint">${GB(m.size)}</span>${st}<div class="m-btns" style="grid-column:1/-1;display:flex;gap:8px;flex-wrap:wrap">${!m.have && (s.engine === 'external' || optional) ? `<button class="btn mini pri" type="button" data-dlnow="${m.role}" title="Скачать этот файл в папку моделей ComfyUI">Скачать сюда (${GB(m.size)})</button>` : ''}<button class="btn mini" type="button" data-dlmodel="${m.role}" title="Открыть страницу скачивания этого файла в браузере">Страница в интернете…</button><button class="btn mini" type="button" data-copyurl="${esc(m.url || '')}" title="Скопировать прямую ссылку, чтобы скачать менеджером загрузок или через другой компьютер">Копировать ссылку</button><button class="btn mini" type="button" data-copyname="${esc(m.file || '')}" title="Скопировать имя файла, чтобы найти его на компьютере или на сайте">Копировать имя</button><button class="btn mini" type="button" data-pickmodel="${m.role}" title="${m.have ? 'Заменить на другой файл (например, другую точность модели)' : 'Если файл у вас называется иначе — выберите его вручную'}">${m.have ? (m.picked ? 'Другой файл ✓' : 'Заменить…') : 'Указать файл…'}</button>${m.variants && m.variants.length > 1 ? `<button class="btn mini" type="button" data-variant="${m.role}" title="Поставить другую версию этой же модели, например полегче или новее">Другая версия…</button>` : ''}</div></div>`;
   }).join('');
   $('#mdFix').hidden = s.engine !== 'managed' || s.models.every(m => m.have || !m.modes.length);
@@ -1593,7 +1596,7 @@ function renderModels(s) {
   MD_NEED = need.map(m => m.role);
   $('#mdFixExt').hidden = s.engine !== 'external' || !need.length;
   $('#mdFixExt').textContent = `Скачать недостающие (${need.length}, ${GB(need.reduce((a, m) => a + m.size, 0))})`;
-  const MN = { video: 'Image-to-Video', lipsync: 'Lipsync', refs: 'Референсы', actor: 'Актёрская игра', swap: 'Замена персонажа', action: 'Экшн-сцены', long: 'Видеостудия', krea: 'Изображение по тексту', kreareal: 'Изображение: реализм', qwen: 'Правка изображения', flux: 'Правка изображения: FLUX.2 (в коммерцию)', upscale: 'Увеличение видео и изображений', relayvsr: 'Быстрое увеличение видео (RelayVSR)' };
+  const MN = { video: 'Image-to-Video', lipsync: 'Lipsync', refs: 'Референсы', actor: 'Актёрская игра', swap: 'Замена персонажа', action: 'Экшн-сцены', long: 'Видеостудия', krea: 'Изображение по тексту', kreareal: 'Изображение: реализм', qwen: 'Правка изображения', flux: 'Правка изображения: FLUX.2 (в коммерцию)', h3img: 'Изображения MiniMax H3 Image', upscale: 'Увеличение видео и изображений', relayvsr: 'Быстрое увеличение видео (RelayVSR)' };
   $('#mdAdd').innerHTML = s.engine === 'managed' || s.engine === 'external' ? Object.entries(s.add_modes || {}).map(([m, gb]) =>
     `<button class="btn" data-add="${m}">Добавить ${MN[m]} (+${String(gb).replace('.', ',')} ГБ)</button>`).join(' ') : '';
   $$(MODE_ORDER.map(v => `.nav[data-view="${v}"]`).join(',')).forEach(n => {
@@ -1811,7 +1814,7 @@ $('.nav[data-view="models"]').addEventListener('click', async () => {
 });
 
 /* ---------- LIBRARY ---------- */
-const MODE_NAME = { montage: 'Монтаж', custom: 'Свой workflow', video: 'Видео', lipsync: 'Lipsync', refs: 'Референсы', actor: 'Актёрская игра', swap: 'Замена персонажа', action: 'Экшн', long: 'Видеостудия', krea: 'Изображение по тексту', qwen: 'Правка изображения', upscale: 'Увеличение', relayvsr: 'Увеличение' };
+const MODE_NAME = { montage: 'Монтаж', custom: 'Свой workflow', video: 'Видео', lipsync: 'Lipsync', refs: 'Референсы', actor: 'Актёрская игра', swap: 'Замена персонажа', action: 'Экшн', long: 'Видеостудия', krea: 'Изображение по тексту', qwen: 'Правка изображения', h3img: 'Изображения H3 Image', upscale: 'Увеличение', relayvsr: 'Увеличение' };
 const LIB = [];
 const IMG_PANELS = [];  // refresh functions of the picture result windows
 let libFilter = 'all', selecting = false, selected = new Set(), openId = null;
@@ -2577,7 +2580,8 @@ async function jobEditImage(meta, mode, files) {
   const panel = imagePanel(mode);   // builds the section if this is its first visit
   if (panel && panel.fillJob) panel.fillJob(meta);
   if (mode === 'qwen') {
-    for (const [i, sel] of ['#qwDrop', '#qwDrop2', '#qwDrop3'].entries()) {
+    // five slots: MiniMax H3 Image takes up to five pictures, the other models fill the first three
+    for (const [i, sel] of ['#qwDrop', '#qwDrop2', '#qwDrop3', '#qwDrop4', '#qwDrop5'].entries()) {
       if ($(sel).classList.contains('filled')) $(sel + ' .x').click();
       if (files.image[i]) await jobPut($(sel + ' input'), files.image[i].file);
     }

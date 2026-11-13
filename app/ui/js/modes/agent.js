@@ -76,8 +76,10 @@ $('#agFile').onchange = async e => {
 };
 $('#agEmpty').onclick = e => { const s = e.target.closest('span'); if (s) { $('#agIn').value = s.textContent.replace(/[«»]/g, '').replace(/ \+ фото героинь$/, ''); $('#agIn').focus(); } };
 scope.listen($('#agIn'), 'keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('#agSend').click(); } });
-const AG_NAMES = { plist: 'список кадров', long: 'сцены длинного видео', video: 'Генерацию видео', lipsync: 'Lipsync', refs: 'Референсы', actor: 'Актёрскую игру', swap: 'Замену персонажа', action: 'Экшн-сцены', krea: 'Изображение по тексту', qwen: 'Правку изображения', sheet: 'Изображение по тексту', sheet6: 'Изображение по тексту', fluxt: 'Изображение по тексту', qwent: 'Изображение по тексту', story: 'Изображение по тексту' };
-const AG_IMG = ['plist', 'krea', 'qwen', 'sheet', 'sheet6', 'fluxt', 'qwent', 'story'];
+const AG_NAMES = { plist: 'список кадров', long: 'сцены длинного видео', video: 'Генерацию видео', lipsync: 'Lipsync', refs: 'Референсы', actor: 'Актёрскую игру', swap: 'Замену персонажа', action: 'Экшн-сцены', krea: 'Изображение по тексту', qwen: 'Правку изображения', h3t: 'Изображение по тексту (H3 Image)', h3e: 'правку по картинкам (H3 Image)', sheet: 'Изображение по тексту', sheet6: 'Изображение по тексту', fluxt: 'Изображение по тексту', qwent: 'Изображение по тексту', story: 'Изображение по тексту' };
+const AG_IMG = ['plist', 'krea', 'qwen', 'h3t', 'h3e', 'sheet', 'sheet6', 'fluxt', 'qwent', 'story'];
+// the picture targets whose prompt goes into the editor as MiniMax H3 Image (the section's model, not the pictures page)
+const AG_H3IMG = ['h3t', 'h3e'];
 AG.storyModel = 'krea'; AG.storyFrames = true;
 AG.think = (() => { try { return localStorage.getItem('h3-ag-think') === 'deep' ? 'deep' : 'fast'; } catch { return 'fast'; } })();
 function agThinkPaint() {
@@ -102,7 +104,10 @@ function agCtx() {
   $('#agCtx').textContent = AG_IMG.includes(AG.target)
     ? ({ krea: 'Опишите изображение словами: агент напишет промпт для Krea 2. Изображения в чате — только образцы настроения.',
          qwen: `Приложите изображение, которое нужно изменить (скрепка или «Из Библиотеки»), и напишите, что поменять. Изображений в чате: ${n}.`,
-         story: 'Расскажите историю по кадрам («первый кадр — …, второй кадр — …») и скажите, сколько кадров нужно. Агент напишет промпт одного изображения-раскадровки без подписей и номеров для выбранной модели.',
+         h3t: 'Опишите изображение словами: агент напишет промпт для MiniMax H3 Image — крупно (8 или 16 МП), без негативного промпта. Изображения в чате — только образцы настроения.',
+         h3e: `Приложите картинки (до 5: первая — то, что правим, остальные — герой, место или стиль) и напишите, что сделать. В промпте они станут <Picture 1>…<Picture 5>, и первая задаёт форму результата. Изображений в чате: ${n}.`,
+         story: 'Расскажите историю по кадрам («первый кадр — …, второй кадр — …») и скажите, сколько кадров нужно. Агент напишет промпт одного изображения-раскадровки без подписей и номеров для выбранной модели.'
+           + (AG.storyModel === 'h3img' ? ' Для MiniMax H3 Image кадры и герои называются <Picture 1>, <Picture 2>.' : ''),
          fluxt: 'Опишите изображение словами: агент напишет промпт для FLUX.2 klein (без негатива, описание по порядку: главное сначала). Изображения в чате — только образцы настроения.',
          qwent: 'Опишите изображение словами: агент напишет промпт для Qwen 2.1. Негатив впишите отдельным полем в разделе. Изображения в чате — только образцы настроения.',
          sheet: `Опишите персонажа: агент напишет промпт листа из 4 панелей. Изображений в чате: ${n}.`,
@@ -393,12 +398,16 @@ async function sendPrompt(blk, to) {
     const six = AG.target === 'sheet6' || to === 'sheet6';
     const engine = to === 'fluxt' ? 'flux' : to === 'qwent' ? 'qwen' : (AG.target === 'fluxt' ? 'flux' : AG.target === 'qwent' ? 'qwen' : AG.target === 'story' ? AG.storyModel : 'krea');
     imagePanel('krea').fill({ prompt, engine, aspect: six ? '21:9' : AG.target === 'sheet' || to === 'sheet' || AG.target === 'story' ? '16:9' : undefined }); to = 'krea';
-  } else if (to === 'qwen') {
-    imagePanel('qwen').fill({ prompt });
-    for (const [i, sel] of ['#qwDrop', '#qwDrop2', '#qwDrop3'].entries()) {
+  } else if (to === 'qwen' || to === 'h3e') {
+    // H3 Image edit: the pictures go into the editor's slots (the first one is the picture to edit)
+    imagePanel('qwen').fill({ prompt, engine: to === 'h3e' ? 'h3img' : 'qwen', kind: 'edit' });
+    for (const [i, sel] of ['#qwDrop', '#qwDrop2', '#qwDrop3', '#qwDrop4', '#qwDrop5'].entries()) {
       $(sel + ' .x')?.click();
       if (files[i]) await setDropFile($(sel + ' input'), files[i]);
     }
+    to = 'qwen';
+  } else if (to === 'h3t') {
+    imagePanel('krea').fill({ prompt, engine: 'h3img', aspect: '16:9' }); to = 'krea';
   } else if (to === 'video') {
     $('#vPrompt').value = prompt; $('#vPrompt').oninput({ target: $('#vPrompt') });
     if (files[0]) { $('#dFirst .x')?.click(); await setDropFile($('#dFirst input'), files[0]); }
@@ -579,7 +588,7 @@ function onAgentSetup(ev) {
 
 // skills
 const SK_MODES = { always: 'Всегда', auto: 'Авто', off: 'Выкл' };
-const AG_SK_IMG = { 'storyboard': 'Раскадровка', 'krea-2': 'Изображение по тексту', 'flux2-klein': 'Изображение: FLUX.2 klein', 'qwen-image-2-1-director-prompt': 'Правка изображения', 'karta-personazha': 'Лист персонажа' };
+const AG_SK_IMG = { 'storyboard': 'Раскадровка', 'krea-2': 'Изображение по тексту', 'flux2-klein': 'Изображение: FLUX.2 klein', 'qwen-image-2-1-director-prompt': 'Правка изображения', 'karta-personazha': 'Лист персонажа', 'minimax-h3-image': 'MiniMax H3 Image' };
 function renderSkills(list) {
   $('#skCnt').textContent = `(${list.length})`;
   $('#skList').innerHTML = list.map(s => `<div class="sk" data-id="${esc(s.id)}">

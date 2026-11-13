@@ -189,6 +189,7 @@
 /* ---------- pictures: Krea, the editor and inpaint ---------- */
 .qw-slots{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
 .qw-slots.one{grid-template-columns:1fr}
+.qw-slots.five{grid-template-columns:repeat(5,1fr)}
 .qw-slots .drop{height:var(--qw-h,130px)}
 .qw-slots .drop .ph svg{width:24px;height:24px}
 .ip-frame{position:relative;width:100%;aspect-ratio:16/9;background:var(--screen);border-radius:12px;overflow:hidden;display:grid;place-items:center}
