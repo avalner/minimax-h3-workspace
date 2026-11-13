@@ -25,7 +25,9 @@ let REF_FUSED_CHECK = null;   // the references section re-checks its optional m
 
 function makeRefMode(cfg) {
   const root = $('#view-' + cfg.mode);
+  const ACT = !!cfg.action;   // «Экшн-видеостудия»: the same scenes as the studio, sampled by the action model
   const S = { aspect: '16:9', q: 'HD+', dur: cfg.dur, steps: 6, refSize: 'max', accel: 'old', unet: 'fast', len: () => S.dur };
+  if (ACT) { S.actionModel = 'sing'; S.actionPika = true; }
   // this section writes its own markup, while the stage bar («＋ Сохранить этап» / «Этапы ▾») is the
   // page's and was put there before this module was loaded: keep it, or the section loses its stages
   const stBar = $('.st-bar', root);
@@ -193,26 +195,35 @@ function makeRefMode(cfg) {
       <div class="ta-foot"><div class="tokens rm-tokens"></div><span class="hint">нажмите, чтобы вставить в сцену</span></div>
       <div class="note" style="margin-top:12px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 8h0M11 12h1v5h1"/></svg><span>Изображения героя необязательны: без них ролик строится только по тексту (например, про Древний Рим). Сцены идут одна за другой, каждая продолжает прошлую: герой, место и звук переходят дальше. Но при каждом продолжении изображение немного портится, поэтому при смене плана или места ставьте у сцены галочку «Новый план»: она строится заново по вашим изображениям, и качество остаётся как в первой сцене. В каждой сцене опишите героя, что он делает и как движется камера. Длину сцены задаёт ползунок. Текст сцены можно составить в разделе «Агент».</span></div>`;
     const c1 = $('.rm-imgs', root).closest('.card');
+    if (ACT) {   // the action studio: one quality, no song, the sound comes from the model
+      const note = card.querySelector('.note:not(.lm-src) span');   // the long how-it-works note, not the «continuing a video» one
+      if (note) note.innerHTML = 'Изображения героя необязательны: без них ролик строится только по тексту. Сцены идут одна за другой, '
+        + 'каждая продолжает прошлую: герой, место и звук переходят дальше. При смене плана или места ставьте у сцены «Сменить план здесь»: '
+        + 'она строится заново по вашим изображениям, и качество остаётся как в первой. Длину сцены задаёт ползунок: для экшна лучше 3–5 секунд — '
+        + 'считается быстрее, движение чище. Своего аудио здесь нет: звук и музыку опишите в тексте сцены.';
+    }
     $('h3', c1).innerHTML = '<span class="n">1</span>Референсы';
     $('.rm-count', root).hidden = true;
     $$('.rm-imgs .plus', root).forEach((pl, i) => { pl.lastChild.textContent = 'Референс'; });
     $('.rm-media .sub-l span', root).textContent = 'Песня или фрагмент';
     $('.rm-media .media-hint', root).textContent = 'любой длины: каждая сцена берёт свой кусок по порядку';
     // the pictures of this section go to the agent in one press (no screenshots), the agent writes the scenes for them
-    const toAg = document.createElement('button'); toAg.type = 'button'; toAg.className = 'btn'; toAg.style.marginTop = '10px';
-    toAg.textContent = 'Написать сцены в «Агенте» по этим изображениям'; toAg.title = 'Откроет «Агента» с этими референсами в чате: опишите историю, он разобьёт её на сцены, а кнопка вставит их сюда';
-    c1.append(toAg);
-    toAg.onclick = async () => {
-      const files = $$('label.ref.filled', imgsEl).map(r => r._file).filter(Boolean);
-      try {
-        for (const f of files) {
-          if (AG.att.some(a => a.file && a.file.name === f.name && a.file.size === f.size)) continue;
-          await agAttachFile(f);
-        }
-        $('#agTarget [data-t="long"]').click(); goTo('agent');
-        toast(files.length ? `В чат агента добавлено изображений: ${files.length}. Опишите историю по сценам.` : 'Откройте «Агента» и опишите историю по сценам.');
-      } catch { toast('Не удалось передать изображения агенту'); }
-    };
+    if (!ACT) {   // the action studio has no agent target of its own yet: its scenes are written by hand
+      const toAg = document.createElement('button'); toAg.type = 'button'; toAg.className = 'btn'; toAg.style.marginTop = '10px';
+      toAg.textContent = 'Написать сцены в «Агенте» по этим изображениям'; toAg.title = 'Откроет «Агента» с этими референсами в чате: опишите историю, он разобьёт её на сцены, а кнопка вставит их сюда';
+      c1.append(toAg);
+      toAg.onclick = async () => {
+        const files = $$('label.ref.filled', imgsEl).map(r => r._file).filter(Boolean);
+        try {
+          for (const f of files) {
+            if (AG.att.some(a => a.file && a.file.name === f.name && a.file.size === f.size)) continue;
+            await agAttachFile(f);
+          }
+          $('#agTarget [data-t="long"]').click(); goTo('agent');
+          toast(files.length ? `В чат агента добавлено изображений: ${files.length}. Опишите историю по сценам.` : 'Откройте «Агента» и опишите историю по сценам.');
+        } catch { toast('Не удалось передать изображения агенту'); }
+      };
+    }
     const box = $('.lm-scenes', root);
     box.addEventListener('click', async e => {   // «Добавить в библиотеку» in the scene line
       const b = e.target.closest('.sc-addlib'); if (!b) return;
@@ -363,7 +374,7 @@ function makeRefMode(cfg) {
     queueMicrotask(() => setMode('parts'));
 
     /* --- the project survives a restart: scenes, pictures of scenes, sound choice, which scenes are done --- */
-    const PKEY = 'h3-long-projects', fsig = {};
+    const PKEY = 'h3-long-projects', LASTKEY = ACT ? 'h3-long-last-actionsc' : 'h3-long-last', fsig = {};
     const loadAll = () => { try { return JSON.parse(localStorage.getItem(PKEY) || '{}'); } catch { return {}; } };
     const putFile = (key, f) => { const sg = f ? `${f.name}|${f.size}|${f.lastModified}` : ''; if (fsig[key] === sg) return; fsig[key] = sg; if (f) memFile('put', key, f); else memFile('delete', key); };
     let saveT = null;
@@ -371,6 +382,7 @@ function makeRefMode(cfg) {
       try {
         const run = root._run, slotA = $('.rm-auds .slot', root);
         const proj = { run, project: root._project || window.h3Projects?.active?.() || '', t: Date.now(), mode: root._mode, qm: root._q, qBy: { ...(root._qBy || {}), [root._q]: S.q }, snd: root._snd, start: $('.lm-start', root).value, vocals: $('.lm-vocals', root).checked,
+          studio: cfg.mode,   // the film knows its studio: a film of the action studio is never opened by the Видеостудия and back
           aspect: S.aspect, q: S.q, cw: S.cw || 0, ch: S.ch || 0, src: root._src ? { id: root._src.id || '', name: root._src.name } : null,
           scenes: $$('.sc', root).map(c => ({ prompt: $('textarea', c).value, sec: +$('input[type=range]', c).value, fresh: !!$('.sc-fresh', c)?.checked, nimg: c._files.length, var: c._var || 0,
             done: c._dn.final ? { sig: c._dn.final.sig, url: c._dn.final.url, id: c._dn.final.id, text: c._dn.final.text } : null,
@@ -384,7 +396,7 @@ function makeRefMode(cfg) {
         if (!hasWork && !all[run]) return;
         all[run] = proj;
         Object.keys(all).sort((a, b) => all[b].t - all[a].t).slice(8).forEach(k => delete all[k]);   // the 8 latest projects
-        localStorage.setItem(PKEY, JSON.stringify(all)); localStorage.setItem('h3-long-last', run);
+        localStorage.setItem(PKEY, JSON.stringify(all)); localStorage.setItem(LASTKEY, run);
         apiPost('/api/long/project', { run, project: proj }).catch(() => {});
         $$('.ref', imgsEl).forEach((r, i) => putFile(`long/${run}/img${i}`, r._file));
         putFile(`long/${run}/aud0`, slotA ? slotA._file : null);
@@ -407,6 +419,7 @@ function makeRefMode(cfg) {
       try { onDisk = await apiGet('/api/long/project?run=' + run); } catch {}
       if (!p && onDisk && onDisk.project) p = onDisk.project;
       if (!p) return false;
+      if (String(p.studio || 'long') !== cfg.mode) return false;   // a film of another studio (its scenes are counted another way)
       // the project the film was made in: an old record without one joins the project that is open
       root._project = String(p.project || (onDisk && onDisk.project && onDisk.project.project) || '')
                       || (window.h3Projects?.active?.() || '');
@@ -451,7 +464,7 @@ function makeRefMode(cfg) {
        another project: the header's switch brings this project's own film back (or starts one). */
     const projectFilm = async project => {
       if (!project) return '';
-      try { const r = await apiGet('/api/long/project?project=' + encodeURIComponent(project)); return (r && r.run) || ''; } catch { return ''; }
+      try { const r = await apiGet('/api/long/project?studio=' + cfg.mode + '&project=' + encodeURIComponent(project)); return (r && r.run) || ''; } catch { return ''; }
     };
     /* the header switched the project: what is on the screen goes to the project it was made in, then
        the studio opens the film of the new project — or starts a new one with empty scenes */
@@ -477,8 +490,8 @@ function makeRefMode(cfg) {
         // the films saved before a film knew its project (a film of another project is never opened)
         let last = await projectFilm(window.h3Projects?.active?.() || '');
         if (!last) {
-          last = localStorage.getItem('h3-long-last') || '';
-          if (!last) { const r = await apiGet('/api/long/project?last=1'); last = r.run || ''; }
+          last = localStorage.getItem(LASTKEY) || '';
+          if (!last) { const r = await apiGet('/api/long/project?last=1&studio=' + cfg.mode); last = r.run || ''; }
           if (last) {
             const r = await apiGet('/api/long/project?run=' + encodeURIComponent(last)).catch(() => null);
             const own = (r && r.project && r.project.project) || '';
@@ -635,6 +648,7 @@ function makeRefMode(cfg) {
     };
     root._qBy = { draft: S.q, final: S.q };
     function setQ(v, force) {
+      if (ACT && v !== 'final') return;   // the action studio has one quality: picked by the model, not by a draft/final switch
       if (!force && v !== root._q) { root._qBy[root._q] = S.q; S.q = QUALITY_ALL.some(x => x.id === root._qBy[v]) ? root._qBy[v] : '720p'; S._upd?.(); }   // the size chosen in «Параметры» belongs to the row that is open
       root._q = v; $$('.lm-q button', root).forEach(b => b.classList.toggle('on', b.dataset.mq === v));
       root._paintQ();
@@ -683,6 +697,46 @@ function makeRefMode(cfg) {
       const how2 = mk('row', '<div class="row-l">Как считать</div>'); how2.append(modeSeg, modeHint);
       colL.append(modeRow, how2, sndRow); colR.append(fmt, qual); grid.append(colL, colR);
       (how || hdr).after(grid); grid.after(qh);
+      if (ACT) {   // the action studio has one quality and no song: the model, its speed-up, and what the section needs
+        modeRow.hidden = true; how2.hidden = true; sndRow.hidden = true;
+        const mr = mk('row', '<div class="row-l">Модель <span class="hint">чем считать сцены</span></div>');
+        mr.insertAdjacentHTML('beforeend', `<div class="seg rm-amodel" style="grid-template-columns:1fr 1fr">
+          <button type="button" data-a="sing">Singularity<small>как Видеостудия · кинематографичнее</small></button>
+          <button type="button" data-a="action">Hybrid<small>как Экшн-сцены · держит быстрое движение</small></button></div>
+          <label class="cw-chk" style="display:flex;gap:8px;align-items:center;margin-top:8px"><input type="checkbox" class="rm-apika"> Ускорение Pika: 8 шагов вместо 12 (только Singularity)</label>
+          <div class="hint rm-amodel-hint">Если файлов Singularity нет, программа сама возьмёт Hybrid. Сцены считаются по одной, звук придумывает модель — своего аудио здесь нет.</div>
+          <div class="hint rm-admad" style="margin-top:6px"></div>`);
+        grid.before(mr);
+        // the action scene needs its DMAD LoRA: without the file the server refuses, so say it here, before a scene is sent
+        root._check = async () => {
+          const box = $('.rm-admad', root); if (!box) return;
+          try {
+            const a = await apiGet('/api/action/info');
+            box.style.color = a.dmad ? '' : 'var(--pink)';
+            box.textContent = a.dmad ? 'Файл DMAD на месте.' : 'Нужен файл DMAD (3,9 ГБ) в папке loras: он описан в разделе «Экшн-сцены», без него сцены не запустятся.';
+          } catch { box.textContent = ''; }
+        };
+        const paintM = () => {
+          $$('.rm-amodel button', root).forEach(b => b.classList.toggle('on', b.dataset.a === S.actionModel));
+          $('.rm-apika', root).disabled = S.actionModel !== 'sing';
+          if (S.actionModel !== 'sing') $('.rm-apika', root).checked = false;
+          prev?.();
+        };
+        mr.onclick = e => { const b = e.target.closest('.rm-amodel button'); if (!b) return; S.actionModel = b.dataset.a; paintM(); };
+        $('.rm-apika', root).onchange = e => { S.actionPika = e.target.checked; prev?.(); };
+        paintM();
+        // the draft/quality hint and the «how it works» of the Видеостудия do not apply here
+        const qh2 = $('.lm-q-hint', root); if (qh2) qh2.hidden = true;
+        const howA = $('details.agvar', top);
+        if (howA) {
+          howA.open = false;
+          const txt = howA.querySelector('div.hint');
+          if (txt) txt.innerHTML = '<b>1.</b> Загрузите изображения героя и места (необязательно). <b>2.</b> Выберите формат и размер. '
+            + '<b>3.</b> Добавьте сцены и нажмите «Сделать эту сцену»: сцена за сценой, каждая продолжает прошлую. '
+            + 'Для экшна лучше 3–5 секунд на сцену: считается быстрее, движение чище. <b>Модель</b>: Singularity — кинематографичнее, '
+            + 'Hybrid — лучше держит быстрое движение. Своего аудио нет: звук придумывает модель, опишите его в тексте сцены.';
+        }
+      }
       // the rare things go into one fold
       const more = document.createElement('details'); more.className = 'st-more'; more.innerHTML = '<summary>Ещё: свой размер, seed</summary>';
       [own, $('.vwarn', top), ...$$(':scope > details:not(.agvar)', top)].filter(Boolean).forEach(n => more.append(n));
@@ -691,7 +745,7 @@ function makeRefMode(cfg) {
       $('h3', refsCard).innerHTML = '<span class="n">2</span>Изображения героя и места <span class="hint" style="font-weight:400">(необязательно)</span>';
       top.after(refsCard);
       $('h3', musCard).textContent = 'Своё аудио';
-      const syncMus = () => { musCard.hidden = $('.lm-own', root).hidden; };
+      const syncMus = () => { musCard.hidden = ACT || $('.lm-own', root).hidden; };
       new MutationObserver(syncMus).observe($('.lm-own', root), { attributes: true, attributeFilter: ['hidden'] }); syncMus();
       $('h3', scCard).innerHTML = '<span class="n">3</span>Сцены';
       // under the open scene: the big buttons, the tags; the rest is folded
@@ -726,10 +780,14 @@ function makeRefMode(cfg) {
       });
       fin.after(clr);
       const more2 = document.createElement('details'); more2.className = 'st-more'; more2.innerHTML = '<summary>Ещё: добавить сцену, продолжить своё видео, как это работает</summary>';
-      [$('#lmAdd', root), $('.lm-reset', root), $('.lm-srcfile', root)?.closest('label'), [...scCard.children].filter(c => c.classList.contains('note') && !c.classList.contains('lm-src')).pop()].filter(Boolean).forEach(n => more2.append(n));
+      [$('#lmAdd', root), $('.lm-reset', root), ...(ACT ? [] : [$('.lm-srcfile', root)?.closest('label')]),
+       [...scCard.children].filter(c => c.classList.contains('note') && !c.classList.contains('lm-src')).pop()].filter(Boolean).forEach(n => more2.append(n));
       scCard.append(more2);
+      if (ACT) { fin.hidden = true; src.hidden = true;   // the action studio always counts by scenes and starts from scene 1
+        more2.querySelector('summary').textContent = 'Ещё: добавить сцену, как это работает'; }
     }));
     const mus = document.createElement('div'); mus.className = 'card';
+    if (ACT) mus.hidden = true;   // the sound of an action scene is made by the model itself
     root._snd = 'none';
     mus.innerHTML = `<div class="card-h"><h3><span class="n">3</span>Звук</h3></div>
       <div class="seg lm-snd" style="grid-template-columns:1fr 1fr"><button type="button" data-s="none">Без аудио<small>звук придумает модель</small></button><button type="button" data-s="own">Своё аудио<small>песня или голос</small></button></div>
@@ -802,15 +860,21 @@ function makeRefMode(cfg) {
   const prev = previewPanel($('.rm-preview', root), S, {
     history: !cfg.scenes,   // Video Studio keeps its own clip cards for every scene; the other sections show «Прошлые клипы»
     singleScene: () => cfg.scenes && root._mode === 'parts' && root._chainPart == null,
-    goLabel: () => !cfg.scenes ? 'Сгенерировать' : root._mode === 'parts'
+    goLabel: () => !cfg.scenes ? 'Сгенерировать' : ACT
+      ? `Сделать сцену ${root._next() + 1}`
+      : root._mode === 'parts'
       ? `${root._q === 'draft' ? 'Черновик' : 'Хорошее качество'}: сделать сцену ${root._next() + 1}`
       : `${root._q === 'draft' ? 'Черновик' : 'Хорошее качество'}: весь ролик сразу`,
     extraLabel: cfg.mode === 'refs' || cfg.mode === 'actor' || cfg.swap || cfg.scenes ? 'Шаги' : 'Схема',
-    extra: () => cfg.scenes ? (root._paintQ?.(), root._mode === 'parts' ? (root._q === 'draft' ? '4 шага · черновик' : '8 шагов · Pika') : (root._q === 'draft' ? '4 шага · черновик' : '8 шагов · Pika')) : cfg.mode === 'actor' || cfg.swap ? '10 · 1 проход' : cfg.mode === 'refs' ? (S.unet === 'fused' ? '4 шага · Fused Turbo' : `${S.steps} · 1 проход`) : (S.faithful ? 'точная копия' : '8 + 4 шага'),
-    passes: () => cfg.scenes ? $$('.sc', root).map(() => root._q === 'draft' ? 4 : 8) : cfg.mode === 'actor' || cfg.swap ? [10] : cfg.mode === 'refs' ? (S.unet === 'fused' ? [4] : [S.steps]) : S.faithful ? [13] : [8, 4],
+    extra: () => cfg.scenes ? (root._paintQ?.(), ACT
+      ? (S.actionModel === 'sing' ? (S.actionPika ? '8 шагов · Pika' : '12 шагов · Singularity') : '12 шагов · Hybrid')
+      : (root._mode === 'parts' ? (root._q === 'draft' ? '4 шага · черновик' : '8 шагов · Pika') : (root._q === 'draft' ? '4 шага · черновик' : '8 шагов · Pika'))) : cfg.mode === 'actor' || cfg.swap ? '10 · 1 проход' : cfg.mode === 'refs' ? (S.unet === 'fused' ? '4 шага · Fused Turbo' : `${S.steps} · 1 проход`) : (S.faithful ? 'точная копия' : '8 + 4 шага'),
+    passes: () => cfg.scenes ? $$('.sc', root).map(() => ACT
+      ? (S.actionModel === 'sing' && S.actionPika ? 8 : 12)
+      : (root._q === 'draft' ? 4 : 8)) : cfg.mode === 'actor' || cfg.swap ? [10] : cfg.mode === 'refs' ? (S.unet === 'fused' ? [4] : [S.steps]) : S.faithful ? [13] : [8, 4],
     get twoPass() { return cfg.mode === 'action' && !S.faithful; },
     target: () => $('.ref img', imgsEl),
-    meta: () => ({ mode: cfg.mode, prompt: promptEl().value.trim(), sub: '' }),
+    meta: () => ({ mode: cfg.action ? 'long' : cfg.mode, prompt: promptEl().value.trim(), sub: '' }),
     onDone: item => { addToLib(item); if (cfg.scenes && root._partDone) root._partDone(item); },
     onShow: item => { S.shownId = item.id; },   // the stage remembers the clip that was on the screen
     validate: () => cfg.swap ? (!files('.rm-vids .slot').length ? 'Добавьте видео, в котором нужно заменить человека' : !$$('.ref.filled', imgsEl).length ? 'Добавьте изображение нового персонажа' : '')
@@ -819,7 +883,8 @@ function makeRefMode(cfg) {
       : cfg.scenes ? (root._snd === 'own' && !files('.rm-auds .slot').length ? 'Загрузите аудио или выберите «Без аудио»' : sceneList().some(x => !x.prompt) ? 'Заполните описание каждой сцены или уберите лишнюю' : '') : !promptEl().value.trim() ? 'Напишите промпт'
       : cfg.mode === 'refs' && S.unet === 'fused' && S.fusedHave === false ? 'Скачайте файл модели Fused Turbo: кнопка «Скачать» под переключателем «Модель»' : '',
     real: {
-      url: '/api/generate/' + cfg.mode,
+      // the action studio is a scene-by-scene job of the Видеостудия's endpoint, sampled by the action model
+      url: cfg.action ? '/api/generate/long?kind=action' : '/api/generate/' + cfg.mode,
       form: () => {
         const fd = new FormData();
         fd.append('prompt', cfg.swap ? ($('.rm-who[data-i="0"]', root).value.trim() || 'замена персонажа') : promptEl().value.trim());
@@ -853,7 +918,14 @@ function makeRefMode(cfg) {
           if (k == null) k = root._ready();
           if (k >= all.length) throw new Error('Все сцены уже сделаны. Чтобы переделать одну, нажмите «Переделать» в её карточке.');
           if (!tst && !root._canGo(k)) throw new Error(`Сначала сделайте сцену ${k}: эта продолжает её конец. Или отметьте у сцены «Сменить план здесь».`);
-          fd.append('part', k); fd.append('run', root._run); if (root._q === 'draft' && !tst) fd.append('draft', '1'); if ($('.lm-acc .on', root)?.dataset.x === 'old') fd.append('accel', 'old'); fd.append('variant', String(all[k]._var || 0));
+          fd.append('part', k); fd.append('run', root._run); fd.append('variant', String(all[k]._var || 0));
+          if (ACT) {   // the action studio: the action endpoint, its model and its speed-up
+            fd.append('kind', 'action'); fd.append('amodel', S.actionModel);
+            if (S.actionModel === 'sing' && S.actionPika) fd.append('apika', '1');
+          } else {
+            if (root._q === 'draft' && !tst) fd.append('draft', '1');
+            if ($('.lm-acc .on', root)?.dataset.x === 'old') fd.append('accel', 'old');
+          }
           if (tst) { fd.set('quality', tst.q); fd.delete('width'); fd.delete('height'); fd.append('test', '1'); }   // a size test: the scene alone, in the chosen size
           else {
             if (root._src) { fd.append('src_project', '1'); if (k === 0) { if (root._src.id) fd.append('src_item', root._src.id); else if (root._src.file) fd.append('srcvid', root._src.file); } }
@@ -862,7 +934,7 @@ function makeRefMode(cfg) {
           }
         }
         if (cfg.scenes && root._mode !== 'parts') { fd.append('run', root._run); if (root._q === 'draft') fd.append('draft', '1'); if ($('.lm-acc .on', root)?.dataset.x === 'old') fd.append('accel', 'old'); }
-        if (cfg.scenes) { fd.append('scenes', JSON.stringify(sceneList())); $$('.sc', root).forEach((c, i) => c._files.forEach((f, j) => fd.append(`simg${i}_${j}`, f))); fd.append('start', $('.lm-start', root).value || '0'); fd.append('vocals', root._snd === 'own' && $('.lm-vocals', root).checked ? '1' : '0'); }
+        if (cfg.scenes) { fd.append('scenes', JSON.stringify(sceneList())); $$('.sc', root).forEach((c, i) => c._files.forEach((f, j) => fd.append(`simg${i}_${j}`, f))); if (!ACT) { fd.append('start', $('.lm-start', root).value || '0'); fd.append('vocals', root._snd === 'own' && $('.lm-vocals', root).checked ? '1' : '0'); } }
         else loraForm(S, fd);
         seedForm(S, fd);
         $$('.ref', imgsEl).filter(r => r._file).forEach((r, i) => fd.append('img' + i, r._file));
@@ -1039,6 +1111,12 @@ const RM = {
     refHint: 'До 5 изображений-референсов: персонаж, локация, предмет, одежда, стиль — всё, что должно сохраняться. Они подаются в каждую сцену, поэтому лицо и место не «плывут». В тексте сцены ссылайтесь на них как &lt;Picture 1&gt;, &lt;Picture 2&gt;… Чем больше референсов, тем тяжелее и дольше считается сцена.',
     placeholder: '',
   }),
+  actionsc: makeRefMode({
+    mode: 'actionsc', action: true, title: 'Экшн-видеостудия', pill: 'Сцены подряд · DMAD', dur: 20, maxImages: 5, videos: false, scenes: true,
+    sub: 'Длинный экшн по сценам, как в Видеостудии: каждая сцена продолжает прошлую. Нужно одно видео — откройте «Экшн-сцены»',
+    refHint: 'До 5 изображений: персонажи и локация. Они подаются в каждую сцену, поэтому герой и место не «плывут» от сцены к сцене. В тексте сцены ссылайтесь на них как &lt;Picture 1&gt;, &lt;Picture 2&gt;… Для экшна лучше короткие сцены по 3–5 секунд: считается быстрее, движение чище.',
+    placeholder: '',
+  }),
   action: makeRefMode({
     mode: 'action', title: 'Экшн-сцены', pill: 'Hybrid · 8 + 4 шага', dur: 8, maxImages: 6, videos: false,
     sub: 'Бой, погоня, бег, стрельба — динамичные сцены с вашими персонажами',
@@ -1056,12 +1134,14 @@ const RM = {
   function modelsChanged() {
     REF_FUSED_CHECK && REF_FUSED_CHECK();
     RM.action.root?._check?.();
+    RM.actionsc.root?._check?.();
   }
 
   window.h3Refs = { modelsChanged };
   /* the header switched the project: the studio saves the film it was editing and opens the film of
      the new project (or starts a new one). The page awaits it before restoring a stage there. */
   window.h3LongProjectChanged = () => RM.long?.root?._projectChanged?.();
+  window.h3ActionProjectChanged = () => RM.actionsc?.root?._projectChanged?.();
 
   function disposeMode(id) {
     const r = RM[id]; if (!r) return;
@@ -1071,14 +1151,17 @@ const RM = {
       if (src.startsWith('blob:')) { try { URL.revokeObjectURL(src); } catch (e) { /* already gone */ } }
     });
     try { r.prev?.dispose?.(); } catch (e) { /* already gone */ }
-    if (id === 'long') r.root._flush?.();
+    if (id === 'long' || id === 'actionsc') r.root._flush?.();
   }
 
-  ['refs', 'actor', 'swap', 'action', 'long'].forEach(id => {
+  ['refs', 'actor', 'swap', 'action', 'long', 'actionsc'].forEach(id => {
     window.h3Modes.register(id, {
-      mount: () => { if (id === 'action') RM.action.root?._check?.(); },
+      mount: () => {
+        if (id === 'action') RM.action.root?._check?.();
+        if (id === 'actionsc') RM.actionsc.root?._check?.();   // the DMAD file may have been downloaded since the last visit
+      },
       leave: () => {
-        if (id === 'long') RM.long.root?._save?.();
+        if (id === 'long' || id === 'actionsc') RM[id].root?._save?.();
         window.h3Lifecycle.pauseMedia(RM[id].root);
       },
       dispose: () => disposeMode(id),

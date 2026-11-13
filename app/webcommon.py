@@ -380,10 +380,14 @@ def long_films():
     return films
 
 
-def freshest_long_run(project):
-    """The film of this project that was saved last; empty when the project has no film."""
+def freshest_long_run(project, studio="long"):
+    """The film of this project and of this studio that was saved last; empty when there is none.
+
+    Two studios keep scene-by-scene films (the Видеостудия and the Экшн-видеостудия): a film says which one it belongs
+    to (`studio`), and a record saved before the field existed is a film of the Видеостудия.
+    """
     for film in long_films():
-        if str(film.get("project") or "") == str(project):
+        if str(film.get("project") or "") == str(project) and str(film.get("studio") or "long") == studio:
             return film["run"]
     return ""
 

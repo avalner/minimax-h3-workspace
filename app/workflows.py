@@ -919,6 +919,165 @@ def action_graph(m, prompt, width, height, seconds, seed, images, audios, faithf
     return g, stages
 
 
+def action_sizes(width, height):
+    """(low-res w, h, full-res w, h) of the action route: pass 1 at 0.6x, the learned upscaler brings it back (aligned to 32)."""
+    s = round(1 / ACTION_LOWRES, 3)
+    lw, lh = r32(width * ACTION_LOWRES), r32(height * ACTION_LOWRES)
+    return lw, lh, max(32, round(lw * s / 32) * 32), max(32, round(lh * s / 32) * 32)
+
+
+def action_part_graph(m, scenes, k, width, height, seed, images, loras, preview=None, state=None, fresh=(), faithful=False,
+                      refiner_args=None, single=False, sing=False, steps=12):
+    """ACTION scene number `k` (0-based) of a scene-by-scene video: the action model (or the studio's Singularity under the
+    same modules), scene k continues the saved latent tail of scene k-1, the clip is cut off at the overlap.
+
+    Three routes, all by the plan of `long_plan`:
+    * `faithful` — the exact scheme of the original workflow: one SelfLiftH3Sampler, 8 steps at 0.6x, learned latent lift,
+      4 steps at full size, plus the H3SigmaRefiner step. It cannot take a noise mask, so a scene that continues another
+      one cannot use it (only a first scene or a new shot).
+    * `single` — one pass at full size, the tail of the previous scene kept by a noise mask: what the studio uses, since
+      SelfLift cannot continue a scene.
+    * neither — pass 1 at 0.6x, learned latent upscale, pass 2 at full size; before pass 2 the true full-size tail is put
+      back in front of the upscaled part, so the join stays sharp.
+
+    `sing`: the model of the Video studio (Singularity Ref2V) under the same action modules (LoRAs, sparse attention,
+    shifts). The sound is made by the model, the audio of the overlap is cut off with the picture.
+    """
+    plan = long_plan([sc[1] for sc in scenes], fresh=fresh)
+    p, sc = plan[k], scenes[k]
+    new_shot = k > 0 and k < len(fresh) and bool(fresh[k])
+    total, ov = p["total"], p["ov"]
+    cont = k > 0 and not new_shot
+    lw, lh, fw, fh = action_sizes(width, height)
+    if faithful or single:
+        lw, lh, fw, fh = width, height, width, height
+    g = {
+        "1": {"class_type": "UNETLoader", "inputs": {"unet_name": m["lipsync_unet" if sing else "action_unet"], "weight_dtype": "default"}},
+        "4": {"class_type": "CLIPLoader", "inputs": {"clip_name": m["text_encoder"], "type": "minimax", "device": "default"}},
+        "5": {"class_type": "VAELoader", "inputs": {"vae_name": m["video_vae"]}},
+        "6": {"class_type": "VAELoader", "inputs": {"vae_name": m["audio_vae"]}},
+    }
+    model = _lora_chain(g, ["1", 0], loras)
+    g.update({
+        "2": {"class_type": "ModelAttentionBackend", "inputs": {"model": model, "attention": "comfy kitchen attention"}},
+        "3": {"class_type": "BlockSparseAttention", "inputs": {
+            "model": ["2", 0], "selection": "sol-attn", "selection.tau": 1.3, "start_percent": 0.2, "end_percent": 1.0,
+            "dense_blocks": "", "min_tokens": 12288, "extra_tokens": 256, "sink_conditioning": "exact_kv_and_rows",
+            "verbose": False}},
+        "7": {"class_type": "MiniMaxH3SigmaShift", "inputs": {"model": ["3", 0], "shift_video": 12.0, "shift_audio": 3.0}},
+    })
+    mdl = _with_preview(g, ["7", 0], preview)
+    g.update({
+        "10": {"class_type": "BasicScheduler", "inputs": {"model": mdl, "scheduler": "simple", "steps": steps, "denoise": 1.0}},
+        "12": {"class_type": "KSamplerSelect", "inputs": {"sampler_name": "euler"}},
+        "9": {"class_type": "SplitSigmas", "inputs": {"sigmas": ["10", 0], "step": 8}},
+    })
+    nid = [200]
+
+    def add(cls, **inputs):
+        nid[0] += 1
+        g[str(nid[0])] = {"class_type": cls, "inputs": inputs}
+        return str(nid[0])
+
+    ref = add("MiniMaxH3ReferenceToVideo", clip=["4", 0], vae=["5", 0], audio_vae=["6", 0], prompt=sc[0],
+              width=lw, height=lh, length=total, ref_image_size="max")
+    own = list(sc[2]) if len(sc) > 2 and sc[2] else []   # this scene's own references; none: the common ones are used
+    _refs(g, ref, own or images, base=100)
+    new = add("LTXVSeparateAVLatent", av_latent=[ref, 1])
+    stages = {}
+    old_full = None
+    if not cont:
+        v_lat = [new, 0]
+    else:
+        old_full = add("LoadLatent", latent=state)
+        if faithful or single:   # full-size tail goes in as it is
+            old_low = old_full
+        else:   # pass 1 runs at 0.6x: the tail is decoded, scaled down and encoded again
+            dec = add("VAEDecode", samples=[old_full, 0], vae=["5", 0])
+            n_dec = round((LONG_STATE_TOKENS - 2) / 5 * 17 + 5)   # frames in the saved tail
+            last = add("ImageFromBatch", image=[dec, 0], batch_index=max(0, n_dec - ov), length=ov)
+            fit = add("ImageScale", image=[last, 0], upscale_method="lanczos", width=lw, height=lh, crop="center")
+            old_low = add("VAEEncode", pixels=[fit, 0], vae=["5", 0])
+            stages.update({n: "encode" for n in (dec, last, fit)})
+        t_ov, t_tot = _tokens(ov), _tokens(total)
+        cut = add("LatentCut", samples=[old_low, 0], dim="t", index=-t_ov, amount=t_ov)
+        cat = add("LatentConcat", samples1=[cut, 0], samples2=[new, 0], dim="t")
+        cut2 = add("LatentCut", samples=[cat, 0], dim="t", index=0, amount=t_tot)
+        black = add("EmptyImage", width=round(lw / 16), height=round(lh / 16), batch_size=t_ov, color=0)
+        white = add("EmptyImage", width=round(lw / 16), height=round(lh / 16), batch_size=max(1, t_tot - t_ov), color=16777215)
+        both = add("ImageBatch", image1=[black, 0], image2=[white, 0])
+        vmask = add("ImageToMask", image=[both, 0], channel="red")
+        if faithful:   # SelfLift wants a mask of shape [1, 1, T, H, W]
+            v_lat = [add("LTXVSetVideoLatentNoiseMasks", samples=[cut2, 0], masks=[vmask, 0]), 0]
+        else:
+            v_lat = [add("SetLatentNoiseMask", samples=[cut2, 0], mask=[vmask, 0]), 0]
+        stages.update({n: "encode" for n in (old_full, old_low)})
+    lat = add("LTXVConcatAVLatent", video_latent=v_lat, audio_latent=[new, 1])
+    noise = add("RandomNoise", noise_seed=seed + 100 * k)
+    if faithful:
+        neg = add("ConditioningZeroOut", conditioning=[ref, 0])
+        refiner = add("H3SigmaRefiner", sigmas=["10", 0],
+                      **(refiner_args or {"extra_steps": 1, "strength": 0.7, "offset": 0.0, "curve": "cosine"}))
+        # the sampler cannot tile the high-resolution stage together with a noise mask: only the first scene may use the tiling
+        smp = add("SelfLiftH3Sampler", model=mdl, positive=[ref, 0], negative=[neg, 0], vae=["5", 0], latent_image=[lat, 0],
+                  sampler=["12", 0], sigmas=[refiner, 0], seed=seed + 100 * k, cfg=1.0, transition_step=8,
+                  lowres_scale=ACTION_LOWRES, rho=0.0, w_min=0.5, w_max=1.0, upscaler_model=m["action_upscaler"],
+                  highres_tiling=not cont, upscaler_unload=True)
+    elif single:   # the way of the Video studio: one pass at full size, the tail of the previous scene kept by the noise mask
+        guider = add("BasicGuider", model=mdl, conditioning=[ref, 0])
+        smp1 = add("SamplerCustomAdvanced", noise=[noise, 0], guider=[guider, 0], sampler=["12", 0], sigmas=["10", 0],
+                   latent_image=[lat, 0])
+    else:
+        guider = add("BasicGuider", model=mdl, conditioning=[ref, 0])
+        smp1 = add("SamplerCustomAdvanced", noise=[noise, 0], guider=[guider, 0], sampler=["12", 0], sigmas=["9", 0],
+                   latent_image=[lat, 0])
+        sep = add("LTXVSeparateAVLatent", av_latent=[smp1, 1])
+        up = add("MinimaxH3LatentUpscaler3D", latent=[sep, 0], model_name=m["upscaler"], mode="scale by multiplier",
+                 **{"mode.scale": round(1 / ACTION_LOWRES, 3)}, align=32, enable_temporal_chunking=True,
+                 force_unload=True, device="cuda", precision="fp16")
+    if faithful:
+        final, smp_stages = [smp, 0], {smp: "sample", refiner: "encode"}
+    elif single:
+        final, smp_stages = [smp1, 1], {smp1: "sample"}
+    elif cont:   # the sharp full-size tail of the previous scene in front of the new, upscaled part
+        t_ov, t_tot = _tokens(ov), _tokens(total)
+        tail_f = add("LatentCut", samples=[old_full, 0], dim="t", index=-t_ov, amount=t_ov)
+        part = add("LatentCut", samples=[up, 0], dim="t", index=t_ov, amount=t_tot - t_ov)
+        catf = add("LatentConcat", samples1=[tail_f, 0], samples2=[part, 0], dim="t")
+        black = add("EmptyImage", width=round(fw / 16), height=round(fh / 16), batch_size=t_ov, color=0)
+        white = add("EmptyImage", width=round(fw / 16), height=round(fh / 16), batch_size=max(1, t_tot - t_ov), color=16777215)
+        both = add("ImageBatch", image1=[black, 0], image2=[white, 0])
+        vmask = add("ImageToMask", image=[both, 0], channel="red")
+        v2 = [add("SetLatentNoiseMask", samples=[catf, 0], mask=[vmask, 0]), 0]
+    else:
+        v2 = [up, 0]
+    if not faithful and not single:
+        lat2 = add("LTXVConcatAVLatent", video_latent=v2, audio_latent=[sep, 1])
+        smp2 = add("SamplerCustomAdvanced", noise=[noise, 0], guider=[guider, 0], sampler=["12", 0], sigmas=["9", 1],
+                   latent_image=[lat2, 0])
+        final = [smp2, 1]
+        smp_stages = {smp1: "sample", sep: "upscale", up: "upscale", smp2: "sample2"}
+    img = add("VAEDecode", samples=final, vae=["5", 0])
+    clip_len = total - ov
+    frames_out = [img, 0] if not cont else [add("ImageFromBatch", image=[img, 0], batch_index=ov, length=clip_len), 0]
+    dec_a = add("VAEDecodeAudio", samples=final, vae=["6", 0])
+    aud = [dec_a, 0] if not cont else [add("TrimAudioDuration", audio=[dec_a, 0], start_index=round(ov / FPS, 3),
+                                           duration=round(clip_len / FPS, 3)), 0]
+    aud = _audio_fade(add, aud, round(clip_len / FPS, 3), head=cont, tail=True)
+    vid = add("CreateVideo", images=frames_out, audio=aud, fps=float(FPS), bit_depth="auto", color_space="sRGB", codec="none")
+    save = add("SaveVideo", video=[vid, 0], filename_prefix="H3Workspace/long_part", format="auto", **{"format.codec": "auto"})
+    sep2 = add("LTXVSeparateAVLatent", av_latent=final)
+    tail = add("LatentCut", samples=[sep2, 0], dim="t", index=-LONG_STATE_TOKENS, amount=LONG_STATE_TOKENS)
+    keep = add("SaveLatent", samples=[tail, 0], filename_prefix="H3Workspace/long_state")
+    stages.update({n: "load" for n in ["1", "2", "3", "4", "5", "6", "7"]})
+    if preview:
+        stages["14"] = "load"
+    stages.update({ref: "encode", img: "decode", dec_a: "decode", vid: "save", save: "save", sep2: "save", tail: "save", keep: "save"})
+    stages.update(smp_stages)
+    stages["__scenes__"] = {"n": len(scenes), "map": {n: k for n, s in smp_stages.items() if s.startswith("sample")}}   # «scene 2 of 4»
+    return g, stages
+
+
 def lipsync_scale(quality):
     return 2.0 if QUALITY.get(quality, 0) >= 1824 * 1024 else 1.5
 

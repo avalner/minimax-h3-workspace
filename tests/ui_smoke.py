@@ -836,13 +836,28 @@ async def run_page(base: str, browser: str, shots: Path):
                     " return {modes: Object.keys(window.RM).sort(),"
                     "  aspect: window.RM.refs.S.aspect,"
                     "  slots: document.querySelectorAll('#view-refs .ref').length,"
-                    "  built: ['refs', 'actor', 'swap', 'action', 'long'].every(m =>"
+                    "  built: ['refs', 'actor', 'swap', 'action', 'long', 'actionsc'].every(m =>"
                     "   window.RM[m] && window.RM[m].root && window.RM[m].root.childElementCount > 0),"
                     "  flush: typeof window.RM.long.root._flush,"
                     "  preview: typeof window.RM.refs.prev.pause}; })()")
-                check("the refs family publishes five built sections through window.RM",
-                      refs and refs["modes"] == ["action", "actor", "long", "refs", "swap"]
+                check("the refs family publishes its six built sections through window.RM",
+                      refs and refs["modes"] == ["action", "actionsc", "actor", "long", "refs", "swap"]
                       and refs["built"] and refs["slots"] == 9, str(refs))
+
+                # The action studio: the scenes of the Видеостудия counted by the action model — one quality, no song
+                studio = await cdp.evaluate(
+                    "(() => { const A = document.querySelector('#view-actionsc'), q = s => A.querySelector(s);"
+                    " return {scenes: !!q('.lm-scenes'), rolls: A.querySelectorAll('.sc').length,"
+                    "  model: A.querySelectorAll('.rm-amodel button').length, pika: !!q('.rm-apika'),"
+                    "  chain: !!q('.lm-chain'), srcHidden: !q('.lm-src') || q('.lm-src').hidden,"
+                    "  qualityOff: !q('.lm-q') || !q('.lm-q').offsetParent,"
+                    "  soundOff: !q('.lm-snd') || !q('.lm-snd').offsetParent,"
+                    "  go: (q('.rm-preview .go') || {}).textContent || ''}; })()")
+                check("the action studio is a page of scenes with the action model switch",
+                      studio and studio["scenes"] and studio["rolls"] >= 2 and studio["model"] == 2
+                      and studio["pika"] and studio["chain"] and studio["srcHidden"]
+                      and studio["qualityOff"] and studio["soundOff"], str(studio))
+                check("its button talks about a scene, not about a draft", "сцену" in (studio or {}).get("go", ""), str(studio))
                 check("a format click in the shared parameters reaches the mode state",
                       refs and refs["aspect"] == "9:16", str(refs))
                 check("the long project can be flushed and the preview paused",
@@ -850,7 +865,7 @@ async def run_page(base: str, browser: str, shots: Path):
 
                 # The same two sections twice more, with the screenshots a human can look at.
                 for view, name in (("video", "video"), ("krea", "krea"), ("imgedit", "imgedit"), ("lipsync", "lipsync"),
-                                   ("refs", "refs"), ("long", "long"),
+                                   ("refs", "refs"), ("long", "long"), ("actionsc", "actionsc"),
                                    ("montage", "montage"), ("library", "library"), ("settings", "settings")):
                     opened = await cdp.evaluate(
                         f"(() => {{ const b = document.querySelector('.nav[data-view=\"{view}\"]');"

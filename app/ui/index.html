@@ -76,6 +76,10 @@ setTimeout(() => document.documentElement.classList.add('booted'), 1500);
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg>
       Экшн-сцены
     </button>
+    <button class="nav sub" data-view="actionsc">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/><rect x="2" y="2" width="6" height="4" rx="1"/><rect x="16" y="18" width="6" height="4" rx="1"/></svg>
+      Экшн-видеостудия
+    </button>
 
     <button class="nav sub" data-view="krea">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="1.6"/><path d="m21 16-5-5L6 20"/></svg>
@@ -309,6 +313,7 @@ setTimeout(() => document.documentElement.classList.add('booted'), 1500);
     <section class="view" id="view-refs"></section>
     <section class="view" id="view-actor"></section>
     <section class="view" id="view-action"></section>
+    <section class="view" id="view-actionsc"></section>
     <section class="view" id="view-long"></section>
     <section class="view" id="view-montage"></section>
     <section class="view" id="view-krea"></section>
@@ -1068,8 +1073,8 @@ function setEngine(on) {
 /* pinned top bar with every video and image section */
 (function () {
   const bar = document.createElement('div'); bar.id = 'modeBar'; $('.tb-row1').appendChild(bar);
-  const SHORT = { video: 'Видео', lipsync: 'Lipsync', refs: 'Референсы', actor: 'Актёр', swap: 'Замена', long: 'Видеостудия', action: 'Экшн', krea: 'Изображение', imgedit: 'Редактирование', upfile: 'Увеличить' };
-  const GROUPS = [['presets'], ['video', 'lipsync', 'refs', 'actor', 'swap', 'long', 'action'], ['krea', 'imgedit'], ['upfile']];
+  const SHORT = { video: 'Видео', lipsync: 'Lipsync', refs: 'Референсы', actor: 'Актёр', swap: 'Замена', long: 'Видеостудия', action: 'Экшн', actionsc: 'Экшн-студия', krea: 'Изображение', imgedit: 'Редактирование', upfile: 'Увеличить' };
+  const GROUPS = [['presets'], ['video', 'lipsync', 'refs', 'actor', 'swap', 'long', 'action', 'actionsc'], ['krea', 'imgedit'], ['upfile']];
   function paint() {
     const view = ($('.view.active')?.id || '').replace('view-', '');
     // the task screens of the editor have no button of their own: they belong to «Редактирование»
@@ -1908,6 +1913,7 @@ async function selectProject(id) {
     // a film belongs to a project: the studio switches to this project's film (or starts a new one).
     // Awaited, because `bmOpen` restores a stage of that project right after the switch.
     await window.h3LongProjectChanged?.();
+    await window.h3ActionProjectChanged?.();   // the action studio keeps its own film of the project
     const project = PROJECTS_VIEW.list.find(p => p.id === id);
     toast('Проект: ' + (project ? project.name : id));
   } catch (e) { toast('Не удалось выбрать проект: ' + e.message); }
@@ -1924,6 +1930,7 @@ async function createProject() {
     paintProjects();
     refreshProjectLists();
     await window.h3LongProjectChanged?.();   // a new project is a new film (the studio switches too)
+    await window.h3ActionProjectChanged?.();
     $('#projPop').hidden = true;
     toast('Проект создан: ' + (reply.project ? reply.project.name : name));
   } catch (e) { toast('Не удалось создать проект: ' + e.message); }
@@ -2095,6 +2102,7 @@ async function adoptProjectDelete(reply) {
   refreshProjectLists();
   await loadStages();                       // the stages of every section come from the server
   await window.h3LongProjectChanged?.();    // a film that belonged to this project is gone with it
+  await window.h3ActionProjectChanged?.();
   return { was };
 }
 async function deleteProjectNow(all) {
@@ -2970,6 +2978,16 @@ $('#vwZoom').onclick = () => { const it = byId(openId); if (it && it.url) zoomOp
 $('#vwImg').onclick = () => { const it = byId(openId); if (it && it.kind === 'image' && it.url) zoomOpen(it.url); };
 $('#vwDel').onclick = () => askDelete([openId]);
 async function continueLong(it) {
+  // a scene made in the Экшн-видеостудия goes back there: its films and continuation points are its own
+  if (it.long && it.long.kind === 'action' && it.long.run) {
+    const A = RM.actionsc.root;
+    if (A && (A._run === it.long.run || await A._openRun(it.long.run))) {
+      goTo('actionsc');
+      if (A._ready() >= $$('.sc', A).length && $$('.sc', A).length < 12) A._addScene('', 4);
+      toast('Проект открыт: те же изображения и сцены. Опишите следующую сцену и нажмите «Сделать эту сцену».');
+      return;
+    }
+  }
   const L2 = RM.long.root;
   if (!(it.long && it.long.run) || (L2._run !== it.long.run && !(await L2._openRun(it.long.run)))) {
     // a video that was not made here (or whose project is gone): continue from its last frames as a new project
@@ -3520,7 +3538,7 @@ afterModules(memRestore);
 // made from stay in this browser's IndexedDB, keyed by the stage id.
 // «Замена персонажа» is a section of the refs family (`window.RM.swap`), so its state and its slots
 // (`swap/img*`, `swap/vid*`) are already covered by `memStates()` and `memSlots()`.
-const BM = { MODES: ['video', 'lipsync', 'refs', 'actor', 'swap', 'action', 'long'], MAX: 15, list: [], loaded: false };
+const BM = { MODES: ['video', 'lipsync', 'refs', 'actor', 'swap', 'action', 'long', 'actionsc'], MAX: 15, list: [], loaded: false };
 function bmRender() {
   const all = BM.list;
   BM.MODES.forEach(m => {
@@ -3615,7 +3633,7 @@ async function importLegacyStages() {
   bmRender();
 }
 async function bmSave(mode, opt = {}) {
-  if (mode === 'long') return bmSaveLong(opt);
+  if (mode === 'long' || mode === 'actionsc') return bmSaveLong(opt, mode);   // both studios keep their scenes as a stage
   const st = memStates()[mode]; if (!st) return;
   const [state, prompt] = st, o = {};
   Object.keys(state).forEach(p => { if (!MEM.skip.has(p) && typeof state[p] !== 'function') o[p] = state[p]; });
@@ -3641,17 +3659,17 @@ async function bmSave(mode, opt = {}) {
   if (uploads.length) await uploadStageFiles(id, uploads);
   if (!opt.auto) toast('Этап сохранён: «' + name + '». Он лежит в списке «Этапы» вверху раздела');
 }
-const stageDrop = b => { if (b && b.mode === 'long' && b.run) apiPost('/api/long/stage', { run: b.run, id: b.id, action: 'delete' }).catch(() => {}); };
+const stageDrop = b => { if (b && (b.mode === 'long' || b.mode === 'actionsc') && b.run) apiPost('/api/long/stage', { run: b.run, id: b.id, action: 'delete' }).catch(() => {}); };
 const stageName = text => new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) + ' · ' + ((text || '').replace(/\s+/g, ' ').slice(0, 26) || 'без текста') + ((text || '').length > 26 ? '…' : '');
-async function bmSaveLong(opt = {}) {
-  const root = $('#view-long'), proj = root && root._snap && root._snap(); if (!proj || !(proj.scenes || []).length) { if (!opt.auto) toast('В проекте пока нет сцен'); return; }
+async function bmSaveLong(opt = {}, mode = 'long') {
+  const root = $('#view-' + mode), proj = root && root._snap && root._snap(); if (!proj || !(proj.scenes || []).length) { if (!opt.auto) toast('В проекте пока нет сцен'); return; }
   const first = (proj.scenes.find(x => x.prompt && x.prompt.trim()) || {}).prompt || '';
   const done = proj.scenes.filter(x => x.done || x.draftDone).length;
   const name = opt.auto ? 'Было до открытия этапа' : stageName(first) + ` · сцен ${proj.scenes.length}, готово ${done}`;
   const sid = Math.random().toString(36).slice(2, 10);
   try { await apiPost('/api/long/stage', { run: proj.run, id: sid, action: 'save' }); } catch {}   // the continuation points and pictures are copied on the disk
   try {
-    await postStage({ id: sid, mode: 'long', run: proj.run, name, auto: !!opt.auto,
+    await postStage({ id: sid, mode, run: proj.run, name, auto: !!opt.auto,
                       project: PROJECTS_VIEW.active || undefined, title: first.slice(0, 200),
                       date: new Date().toISOString(), s: proj, prompt: first, files: [] });
   } catch (e) { toast('Не удалось сохранить этап: ' + e.message); return; }
@@ -3663,7 +3681,7 @@ async function bmOpen(id) {
   if (!b.auto) await bmSave(b.mode, { auto: true });   // what is on the screen now is kept too: the opening can be undone with «↶ Было до открытия этапа»
   // a stage belongs to its project: opening it brings that project (and its lists) back first
   if (b.project && b.project !== PROJECTS_VIEW.active) await selectProject(b.project);
-  if (b.mode === 'long') { const r = await $('#view-long')._openStage(b.s, b.id); toast(!r.ok ? 'Не удалось открыть этап' : r.files ? 'Этап открыт: «' + b.name + '»' : 'Этап открыт: «' + b.name + '». Это старое сохранение: тексты и настройки вернулись, а готовые сцены, возможно, придётся сделать заново'); return; }
+  if (b.mode === 'long' || b.mode === 'actionsc') { const r = await $('#view-' + b.mode)._openStage(b.s, b.id); toast(!r.ok ? 'Не удалось открыть этап' : r.files ? 'Этап открыт: «' + b.name + '»' : 'Этап открыт: «' + b.name + '». Это старое сохранение: тексты и настройки вернулись, а готовые сцены, возможно, придётся сделать заново'); return; }
   const apply = () => {
     const st = memStates()[b.mode]; if (!st) return;
     const [state, prompt, upd] = st;

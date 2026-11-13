@@ -694,17 +694,27 @@ class GenerateRoutes:
             if not wanted or not self.projects_repo.exists(wanted):
                 wanted = self.active_project()
             project["project"] = wanted
+            # two studios keep films of scenes («Видеостудия» and «Экшн-видеостудия»): the record says which one
+            project["studio"] = str(body.get("studio") or project.get("studio") or "long")[:16]
             d = LONG_DIR / run
             d.mkdir(parents=True, exist_ok=True)
             atomic_write_json(d / "project.json", project)
             return web.json_response({"ok": True, "project": wanted})
         run = re.sub(r"[^A-Za-z0-9]", "", req.query.get("run", ""))[:32]
         wanted = str(req.query.get("project") or "")[:40]
-        if not run and wanted:   # the freshest film of this project
-            run = freshest_long_run(wanted)
-        if not run and req.query.get("last"):   # the most recently saved project
+        studio = str(req.query.get("studio") or "long")[:16]
+        if not run and wanted:   # the freshest film of this project and this studio
+            run = freshest_long_run(wanted, studio)
+        if not run and req.query.get("last"):   # the most recently saved project of this studio
             files = sorted(LONG_DIR.glob("*/project.json"), key=lambda f: f.stat().st_mtime, reverse=True) if LONG_DIR.is_dir() else []
-            run = files[0].parent.name if files else ""
+            for f in files:
+                try:
+                    data = json.loads(f.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    continue
+                if str((data or {}).get("studio") or "long") == studio:
+                    run = f.parent.name
+                    break
         f = LONG_DIR / run / "project.json" if run else None
         if not f or not f.exists():
             return web.json_response({})
@@ -764,7 +774,8 @@ class GenerateRoutes:
         return web.FileResponse(f)
 
     async def h_generate_long(self, req):
-        await self.need_models("long")
+        if req.query.get("kind") != "action":   # the action studio needs the action models, not the studio's own set
+            await self.need_models("long")
         self._capture = {}
         try:
             return await self.generate_long(req)
@@ -788,7 +799,8 @@ class GenerateRoutes:
         fresh = [fr for *_, fr in scenes]   # a scene marked as a NEW SHOT does not continue the previous one (no quality loss)
         scenes = [(p, sec, extra) for p, sec, extra, _ in scenes]
         test = form.get("test") == "1"   # a size test of one scene: stand-alone, does not touch the other scenes
-        draft = form.get("draft") == "1" and not test   # quick draft: 4 steps, smaller frame; the finished row is made later with the same seed
+        action = form.get("kind") == "action"   # «Экшн-видеостудия»: the action model, scene by scene (see wf.action_part_graph)
+        draft = form.get("draft") == "1" and not test and not action   # quick draft: 4 steps, smaller frame; the finished row is made later with the same seed
         sfx = "_d" if draft else ""
         if form.get("run") and not form.get("seed"):   # one seed for the whole project: the draft and the finished version look alike
             seed = int(hashlib.md5(form["run"].encode()).hexdigest()[:12], 16)
@@ -810,9 +822,9 @@ class GenerateRoutes:
                 raise web.HTTPBadRequest(text="Для «Только вокал» нужна модель MelBand. Скачайте её в разделе «Настройки».")
             vocals = self.model_names["vocal_model"]
         no_pika = form.get("accel") == "old"   # «Без Pika»: the quality route without a speed LoRA (12 steps), for those whom Pika gives trouble
-        if not no_pika and "pika_lora" in {m["role"] for m in self.missing}:
+        if not action and not no_pika and "pika_lora" in {m["role"] for m in self.missing}:
             raise web.HTTPBadRequest(text="Файл Pika (pika_h3_flex_turbo_8step_hd_ref2va) не найден. Скачайте его в разделе «Настройки» или выберите «Без Pika».")
-        fin = None if no_pika else self.model_names["pika_lora"]
+        fin = None if no_pika or action else self.model_names["pika_lora"]
         width, height = wf.resolution(aspect, quality, form)
         dmad = None
         if draft:
@@ -845,14 +857,55 @@ class GenerateRoutes:
                 src = LONG_DIR / run / f"state_{k - 1}{sfx}.latent"
                 if not src.exists():
                     raise web.HTTPBadRequest(text=f"Сначала сделайте сцену {k}: следующая продолжает её конец.")
-                try:  # the saved tail only fits a scene of the same frame size
-                    was = json.loads(src.with_suffix(".json").read_text(encoding="utf-8")).get("res")
+                try:  # the saved tail only fits a scene of the same frame size and of the same route
+                    info = json.loads(src.with_suffix(".json").read_text(encoding="utf-8"))
+                    was, was_kind = info.get("res"), info.get("kind", "")
                 except (OSError, ValueError):
-                    was = None
+                    was, was_kind = None, ""
                 if was and was != f"{width}×{height}":
                     raise web.HTTPBadRequest(text=f"Сцена {k} сделана в формате {was}, а сейчас выбран {width}×{height}. "
                                                   "Верните прежний формат и качество или переделайте сцену 1 в новом.")
+                if was and was_kind != ("action" if action else ""):
+                    raise web.HTTPBadRequest(text=f"Сцена {k} сделана " + ("экшн" if was_kind == "action" else "обычным")
+                                             + "-путём, а сейчас выбран другой тип сцен. Верните прежний тип или переделайте сцену 1 в новом.")
                 state = await self.upload_state(src, f"h3s_long_{run}_{k - 1}.latent")
+            if action:   # «Экшн-видеостудия»: the action model (or Singularity) scene by scene, sound from the model
+                if cont:
+                    raise web.HTTPBadRequest(text="Экшн-видеостудия начинает ролик с первой сцены и не продолжает готовое видео. "
+                                                  "Уберите «Продолжить своё видео».")
+                if not self.model_names:
+                    await self.resolve_models()
+                missing = {m["role"] for m in self.missing}
+                _, loras_all = await self.comfy_json("GET", "/models/loras")
+                dmad_a = next((n for n in loras_all or [] if catalog.ACTION_DMAD_LORA in n), None)
+                if not dmad_a:
+                    raise web.HTTPBadRequest(text="Для экшн-видео нужен файл DMAD (minimax_h3_dmad_full_dareties_v4_step600_comfy.safetensors) "
+                                                  "в папке loras. Он описан в разделе «Экшн-сцены».")
+                a_loras = [(dmad_a, lora_strength(form, "dmad", 0.8))]
+                if "speed_slider_lora" not in missing and self.model_names.get("speed_slider_lora"):
+                    a_loras.append((self.model_names["speed_slider_lora"], lora_strength(form, "speed", 4.0)))
+                a_loras = [x for x in a_loras if x[1] is not None] + self.custom_loras("action")
+                # the base model: the Video studio's Singularity (default) when its files are there, else the action hybrid
+                base_of = lambda n: str(n or "").replace("/", "\\").split("\\")[-1]
+                seen_in = lambda role, cat: base_of(self.model_names.get(role)) in (getattr(self, "visible", None) or {}).get(cat, set())
+                sing = (form.get("amodel", "sing") != "action"
+                        and seen_in("lipsync_unet", "diffusion_models") and seen_in("text_encoder", "text_encoders")
+                        and seen_in("video_vae", "vae") and seen_in("audio_vae", "vae"))
+                a_steps = 12
+                if sing and form.get("apika") == "1" and seen_in("pika_lora", "loras"):
+                    a_loras.append((self.model_names["pika_lora"], 1.0))   # the same speed LoRA as in the Video studio
+                    a_steps = 8
+                graph, stages = wf.action_part_graph(self.model_names, scenes, k, width, height, seed, images, a_loras,
+                                                     await self.preview_opts(), state, fresh, False, None, True, sing, a_steps)
+                plan = wf.long_plan([sc[1] for sc in scenes], fresh=fresh)
+                a_inputs = list(long_common) + [media_input(f"Референс {j + 1}", "image", comfy=name)
+                                                for j, name in enumerate(scene_refs.get(k, []))]
+                return await self.queue(graph, stages, {
+                    "mode": "long", "sub": f"экшн · сцена {k + 1} из {len(scenes)}" + (f" · проба {width}×{height}" if test else ""),
+                    "prompt": scenes[k][0], "aspect": aspect, "q": quality,
+                    "len": round((plan[k]["total"] - plan[k]["ov"]) / wf.FPS, 1), "res": f"{width}×{height}", "seed": seed,
+                    "long": {"run": run, "part": k, "n": len(scenes), "draft": False, "test": test, "kind": "action"},
+                    "inputs": a_inputs}, preview=preview)
             graph, stages = wf.long_part_graph(self.model_names, scenes, k, width, height, seed, images, audio, start,
                                                dmad if draft else fin, self.custom_loras("long"), "match", vocals, state,
                                                await self.preview_opts(), cont, form.get("src_project") == "1", fresh, draft)

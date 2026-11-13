@@ -1127,7 +1127,7 @@ class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, Agent
                 await self.media.files.save_stream(d / f"state_{lg['part']}{sfx}.latent", stream.chunks,
                                                    expected_bytes=stream.expected_bytes)
             atomic_write_json(d / f"state_{lg['part']}{sfx}.json",
-                              {"res": (job.get("meta") or {}).get("res", "")})
+                              {"res": (job.get("meta") or {}).get("res", ""), "kind": lg.get("kind", "")})
         except Exception as e:
             self.note_error(f"Не удалось сохранить состояние сцены: {e}")
 
