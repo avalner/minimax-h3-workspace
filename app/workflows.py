@@ -1451,19 +1451,50 @@ BG_REMOVE_PROMPT = (
     "Keep the subject exactly as in <image1> — the same face, hair, clothes, colors, edges and style. "
     "Do not change, redraw or add anything in the subject itself.")
 
-OUTPAINT_PROMPT = "Extend and continue this picture naturally beyond its edges, keeping the same style, light and subject."
+# The outpaint LoRA (qwen-image-2.1-outpaint-v2) was trained on this exact first sentence and on a flat gray (#808080)
+# fill of the new areas; the user's text goes after it as «Scene: …». Without the sentence the model just copies the fill.
+OUTPAINT_PROMPT = ("Outpaint the image: replace the solid gray areas with a seamless continuation of the scene, "
+                   "keeping the existing picture unchanged.")
+# What used to be asked before the LoRA: only for the case when the LoRA is not installed yet (a hard paste, no gray fill).
+OUTPAINT_PROMPT_LEGACY = "Extend and continue this picture naturally beyond its edges, keeping the same style, light and subject."
 
 
-def qwen_outpaint_graph(m, prompt, canvas, orig, x, y, size, seed, outpaint_lora=None):
+def qwen_outpaint_graph(m, prompt, canvas, orig, x, y, size, seed, outpaint_lora=None, osize=None):
     """Extend a picture: `canvas` is the original placed at x,y on the new larger `size`; the model paints the whole
     canvas (with the special outpaint LoRA when the user has it), then the untouched original is pasted back over
-    its place, so only the new edges come from the model."""
-    g, stages = _qwen_base(m, canvas, 1.0, prompt, seed, size)
+    its place, so only the new edges come from the model.
+
+    `osize` is the place of that original on the canvas. With it the paste is soft: the original is kept inside a
+    rectangle shrunk by a few pixels and blurred, so it melts into what the model drew there instead of leaving a
+    visible edge with a colour jump and cut lines. Without it (an old client) the original is pasted as it is.
+    """
+    # the model must see the canvas at the size it draws: a smaller reference makes the redrawn middle sit a few pixels
+    # off the original, and the blended seam then shows as double, glassy stripes
+    g, stages = _qwen_base(m, canvas, max(0.25, size[0] * size[1] / 1e6), prompt, seed, size)
     if outpaint_lora:
         g["23"] = {"class_type": "LoraLoaderModelOnly", "inputs": {
             "model": ["4", 0], "lora_name": outpaint_lora, "strength_model": 1.0}}
         g["9"]["inputs"]["model"] = ["23", 0]
         stages["23"] = "load"
+    if osize and osize[0] > 0 and osize[1] > 0:
+        # soft seam: a hard paste of the original leaves a visible edge (colour jump, cut lines). The original is kept
+        # only inside a rectangle that is shrunk by a few pixels and blurred, so it melts into what the model drew there.
+        # The mask is made on the whole canvas; the sides that touch the border of the canvas keep the original fully.
+        W, H = int(size[0]), int(size[1])
+        g["30"] = {"class_type": "SolidMask", "inputs": {"value": 0.0, "width": W, "height": H}}
+        g["31"] = {"class_type": "SolidMask", "inputs": {"value": 1.0, "width": int(osize[0]), "height": int(osize[1])}}
+        g["32"] = {"class_type": "MaskComposite", "inputs": {
+            "destination": ["30", 0], "source": ["31", 0], "x": x, "y": y, "operation": "add"}}
+        g["33"] = {"class_type": "GrowMask", "inputs": {"mask": ["32", 0], "expand": -6, "tapered_corners": False}}
+        g["34"] = {"class_type": "MaskToImage", "inputs": {"mask": ["33", 0]}}
+        g["35"] = {"class_type": "ImageBlur", "inputs": {"image": ["34", 0], "blur_radius": 5, "sigma": 2.5}}
+        g["36"] = {"class_type": "ImageToMask", "inputs": {"image": ["35", 0], "channel": "red"}}
+        g["22"] = {"class_type": "ImageCompositeMasked", "inputs": {
+            "destination": ["10", 0], "source": ["5", 0], "mask": ["36", 0], "x": 0, "y": 0, "resize_source": False}}
+        g["11"]["inputs"]["images"] = ["22", 0]
+        stages.update({"30": "encode", "31": "encode", "32": "encode", "33": "encode",
+                       "34": "encode", "35": "encode", "36": "encode", "22": "decode"})
+        return g, stages
     g["20"] = {"class_type": "LoadImage", "inputs": {"image": orig}}
     g["22"] = {"class_type": "ImageCompositeMasked", "inputs": {
         "destination": ["10", 0], "source": ["20", 0], "x": x, "y": y, "resize_source": False}}

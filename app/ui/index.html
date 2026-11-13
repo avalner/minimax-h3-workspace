@@ -81,13 +81,9 @@ setTimeout(() => document.documentElement.classList.add('booted'), 1500);
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="1.6"/><path d="m21 16-5-5L6 20"/></svg>
       Изображение по тексту
     </button>
-    <button class="nav sub" data-view="qwen">
+    <button class="nav sub" data-view="imgedit">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
       Редактирование изображений
-    </button>
-    <button class="nav sub" data-view="inpaint">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.06 11.9 3.6 13.44a1 1 0 0 0-.54 1.66l4.84 4.84a1 1 0 0 0 1.66-.54L11.1 14.94"/><path d="m14.47 12.53 6.43-6.43a2.12 2.12 0 0 0-3-3l-6.43 6.43"/><path d="m11.9 9.06-2.44.65a1 1 0 0 0-.54 1.66l1.58 1.58"/><path d="M19.07 4.93a2.12 2.12 0 0 1 3 3"/></svg>
-      Инпейнт
     </button>
 
     <button class="nav" data-view="custom" id="navCustom" hidden>
@@ -316,6 +312,7 @@ setTimeout(() => document.documentElement.classList.add('booted'), 1500);
     <section class="view" id="view-long"></section>
     <section class="view" id="view-montage"></section>
     <section class="view" id="view-krea"></section>
+    <section class="view" id="view-imgedit"></section>
     <section class="view" id="view-qwen"></section>
     <section class="view" id="view-inpaint"></section>
 
@@ -964,7 +961,9 @@ const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 // the section that was open before the reload: read before anything overwrites it, and the same
 // key the app already keeps for its own "open where the user was last" timer
-const START_VIEW = (() => { try { return localStorage.getItem('h3-last-view') || ''; } catch { return ''; } })();
+const START_VIEW = (() => {   // the task screens of the picture editor belong to its page of tasks
+  try { const v = localStorage.getItem('h3-last-view') || ''; return v === 'qwen' || v === 'inpaint' ? 'imgedit' : v; } catch { return ''; }
+})();
 
 /* ---------- local server (real ComfyUI) or offline demo ---------- */
 const API = location.protocol.startsWith('http');
@@ -1069,10 +1068,12 @@ function setEngine(on) {
 /* pinned top bar with every video and image section */
 (function () {
   const bar = document.createElement('div'); bar.id = 'modeBar'; $('.tb-row1').appendChild(bar);
-  const SHORT = { video: 'Видео', lipsync: 'Lipsync', refs: 'Референсы', actor: 'Актёр', swap: 'Замена', long: 'Видеостудия', action: 'Экшн', krea: 'Изображение', qwen: 'Правка', inpaint: 'Инпейнт', upfile: 'Увеличить' };
-  const GROUPS = [['presets'], ['video', 'lipsync', 'refs', 'actor', 'swap', 'long', 'action'], ['krea', 'qwen', 'inpaint'], ['upfile']];
+  const SHORT = { video: 'Видео', lipsync: 'Lipsync', refs: 'Референсы', actor: 'Актёр', swap: 'Замена', long: 'Видеостудия', action: 'Экшн', krea: 'Изображение', imgedit: 'Редактирование', upfile: 'Увеличить' };
+  const GROUPS = [['presets'], ['video', 'lipsync', 'refs', 'actor', 'swap', 'long', 'action'], ['krea', 'imgedit'], ['upfile']];
   function paint() {
-    const cur = ($('.view.active')?.id || '').replace('view-', '');
+    const view = ($('.view.active')?.id || '').replace('view-', '');
+    // the task screens of the editor have no button of their own: they belong to «Редактирование»
+    const cur = view === 'qwen' || view === 'inpaint' ? 'imgedit' : view;
     let html = '';
     GROUPS.forEach(g => {
       const part = g.map(v => {
@@ -1203,7 +1204,10 @@ setInterval(pollSystem, 2000);
 const normItem = it => ({ ...it, date: new Date(it.date) });
 
 /* ---------- navigation ---------- */
+// the user has already gone somewhere themselves: the late "open the page you were on last time" must not take them back
+let navByUser = false;
 $$('.nav[data-view]').forEach(b => b.onclick = () => {
+  navByUser = true;
   if (b.dataset.view !== 'custom') { try { localStorage.setItem('h3-last-view', b.dataset.view); } catch {} }   // the program opens on the page where the user was last
   $$('.nav').forEach(n => n.classList.toggle('active', n === b || (b.classList.contains('sub') && n.dataset.view === 'presets')));   // a section opened from the start page keeps it lit
   $$('.view').forEach(v => v.classList.toggle('active', v.id === 'view-' + b.dataset.view));
@@ -2921,6 +2925,7 @@ $('#vwCmpBtn').onclick = () => { const it = byId(openId); if (it) cmpSet($('#vwC
 const dimTxt = (w, h) => `${w}×${h} · ${(w * h / 1e6).toFixed(1).replace('.', ',')} МП`;
 function closeViewer() { cmpCloseFull(false); clearInterval(CMP_TIMER); $('#vwCmp').innerHTML = ''; $('#vwCmp').hidden = true; $('#viewer').hidden = true; openId = null; const v = $('#viewer video'); v.pause(); v.removeAttribute('src'); }
 function goTo(view) {
+  navByUser = true;
   const n = $(`.nav[data-view="${view}"]`);
   if (n) { n.click(); return; }
   $$('.nav').forEach(x => x.classList.remove('active'));   // a page that has no button of its own (a preset)
@@ -3025,8 +3030,8 @@ const PRESETS = [
     text: 'Ролик из нескольких сцен, каждая продолжает прошлую: клипы, истории, музыка.' },
   { id: 'krea', kind: 'image', title: 'Изображение по тексту', need: 'только текст',
     text: 'Красивые изображения по описанию: обычные, реализм, серии по списку промптов.' },
-  { id: 'qwen', kind: 'image', title: 'Правка изображения', need: 'изображение + что изменить',
-    text: 'Меняете одежду, фон, детали; делаете карту персонажа и раскадровку.' },
+  { id: 'qwen', kind: 'image', title: 'Редактирование изображений', need: 'изображение + что изменить',
+    text: 'Править по описанию, инпейнт, убрать фон, расширить картинку, лист персонажа и раскадровка.' },
 ];
 const PR = { tab: '', have: {}, q: '', f: 'all', view: 'grid' };
 try { PR.favs = JSON.parse(localStorage.getItem('h3-pfav') || '[]'); } catch { PR.favs = []; }
@@ -3127,7 +3132,9 @@ $('#prView').onclick = e => { const b = e.target.closest('button'); if (b) { PR.
 $('#view-presets .pr-grid').onclick = e => {
   const f = e.target.closest('[data-fav]');
   if (f) { const id = f.dataset.fav; PR.favs = PR.favs.includes(id) ? PR.favs.filter(x => x !== id) : [...PR.favs, id]; try { localStorage.setItem('h3-pfav', JSON.stringify(PR.favs)); } catch {} presetsPaint(); return; }
-  const c = e.target.closest('.pr-card'); if (c) goTo(c.dataset.p);
+  const c = e.target.closest('.pr-card');
+  // the picture editor's card opens the page of tasks, not one hidden form
+  if (c) goTo(c.dataset.p === 'qwen' ? 'imgedit' : c.dataset.p);
 };
 async function presetsHave() {
   try { const st = await apiGet('/api/status'); (st.models || []).forEach(m => { PR.have[m.role] = !!m.have; }); } catch {}
@@ -3928,6 +3935,8 @@ async function libToFile(it) {
 /* ---------- Library -> workflow: "Use in…" button and the side tray to drag from ---------- */
 const USE_TARGETS = [['video', 'Image-to-Video'], ['lipsync', 'Lipsync / клип'], ['refs', 'Референсы'], ['actor', 'Актёрская игра'], ['action', 'Экшн-сцены'], ['long', 'Видеостудия'], ['qwen', 'Редактирование изображений'], ['agent', 'Агент (в чат)']];
 function freeSlot(view) {
+  // a picture section is built on its first visit: build it now, or «Использовать в…» finds no slot
+  if (view === 'krea' || view === 'qwen' || view === 'inpaint') window.h3Modes?.ready(view);
   const root = $('#view-' + view); if (!root) return null;
   const s = $$('label.drop:not(.disabled):not(.filled), label.ref:not(.filled)', root)[0];
   const f = s || (view === 'qwen' ? $('label.drop', root) : null);  // the editor has one slot: it is replaced
@@ -4103,7 +4112,8 @@ if (API) afterModules(() => {
   apiGet('/api/status').then(s => {
     firstRun(!s.configured || !localStorage.getItem('h3-seen-settings'));
     if (!s.configured) { setNavLocked(true); goTo('models'); return; }
-    setTimeout(() => {   // back to the page where the user was last time
+    setTimeout(() => {   // back to the page where the user was last time (unless they have already opened another one)
+      if (navByUser) return;
       let v = ''; try { v = localStorage.getItem('h3-last-view') || ''; } catch {}
       const n = v && $(`.nav[data-view="${v}"]`);
       if (n && !n.hidden && !n.disabled && v !== 'models') goTo(v); else if (!v) goTo('presets');   // a first start opens the start page

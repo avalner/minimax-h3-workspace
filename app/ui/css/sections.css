@@ -41,6 +41,11 @@
 .pr-bar{margin-bottom:10px;max-width:1400px}
 .pr-back{background:none;border:0;color:var(--mut,#9a8d93);cursor:pointer;font-size:13px;padding:4px 2px}
 .pr-back:hover{color:var(--tx,#fff)}
+/* the picture editor as one task per screen: opened from a card of «Редактирование изображений» */
+#view-qwen .pr-bar{display:none}
+#view-qwen.solo .pr-bar{display:flex}
+#view-qwen.solo .qw-kind{display:none}
+#view-imgedit .pr-grid{margin-top:6px;--k:3}
 .pr-tools{display:flex;gap:12px;align-items:center;margin-bottom:12px;justify-content:center;flex-wrap:wrap}
 .pr-tools input{flex:0 1 420px;padding:9px 14px;border-radius:12px;border:1.5px solid var(--line);background:var(--bg-2);color:inherit;font-size:13.5px}
 .pr-view{display:flex;gap:4px}

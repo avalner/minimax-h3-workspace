@@ -762,6 +762,42 @@ async def run_page(base: str, browser: str, shots: Path):
                 check("a picture panel filled before opening keeps the prompt",
                       pictures and pictures["qprompt"] == "правка картинки", str(pictures))
 
+                # The picture editor is one page of task cards: a card opens its own screen and the
+                # screen goes back to the cards. Inpaint lives under that page, not in the menu.
+                hub = await cdp.evaluate(
+                    "(() => { const nav = [...document.querySelectorAll('.nav[data-view]')].map(n => n.dataset.view);"
+                    " const img = document.querySelector('.nav[data-view=\"imgedit\"]');"
+                    " if (!img) return {nav, cards: []}; img.click();"
+                    " const cards = [...document.querySelectorAll('#view-imgedit [data-task]')].map(c => c.dataset.task);"
+                    " document.querySelector('#view-imgedit [data-task=\"outpaint\"]').click();"
+                    " return {nav, cards}; })()")
+                check("the menu keeps the picture editor and has no separate inpaint",
+                      "imgedit" in (hub or {}).get("nav", []) and "inpaint" not in hub["nav"] and "qwen" not in hub["nav"],
+                      str((hub or {}).get("nav")))
+                check("the editor opens as cards of its tasks",
+                      (hub or {}).get("cards") == ["edit", "inpaint", "bg", "outpaint", "sheet", "story"], str((hub or {}).get("cards")))
+                await asyncio.sleep(0.1)
+                task = await cdp.evaluate(
+                    "(() => { const q = document.querySelector('#view-qwen');"
+                    " const back = q.querySelector('[data-imgedit]');"
+                    " return {view: document.querySelector('.view.active')?.id,"
+                    "  solo: q.classList.contains('solo'),"
+                    "  kind: (q.querySelector('.qw-kind button.on') || {}).dataset?.k || '',"
+                    "  title: (document.querySelector('#tbHead h1') || q.querySelector('.head h1') || {}).textContent || '',"
+                    "  switchShown: !!(q.querySelector('.qw-kind') && q.querySelector('.qw-kind').offsetParent),"
+                    "  backShown: !!(back && back.offsetParent)}; })()")
+                check("a card opens the editor already set to its task",
+                      task and task["solo"] and task["kind"] == "outpaint" and task["title"].strip() == "Расширение", str(task))
+                check("the task screen hides the switch of tasks and shows the way back",
+                      task and not task["switchShown"] and task["backShown"], str(task))
+                back_home = await cdp.evaluate(
+                    "(() => { document.querySelector('#view-qwen [data-imgedit]').click();"
+                    " const toHub = document.querySelector('.view.active')?.id;"
+                    " document.querySelector('#view-imgedit [data-task=\"inpaint\"]').click();"
+                    " return {toHub, inpaint: document.querySelector('.view.active')?.id}; })()")
+                check("the way back leads to the cards", back_home and back_home["toHub"] == "view-imgedit", str(back_home))
+                check("the inpaint card opens the inpaint screen", back_home and back_home["inpaint"] == "view-inpaint", str(back_home))
+
                 # The lipsync editor is a module too, but its audio lives outside the panel: a
                 # generated WAV goes through the same `loadAudio` the page's restore uses.
                 lips = await cdp.evaluate(
@@ -813,7 +849,7 @@ async def run_page(base: str, browser: str, shots: Path):
                       refs and refs["flush"] == "function" and refs["preview"] == "function", str(refs))
 
                 # The same two sections twice more, with the screenshots a human can look at.
-                for view, name in (("video", "video"), ("krea", "krea"), ("lipsync", "lipsync"),
+                for view, name in (("video", "video"), ("krea", "krea"), ("imgedit", "imgedit"), ("lipsync", "lipsync"),
                                    ("refs", "refs"), ("long", "long"),
                                    ("montage", "montage"), ("library", "library"), ("settings", "settings")):
                     opened = await cdp.evaluate(
@@ -822,6 +858,20 @@ async def run_page(base: str, browser: str, shots: Path):
                     await asyncio.sleep(0.4)
                     if opened:
                         await cdp.screenshot(shots / f"{name}.png")
+                # and the editor as one task (a card of the page above opened): the switch is gone, the way back is there
+                opened = await cdp.evaluate(
+                    "(() => { const c = document.querySelector('#view-imgedit [data-task=\"outpaint\"]');"
+                    " if (!c) return false; c.click(); return true; })()")
+                await asyncio.sleep(0.4)
+                if opened:
+                    await cdp.screenshot(shots / "imgedit-outpaint.png")
+                # and the mask editor that now lives under the same page of tasks
+                opened = await cdp.evaluate(
+                    "(() => { const c = document.querySelector('#view-imgedit [data-task=\"inpaint\"]');"
+                    " if (!c) return false; c.click(); return document.querySelector('.view.active')?.id === 'view-inpaint'; })()")
+                await asyncio.sleep(0.4)
+                if opened:
+                    await cdp.screenshot(shots / "imgedit-inpaint.png")
 
                 # The page's own event entry, without a ComfyUI: a snapshot of a running job, then
                 # its result. This is the one-owner contract seen from the window: one row, one

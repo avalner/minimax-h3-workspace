@@ -123,7 +123,7 @@ function imgPanel(el, o) {
     go.disabled = true; if (!run) status.textContent = 'Отправляем задание в ComfyUI…';
     let r;
     try {
-      r = await apiSend(o.url, { method: 'POST', body: o.form(), timeout: 180000 });
+      r = await apiSend(o.url, { method: 'POST', body: await o.form(), timeout: 180000 });
     } catch (e) { go.disabled = false; status.textContent = 'Ошибка: ' + e.message; return; }
     go.disabled = false;
     if (run) { clearInterval(run.tick); offPrompt(run.id); if (window.h3State.has(run.id)) window.h3State.update(run.id, { detached: true }); run = null; }
@@ -380,10 +380,69 @@ function buildKrea(scope) {
   };
 }
 
+/* --- «Редактирование изображений»: a page of cards; a card opens the screen of ONE task --- */
+const IMG_TASK_ICONS = {
+  edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>',
+  inpaint: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9.06 11.9 3.6 13.44a1 1 0 0 0-.54 1.66l4.84 4.84a1 1 0 0 0 1.66-.54L11.1 14.94"/><path d="m14.47 12.53 6.43-6.43a2.12 2.12 0 0 0-3-3l-6.43 6.43"/><path d="m11.9 9.06-2.44.65a1 1 0 0 0-.54 1.66l1.58 1.58"/><path d="M19.07 4.93a2.12 2.12 0 0 1 3 3"/></svg>',
+  bg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="12" cy="10" r="3.2"/><path d="M6 20c1.6-3 3.6-4.4 6-4.4s4.4 1.4 6 4.4"/></svg>',
+  outpaint: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="8" height="8" rx="1.5"/><path d="M3 8V5a2 2 0 0 1 2-2h3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M21 16v3a2 2 0 0 1-2 2h-3"/></svg>',
+  sheet: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="18" rx="1.5"/><rect x="14" y="3" width="7" height="8" rx="1.5"/><rect x="14" y="15" width="7" height="6" rx="1.5"/></svg>',
+  story: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="5" width="7" height="14" rx="1.5"/><rect x="9.5" y="5" width="7" height="14" rx="1.5"/><rect x="16.5" y="5" width="5" height="14" rx="1.5"/></svg>',
+};
+const IMG_TASKS = [
+  { id: 'edit', title: 'Править по описанию',
+    text: 'Измените на изображении одежду, цвет, место или детали словами. Всё, что не названо, остаётся прежним.', need: 'изображение + что изменить' },
+  { id: 'inpaint', title: 'Инпейнт',
+    text: 'Закрасьте кистью место и опишите, что там должно быть. Всё, что не закрашено, не тронется.', need: 'изображение + закраска' },
+  { id: 'bg', title: 'Убрать фон',
+    text: 'Объект остаётся на месте, фон становится чисто белым.', need: 'изображение' },
+  { id: 'outpaint', title: 'Расширение',
+    text: 'Достройте изображение до другого формата: программа дорисует края, а сам кадр останется целым.', need: 'изображение + новый формат' },
+  { id: 'sheet', title: 'Лист персонажа',
+    text: 'Из одного изображения героя получается лист из 4 или 6 видов с разных сторон.', need: 'изображение героя' },
+  { id: 'story', title: 'Раскадровка',
+    text: 'История в кадрах по изображениям героя и места: одним листом или по кадрам.', need: 'изображения героя и места' },
+];
+
+function buildImgEdit(scope) {
+  const root = $('#view-imgedit');
+  root.innerHTML = `
+    <div class="pr-head"><h1>Редактирование изображений</h1><p>Выберите, что сделать с готовым изображением. У каждой задачи свой экран — программа откроет его с уже выбранным делом</p></div>
+    <div class="pr-grid">${IMG_TASKS.map(t => `<div class="pr-card" role="button" tabindex="0" data-task="${t.id}">
+      <div class="pr-pic">${IMG_TASK_ICONS[t.id]}</div>
+      <div class="pr-body"><b>${t.title}</b><p>${t.text}</p><div class="pr-tags"><span>Изображение</span><span>нужно: ${t.need}</span></div></div></div>`).join('')}</div>
+    <div class="note ie-miss" hidden style="margin-top:18px"><span></span></div>`;
+  const open = id => {
+    if (id === 'inpaint') { goTo('inpaint'); return; }
+    goTo('qwen');               // builds the editor on the first visit and shows it
+    const q = $('#view-qwen');
+    if (q._solo) q._solo(id);   // the task is already chosen: the «Что делаем» switch is not shown
+  };
+  root.onclick = e => { const c = e.target.closest('[data-task]'); if (c) open(c.dataset.task); };
+  root.onkeydown = e => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const c = e.target.closest('[data-task]');
+    if (c) { e.preventDefault(); open(c.dataset.task); }
+  };
+  // «← Все варианты редактирования» on every task screen
+  scope.listen(document, 'click', e => { if (e.target.closest('[data-imgedit]')) { e.preventDefault(); goTo('imgedit'); } });
+  // is the picture editor installed at all? (a mode the user did not add has no models)
+  (async () => {
+    try {
+      const st = await apiGet('/api/status');
+      const miss = Array.isArray(st.modes) && !st.modes.includes('qwen');
+      const box = $('.ie-miss', root);
+      box.hidden = !miss;
+      if (miss) $('span', box).innerHTML = 'Правка изображений не установлена. Откройте <b>Модели</b> и добавьте её — или подключите свой ComfyUI с готовыми файлами. Пока раздела нет, работают только те задачи, чьи модели уже скачаны.';
+    } catch {}
+  })();
+}
+
 /* --- Qwen Image 2.1: edit a picture, character sheet --- */
 function buildQwen(scope) {
   const root = $('#view-qwen'), S = { kind: 'edit', size: '1', aspect: '', aspectOut: '16:9', headless: true, bg: 'grey', panels: 4, engine: 'qwen', frames: true, line: 'white' };
   root.innerHTML = `
+    <div class="pr-bar"><button class="pr-back" type="button" data-imgedit>← Все варианты редактирования</button></div>
     <div class="head"><div><h1>Редактирование изображений</h1><p>Правьте готовые изображения: изменить по описанию, закрасить место (инпейнт), убрать фон, расширить картинку, собрать лист персонажа</p></div>
       <div class="mode-pill"><i></i><span>Qwen Image 2.1</span></div></div>
     <div class="grid"><div class="col">
@@ -407,9 +466,10 @@ function buildQwen(scope) {
             <div class="hint qw-fluxhint" hidden></div></div>
           <div class="qw-ptxt">
           <textarea class="qw-prompt" placeholder="Что изменить и что оставить. Например: Этот человек сидит в кафе у окна и пьёт кофе. Лицо, причёска и одежда как на изображении."></textarea>
-          <div class="ta-foot"><span class="hint">Скажите и что поменять, и что оставить прежним — так результат точнее</span></div>
+          <div class="ta-foot"><span class="hint qw-tahint">Скажите и что поменять, и что оставить прежним — так результат точнее</span></div>
         </div>
           <div class="row qw-editonly qw-asprow" style="margin-top:12px"><div class="row-l">Формат кадра <span class="hint qw-asphint">по умолчанию как у вашего изображения</span></div><div class="chips qw-asp"></div></div>
+          <div class="note qw-outlora" hidden style="margin-top:10px"><span>Края получаются аккуратнее с LoRA «Расширение изображения» (159 МБ): она ждёт в разделе <b>Модели</b>. Пока её нет, программа дорисует края по-старому — тоже аккуратно, но проще.</span></div>
           <div class="qw-szwrap" style="margin-top:12px">${SZ_ROW}</div>
           <div class="row qw-editonly qw-sizerow" style="margin-top:12px"><div class="row-l">Размер результата</div><div class="seg qw-size" style="grid-template-columns:1fr 1fr"><button data-s="1">Обычный<small>~1 МП, быстро</small></button><button data-s="2">Крупный<small>~2 МП, дольше</small></button></div></div></div>
         <div class="qw-sheet" style="margin-top:14px" hidden>
@@ -436,12 +496,14 @@ function buildQwen(scope) {
       : S.kind === 'outpaint' && !S.aspectOut ? 'Выберите, до какого формата расширить'
       : S.kind === 'edit' && !$('.qw-prompt', root).value.trim() ? 'Напишите, что изменить на изображении'
       : S.kind === 'story' && !$('.qw-prompt', root).value.trim() ? 'Опишите историю по кадрам' : '',
-    form: () => {
+    form: async () => {
       const fd = new FormData(); fd.append('kind', S.kind); fd.append('preview', '1');   // the Library waits for a button
       if (S.kind === 'outpaint') {   // the picture is placed on the larger canvas by the client
+        await outLora();             // the fill of the canvas depends on the LoRA the server will find
         const c = outCanvas();
         fd.append('image', c.file); fd.append('orig', c.orig);
         fd.append('width', c.w); fd.append('height', c.h); fd.append('x', c.x); fd.append('y', c.y);
+        fd.append('ow', c.ow); fd.append('oh', c.oh);
         fd.append('prompt', $('.qw-prompt', root).value.trim());
         imgSeedForm(S, fd); return fd;
       }
@@ -462,23 +524,46 @@ function buildQwen(scope) {
   });
   $('.qw-asp', root).innerHTML = `<button class="chip" data-qa="">Как у изображения</button>` + IMG_ASPECTS.map(([id, name, w, h]) => { const k = 18 / Math.max(w, h);
     return `<button class="chip" data-qa="${id}"><i class="ar" style="width:${w * k}px;height:${h * k}px"></i>${name}${name !== id ? ` <small>${id}</small>` : ''}</button>`; }).join('');
-  const outCanvas = () => {   // the source placed on the larger canvas of the chosen aspect (centered), blurred fill behind it
+  const outCanvas = () => {   // the source placed on the larger canvas of the chosen aspect (centered)
     const img = $('img', drop), iw = img.naturalWidth, ih = img.naturalHeight;
     const asp = IMG_ASPECTS.find(a => a[0] === S.aspectOut) || IMG_ASPECTS[0];
-    let t = Math.max(iw / asp[2], ih / asp[3]);
-    if (Math.max(asp[2] * t, asp[3] * t) > 2560) t *= 2560 / Math.max(asp[2] * t, asp[3] * t);
-    let w = Math.max(iw, Math.ceil(asp[2] * t / 16) * 16), h = Math.max(ih, Math.ceil(asp[3] * t / 16) * 16);
-    const dw = Math.round(iw * t), dh = Math.round(ih * t);
-    const x = Math.floor((w - dw) / 2 / 16) * 16, y = Math.floor((h - dh) / 2 / 16) * 16;
+    // the smallest canvas of the chosen shape that holds the whole picture at its own size (scale 1)
+    const r = asp[2] / asp[3];
+    let W = Math.max(iw, ih * r), H = W / r;
+    // too large (long side over 2048 or over ~2 megapixels): everything is scaled down together; too small: enlarged
+    let s = Math.min(1, 2048 / Math.max(W, H), Math.sqrt(2.0e6 / (W * H)));   // the model sees the canvas at its own size
+    if (Math.min(W, H) * s < 384) s = 384 / Math.min(W, H);
+    W *= s; H *= s;
+    const dw = Math.max(1, Math.round(iw * s)), dh = Math.max(1, Math.round(ih * s));
+    // the canvas and the place of the picture sit on a 32-pixel grid, so that what the model draws lines up with the original
+    const w = Math.max(Math.ceil(W / 32) * 32, Math.ceil(dw / 32) * 32), h = Math.max(Math.ceil(H / 32) * 32, Math.ceil(dh / 32) * 32);
+    const x = Math.max(0, Math.floor((w - dw) / 2 / 32) * 32), y = Math.max(0, Math.floor((h - dh) / 2 / 32) * 32);
     const c = document.createElement('canvas'); c.width = w; c.height = h;
     const cx = c.getContext('2d');
-    cx.filter = 'blur(24px)'; cx.drawImage(img, x, y, dw, dh);   // soft fill of the new edges
-    cx.filter = 'none'; cx.drawImage(img, x, y, dw, dh);
+    if (loraOn) {
+      // the new edges are a FLAT GRAY (#808080): this is the fill the outpaint LoRA was trained on («replace the solid
+      // gray areas with a continuation of the scene»). A blurred copy of the picture there made the model leave it as it was.
+      cx.fillStyle = '#808080'; cx.fillRect(0, 0, w, h);
+    } else {   // no LoRA yet: the old look (a blurred copy of the picture behind it), which needs no special fill
+      cx.filter = 'blur(24px)'; cx.drawImage(img, x, y, dw, dh); cx.filter = 'none';
+    }
+    cx.drawImage(img, x, y, dw, dh);
     const o = document.createElement('canvas'); o.width = dw; o.height = dh;          // the untouched original at its place
     o.getContext('2d').drawImage(img, 0, 0, dw, dh);
     const png = cv => { const b = atob(cv.toDataURL('image/png').split(',')[1]), a = new Uint8Array(b.length);
       for (let i = 0; i < b.length; i++) a[i] = b.charCodeAt(i); return new File([a], 'out.png', { type: 'image/png' }); };
-    return { file: png(c), orig: png(o), w, h, x, y };
+    return { file: png(c), orig: png(o), w, h, x, y, ow: dw, oh: dh };
+  };
+  // is the outpaint LoRA installed? The fill of the canvas and the instruction sent to the server depend on it
+  let loraOn = null;
+  const outLora = async () => {
+    if (loraOn !== null) return loraOn;
+    try {
+      const st = await apiGet('/api/status');
+      const m = (st.models || []).find(x => x.role === 'outpaint_lora');
+      if (m) { loraOn = !!m.have; $('.qw-outlora', root).hidden = loraOn; }
+    } catch {}
+    return loraOn;
   };
   const upd = () => {
     const isBg = S.kind === 'bg', isOut = S.kind === 'outpaint';
@@ -498,8 +583,15 @@ function buildQwen(scope) {
     $('.qw-asprow', root).hidden = S.kind === 'story' || isBg || (S.engine === 'flux' && !isOut);
     $('.qw-asphint', root).textContent = isOut ? 'картинка останется целиком, края дорисуются до этого формата' : 'по умолчанию как у вашего изображения';
     $('.qw-size', root).closest('.row').hidden = isOut;   // outpaint draws at the canvas size, «Размер результата» does not apply
+    $('.qw-szwrap', root).hidden = isOut || isBg;         // ...and neither does a size of the user's own
+    // the outpaint LoRA wants a description of the scene, not an instruction: the hint under the field says so
+    $('.qw-tahint', root).textContent = isOut
+      ? 'Опишите сцену: что уже есть в кадре и что естественно продолжается по краям — без слов «расширь» и «дорисуй».'
+      : 'Скажите и что поменять, и что оставить прежним — так результат точнее';
+    if (isOut) outLora();   // the fill of the canvas depends on it: ask while the user is still choosing the format
+    $('.qw-outlora', root).hidden = !isOut || loraOn === true;
     $$('.qw-editonly', root).forEach(r => { if (!r.classList.contains('qw-asprow') && !r.classList.contains('qw-sizerow')) r.hidden = S.kind === 'story' || isOut || (S.engine === 'flux' && r.contains($('.qw-asp', root))); });
-    $('.qw-prompt', root).placeholder = isOut ? 'Что дорисовать на новых краях. Например: продолжить пляж, море и небо. Можно оставить пустым.'
+    $('.qw-prompt', root).placeholder = isOut ? 'Что на картинке и что продолжается по краям. Например: светлая комната с белыми стенами и деревянным полом; комната продолжается вправо и влево, тот же дневной свет. Можно оставить пустым.'
       : S.kind === 'story' && S.frames ? '1: первый кадр по-английски...\n2: второй кадр...\n(героя и место называйте image 1, image 2). Или попросите Агента (Раскадровка → По кадрам).' : S.kind === 'story' ? 'Расскажите историю по кадрам: первый кадр — …, второй кадр — …. Героя и место называйте <image1>, <image2>. Или попросите Агента (Раскадровка) написать промпт.' : 'Что изменить и что оставить. Например: Этот человек сидит в кафе у окна и пьёт кофе. Лицо, причёска и одежда как на изображении.';
     $$('.qw-size button', root).forEach(b => b.classList.toggle('on', b.dataset.s === S.size));
     $$('.qw-head button', root).forEach(b => b.classList.toggle('on', (b.dataset.h === '1') === S.headless));
@@ -509,6 +601,31 @@ function buildQwen(scope) {
     if (S.kind === 'sheet') S.panels === 6 ? P.ratio(2112, 960) : P.ratio(1920, 1088);
     else if (S.kind === 'story') P.ratio(1920, 1088);
     if (S.kind !== 'sheet' && S.cw && S.ch) P.ratio(S.cw, S.ch);
+  };
+  /* One task per screen: a card of «Редактирование изображений» opens this page with the task already chosen.
+     The switch of tasks and the general title then step aside; «← Все варианты редактирования» leads back. */
+  const head = $('.head h1', root), headSub = $('.head p', root);
+  const stepH = $$('.card-h h3', root).find(h => /Что делаем/.test(h.textContent)) || null;
+  const HEAD0 = { h1: head.textContent, sub: headSub.textContent, step: stepH ? stepH.innerHTML : '' };
+  const TASK_HEAD = {
+    edit: ['Править по описанию', 'Измените на изображении одежду, цвет, место или детали словами. Всё, что не названо, остаётся прежним'],
+    bg: ['Убрать фон', 'Объект остаётся на месте, фон становится чисто белым'],
+    outpaint: ['Расширение', 'Достройте изображение до другого формата: программа дорисует края, а сам кадр останется целым'],
+    sheet: ['Лист персонажа', 'Лист из 4 или 6 видов героя с разных сторон — из одного изображения'],
+    story: ['Раскадровка', 'История в кадрах по изображениям героя и места: одним листом или по кадрам'],
+  };
+  root._solo = id => {
+    if (!TASK_HEAD[id]) return;
+    S.kind = id; root.classList.add('solo');
+    head.textContent = TASK_HEAD[id][0]; headSub.textContent = TASK_HEAD[id][1];
+    if (stepH) stepH.innerHTML = `<span class="n">2</span>${TASK_HEAD[id][0]}`;
+    upd();
+  };
+  root._plain = () => {   // back to the whole editor (opened from the Library, the queue or «Использовать в…»)
+    if (!root.classList.contains('solo')) return;
+    root.classList.remove('solo');
+    head.textContent = HEAD0.h1; headSub.textContent = HEAD0.sub;
+    if (stepH) stepH.innerHTML = HEAD0.step;
   };
   root.addEventListener('click', e => {
     const fr = e.target.closest('.qw-fr button'), ln = e.target.closest('.qw-ln button');
@@ -536,7 +653,26 @@ function buildQwen(scope) {
   }
   imgSeedWire(root, S); upd();
   buildQwenFit(scope);
-  IMG.qwen = { fill: it => { if (it.engine) S.engine = it.engine; if (it.frames !== undefined) S.frames = !!it.frames; if (String(it.sub || '').startsWith('Раскадровка по кадрам')) S.frames = true; else if (String(it.sub || '').startsWith('Раскадровка')) S.frames = false; if (it.kind === 'story' || String(it.sub || '').startsWith('Раскадровка')) { S.kind = 'story'; $('.qw-prompt', root).value = it.prompt || ''; } else if (it.sub === 'Лист персонажа') S.kind = 'sheet'; else if (it.sub === 'Убрать фон') S.kind = 'bg'; else if (String(it.sub || '').startsWith('Расширение')) { S.kind = 'outpaint'; $('.qw-prompt', root).value = it.prompt || ''; } else { S.kind = 'edit'; $('.qw-prompt', root).value = it.prompt || ''; } upd(); } };
+  // An outpaint prompt is kept as the whole instruction (the LoRA's own sentence + «Scene: …»): the field shows only
+  // what the user wrote, or the server would put the instruction in front of it a second time on the next run.
+  const outText = s => {
+    const t = String(s || '').trim();
+    if (/^Outpaint the image/i.test(t)) { const i = t.indexOf('Scene: '); return i >= 0 ? t.slice(i + 7).trim() : ''; }
+    if (/^Extend and continue this picture/i.test(t)) return '';
+    return t;
+  };
+  IMG.qwen = { fill: it => {
+    if (it.engine) S.engine = it.engine;
+    if (it.frames !== undefined) S.frames = !!it.frames;
+    const sub = String(it.sub || '');
+    if (sub.startsWith('Раскадровка по кадрам')) S.frames = true; else if (sub.startsWith('Раскадровка')) S.frames = false;
+    if (it.kind === 'story' || sub.startsWith('Раскадровка')) { S.kind = 'story'; $('.qw-prompt', root).value = it.prompt || ''; }
+    else if (sub === 'Лист персонажа') S.kind = 'sheet';
+    else if (sub === 'Убрать фон') S.kind = 'bg';
+    else if (sub.startsWith('Расширение')) { S.kind = 'outpaint'; $('.qw-prompt', root).value = outText(it.prompt); }
+    else { S.kind = 'edit'; $('.qw-prompt', root).value = it.prompt || ''; }
+    upd();
+  } };
   // задание из очереди: что делали (правка, лист, раскадровка), по какому промпту, модель, формат и seed
   IMG.qwen.fillJob = m => {
     const sub = String(m.sub || '');
@@ -578,7 +714,7 @@ function buildQwenFit(scope) {
     try { localStorage.removeItem(KEY); } catch {}
     fit();
   });
-  $('.nav[data-view="qwen"]').addEventListener('click', fit);
+  $('#view-qwen')._fit = fit;   // the page fits its own picture slots when it opens (see the mode's enter)
   scope.listen(window, 'resize', () => { if ($('#view-qwen').classList.contains('active')) fit(); });
 }
 
@@ -586,6 +722,7 @@ function buildQwenFit(scope) {
 function buildInpaint(scope) {
   const root = $('#view-inpaint'), S = { size: '1' };
   root.innerHTML = `
+    <div class="pr-bar"><button class="pr-back" type="button" data-imgedit>← Все варианты редактирования</button></div>
     <div class="head"><div><h1>Инпейнт</h1><p>Закрасьте место на изображении, которое нужно переделать, и опишите, что там должно быть. Всё, что не закрашено, останется без изменений</p></div>
       <div class="mode-pill"><i></i><span>Qwen Image 2.1</span></div></div>
     <div class="grid"><div class="col">
@@ -1210,8 +1347,13 @@ function buildInpaint(scope) {
     leave: () => pause('#view-krea'),
     dispose: () => disposePictures('#view-krea'),
   });
+  window.h3Modes.register("imgedit", {
+    mount: buildImgEdit,
+  });
   window.h3Modes.register("qwen", {
     mount: buildQwen,
+    // opened any other way (the Library, the queue, «Использовать в…»): the whole editor, not one task
+    enter: () => { const q = $('#view-qwen'); q._plain?.(); q._fit?.(); },
     leave: () => pause('#view-qwen'),
     dispose: () => disposePictures('#view-qwen'),
   });

@@ -335,14 +335,23 @@ class GenerateRoutes:
                 raise web.HTTPBadRequest(text="Неверный размер холста")
             if not (320 <= w <= 4096 and 320 <= h <= 4096):
                 raise web.HTTPBadRequest(text="Слишком большой или маленький холст")
-            prompt = form.get("prompt", "").strip() or wf.OUTPAINT_PROMPT
+            user_text = form.get("prompt", "").strip()
             lora = None
             try:
                 _, loras = await self.comfy_json("GET", "/models/loras", timeout=aiohttp.ClientTimeout(total=15))
                 lora = next((f for f in (loras or []) if f.lower().endswith("qwen-image-2.1-outpaint-v2.safetensors")), None)
             except Exception:
                 pass
-            graph, stages = wf.qwen_outpaint_graph(self.model_names, prompt, image, form["_orig"], x, y, (w, h), seed, lora)
+            # the LoRA wants its own sentence and the flat gray fill the client put on the canvas; without the LoRA
+            # the old, plainer instruction works better (and the client fills the edges with a blurred copy)
+            prompt = (wf.OUTPAINT_PROMPT + (f" Scene: {user_text}" if user_text else "")) if lora \
+                else (user_text or wf.OUTPAINT_PROMPT_LEGACY)
+            try:
+                ow, oh = int(form.get("ow", "0")), int(form.get("oh", "0"))
+            except ValueError:
+                ow = oh = 0
+            graph, stages = wf.qwen_outpaint_graph(self.model_names, prompt, image, form["_orig"], x, y, (w, h), seed, lora,
+                                                   (ow, oh) if ow > 0 and oh > 0 else None)
             return await self.queue(graph, stages, {
                 "mode": "qwen", "sub": "Расширение изображения", "prompt": prompt, "aspect": "",
                 "q": "", "len": 0.0, "res": f"{w}×{h}", "seed": seed}, preview=preview)

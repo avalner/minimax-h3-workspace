@@ -203,6 +203,11 @@ VARIANTS = {
         "int8": _m("Comfy-Org/Qwen-Image-2.1", "text_encoders/qwen3vl_8b_int8_convrot.safetensors", 9.35,
                    "text_encoders", sub=IMG_SUB),
     },
+    # «Расширение» (outpaint): the LoRA is trained on a flat gray fill (#808080) and on one instruction sentence;
+    # without it the model moves the picture and the stitched original does not line up
+    "outpaint_lora": {
+        "v2": _m("ausboss/Qwen-Image-2.1-Outpaint-LoRA", "qwen-image-2.1-outpaint-v2.safetensors", 0.159, "loras", sub=IMG_SUB),
+    },
     "qwen_vae": {
         "bf16": _m("Comfy-Org/Qwen-Image-2.1", "vae/qwen_image_2.1_vae_bf16.safetensors", 0.68, "vae", sub=IMG_SUB),
     },
@@ -260,7 +265,7 @@ ROLE_MARKS = {
     "seedvr_unet": ["seedvr"], "seedvr_vae": ["seedvr"], "relayvsr_unet": ["relayvsr"], "relayvsr_vae": ["relayvsr"], "krea_clip": ["qwen3vl", "qwen3-vl"],
     "krea_vae": ["qwen_image", "qwen-image"], "kreareal_unet": ["krea"], "kreareal_lora": ["realism"],
     "krea_unet": ["krea"],
-    "qwen_unet": ["qwen"], "qwen_clip": ["qwen3vl", "qwen3-vl"], "qwen_vae": ["qwen"],
+    "qwen_unet": ["qwen"], "qwen_clip": ["qwen3vl", "qwen3-vl"], "qwen_vae": ["qwen"], "outpaint_lora": ["outpaint"],
     "flux_unet": ["flux"], "flux_clip": ["qwen_3", "qwen3"], "flux_vae": ["flux"],
 }
 
@@ -337,6 +342,7 @@ ROLE_TITLES = {
     "qwen_unet": "Основная модель — Правка изображения (Qwen Image 2.1)",
     "qwen_clip": "Текстовый энкодер Qwen (Qwen3-VL 8B)",
     "qwen_vae": "VAE для Qwen Image 2.1",
+    "outpaint_lora": "LoRA «Расширение изображения» (Qwen, без неё края не дорисовываются)",
     "flux_unet": "Основная модель — Правка изображения для коммерции (FLUX.2 klein 4B)",
     "flux_clip": "Текстовый энкодер FLUX.2 klein (Qwen3 4B)",
     "flux_vae": "VAE для FLUX.2",
@@ -374,6 +380,7 @@ MODE_OPTIONAL = {
     "swap": ["pika_lora", "realism_lora", "motion_repair_lora"],
     "action": ["speed_slider_lora", "action_upscaler"],
     "long": ["vocal_model", "draft_lora"],
+    "qwen": ["outpaint_lora"],
 }
 ALL_ROLES = list(VARIANTS)
 
@@ -388,7 +395,7 @@ DEFAULT_CHOICE = {"fast_unet": "int8", "fused_unet": "int8", "lipsync_unet": "fu
                   "realism_lora": "v1", "motion_repair_lora": "v1", "pika_lora": "hd8", "swap_lora": "v15", "sla_lora": "bf16",
                   "draft_lora": "bf16",
                   "krea_unet": "int8", "krea_clip": "fp8", "krea_vae": "bf16", "kreareal_unet": "fp8", "kreareal_lora": "v2",
-                  "qwen_unet": "int8", "qwen_clip": "int8", "qwen_vae": "bf16",
+                  "qwen_unet": "int8", "qwen_clip": "int8", "qwen_vae": "bf16", "outpaint_lora": "v2",
                   "flux_unet": "fp8", "flux_clip": "bf16", "flux_vae": "bf16",
                   "seedvr_unet": "int8", "seedvr_vae": "fp16", "relayvsr_unet": "x2", "relayvsr_vae": "x2"}
 
