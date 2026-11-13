@@ -950,7 +950,7 @@ async def run_page(base: str, browser: str, shots: Path):
                     rect: [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)],
                     win: [window.innerWidth, window.innerHeight],
                     label: btn.textContent.trim(), stageH: Math.round(stage.clientHeight), z0: zoomV() };
-                  stage.dispatchEvent(new WheelEvent('wheel', { deltaY: -120, bubbles: true, cancelable: true,
+                  stage.dispatchEvent(new WheelEvent('wheel', { deltaY: -120, shiftKey: true, bubbles: true, cancelable: true,
                     clientX: sr.left + sr.width / 2, clientY: sr.top + sr.height / 2 }));
                   await sleep(40);
                   out.z1 = zoomV();
@@ -1111,6 +1111,31 @@ async def run_page(base: str, browser: str, shots: Path):
                       hand and hand["handOn"] and hand["movedFromEmpty"], str(hand))
                 check("the canvas moves freely in both directions, with no edge to stop at",
                       hand and hand["freeX"] == 400 and hand["freeY"] == 200, str(hand))
+                # The wheel stays the page's business: a plain wheel must not zoom the picture and must not be
+                # swallowed, or the page around the editor stops scrolling. Shift + wheel is the one that zooms.
+                wheel = await cdp.evaluate("""(async () => {
+                  const sleep = ms => new Promise(r => setTimeout(r, ms));
+                  const view = document.querySelector('#view-inpaint');
+                  const stage = view.querySelector('.ip-stage');
+                  const zoomV = () => parseInt(view.querySelector('.ip-zoomv').textContent, 10) || 0;
+                  const sr = stage.getBoundingClientRect();
+                  const fire = extra => {
+                    const w = new WheelEvent('wheel', Object.assign({ deltaY: 120, bubbles: true, cancelable: true,
+                      clientX: sr.left + sr.width / 2, clientY: sr.top + sr.height / 2 }, extra));
+                    stage.dispatchEvent(w);
+                    return w.defaultPrevented;
+                  };
+                  const z0 = zoomV();
+                  const plainEaten = fire({});
+                  await sleep(40);
+                  const z1 = zoomV();
+                  const shiftEaten = fire({ shiftKey: true, deltaY: -120 });
+                  await sleep(40);
+                  const z2 = zoomV();
+                  return { z0, z1, z2, plainEaten, shiftEaten }; })()""", await_promise=True)
+                check("a plain wheel is left to the page: it does not zoom and is not swallowed",
+                      wheel and wheel["z1"] == wheel["z0"] and not wheel["plainEaten"], str(wheel))
+                check("Shift + wheel zooms the picture", wheel and wheel["z2"] > wheel["z1"] and wheel["shiftEaten"], str(wheel))
 
                 # The page's own event entry, without a ComfyUI: a snapshot of a running job, then
                 # its result. This is the one-owner contract seen from the window: one row, one

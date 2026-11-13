@@ -832,7 +832,7 @@ function buildInpaint(scope) {
             <button class="btn ip-clear" type="button">Очистить закраску</button>
             <button class="btn ip-unsel" type="button" title="Закраска снова на всей картинке" disabled>Снять выделение</button>
           </div>
-          <div class="hint" style="margin-top:8px">Клавиши 1–5 выбирают инструмент (1 ещё раз — форма выделения), [ и ] меняют размер кисти и ластика. <b>«Рука»</b> (5) двигает картинку в любую сторону, а <b>пробел</b> включает её, пока зажат, — удобно на любом инструменте. <b>Колесо мыши</b> — масштаб вокруг указателя, «Вся картинка» возвращает картинку целиком и ставит её посередине. «Заливка» заполняет область, обведённую кистью. «Выделение» ограничивает работу выбранной областью: Ctrl добавляет ещё одну, Shift держит ровный круг или квадрат, Alt перетаскивает выделение, Esc снимает. Если не закрашено ничего, в модель уходит само выделение. Ctrl+Z — убрать последний шаг, Shift+Ctrl+Z — вернуть его. <b>«На весь экран» (F)</b> — то же самое на всё окно, Esc возвращает назад.</div>
+          <div class="hint" style="margin-top:8px">Клавиши 1–5 выбирают инструмент (1 ещё раз — форма выделения), [ и ] меняют размер кисти и ластика. <b>«Рука»</b> (5) двигает картинку в любую сторону, а <b>пробел</b> включает её, пока зажат, — удобно на любом инструменте. <b>Shift + колесо мыши</b> — масштаб вокруг указателя (обычное колесо листает страницу), «Вся картинка» возвращает картинку целиком и ставит её посередине. «Заливка» заполняет область, обведённую кистью. «Выделение» ограничивает работу выбранной областью: Ctrl добавляет ещё одну, Shift держит ровный круг или квадрат, Alt перетаскивает выделение, Esc снимает. Если не закрашено ничего, в модель уходит само выделение. Ctrl+Z — убрать последний шаг, Shift+Ctrl+Z — вернуть его. <b>«На весь экран» (F)</b> — то же самое на всё окно, Esc возвращает назад.</div>
         </div></div>
       <div class="card"><div class="card-h"><h3><span class="n">2</span>Что должно быть на закрашенном месте</h3></div>
         <textarea class="ip-prompt" placeholder="Например: белая майка вместо красной куртки. Лицо, фон и свет оставить как было."></textarea>
@@ -1013,7 +1013,14 @@ function buildInpaint(scope) {
   const fitView = () => { setZoom(fitZoom(), true); centerView(); applyView(); paintSel(); };
   zoomIn.oninput = e => setZoom(+e.target.value);
   $('.ip-fitb', root).onclick = () => fitView();
-  stageEl.addEventListener('wheel', e => {   // the wheel zooms around the pointer, in the card and on the whole window
+  /* A plain wheel is left to the browser: the stage does not scroll any more, so the wheel goes on and scrolls the
+     page around it, as in the rest of the app. Only Shift + wheel zooms (and the zoom keeps the point under the
+     pointer still). On the whole window there is nothing behind to scroll, so the plain wheel is simply swallowed. */
+  stageEl.addEventListener('wheel', e => {
+    if (!e.shiftKey) {
+      if (isFull) e.preventDefault();
+      return;
+    }
     e.preventDefault();
     const d = e.deltaY || e.deltaX;   // Windows often sends a horizontal wheel as deltaX
     if (!d) return;
