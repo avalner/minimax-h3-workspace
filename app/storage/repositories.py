@@ -99,6 +99,51 @@ class ProjectRepository:
         return self.get(project_id)
 
 
+class StageRepository:
+    """Stages: saved points of a section (settings, files, the clip in the player).
+
+    A stage belongs to a project, not to one browser profile: the record lives in the database, so
+    the same project shows the same stages after a restart, in another window and on another day.
+    The files a stage was made from stay in the browser (IndexedDB, keyed by the stage id): they are
+    the user's own pictures and audio, not results of the program.
+    """
+
+    def __init__(self, db):
+        self.db = db
+
+    def load(self):
+        return [json.loads(row["payload"]) for row in
+                self.db.query("SELECT payload FROM stages ORDER BY created_at ASC, rowid ASC")]
+
+    def get(self, stage_id):
+        row = self.db.one("SELECT payload FROM stages WHERE id=?", (stage_id,))
+        return json.loads(row["payload"]) if row else None
+
+    def save(self, stage):
+        self.db.execute(
+            "INSERT INTO stages(id, project, mode, auto, created_at, payload) VALUES(?,?,?,?,?,?) "
+            "ON CONFLICT(id) DO UPDATE SET project=excluded.project, mode=excluded.mode, auto=excluded.auto, "
+            "created_at=excluded.created_at, payload=excluded.payload",
+            (stage["id"], stage.get("project") or "", stage.get("mode") or "",
+             1 if stage.get("auto") else 0, float(stage.get("created") or 0),
+             json.dumps(stage, ensure_ascii=False)))
+
+    def delete(self, stage_id):
+        self.db.execute("DELETE FROM stages WHERE id=?", (stage_id,))
+
+    def drop_auto(self, project, mode):
+        """There is one «Было до открытия этапа» per section and project: a new one replaces it."""
+        self.db.execute("DELETE FROM stages WHERE project=? AND mode=? AND auto=1", (project, mode))
+
+    def prune(self, project, mode, keep=15):
+        """Keep the newest `keep` hand-saved stages of the section; old ones are not shown for years."""
+        rows = self.db.query(
+            "SELECT id FROM stages WHERE project=? AND mode=? AND auto=0 "
+            "ORDER BY created_at DESC, rowid DESC", (project, mode))
+        for row in rows[int(keep):]:
+            self.delete(row["id"])
+
+
 class DraftRepository:
     """Unkept results survive restarts independently of the Library and job retention."""
 

@@ -52,7 +52,7 @@ from storage.database import Database
 from storage.migrations import migrate
 from storage.repositories import (
     DraftRepository, IdempotencyRepository, JobRepository, MediaRepository, ProjectRepository,
-    ResultRepository
+    ResultRepository, StageRepository
 )
 
 from routes.status import StatusRoutes
@@ -64,10 +64,11 @@ from routes.agent import AgentRoutes
 from routes.generate import GenerateRoutes
 from routes.montage import MontageRoutes
 from routes.projects import ProjectRoutes
+from routes.stages import StageRoutes
 
 
 class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, AgentRoutes, GenerateRoutes,
-          MontageRoutes, ProjectRoutes):
+          MontageRoutes, ProjectRoutes, StageRoutes):
     def __init__(self, comfy_override=None, port=None):
         self.config = engine.Config(DATA_DIR / "config.json")
         # a share or a synchronised folder is a poor home for the queue, the library and (stage 3) the
@@ -93,6 +94,7 @@ class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, Agent
         self.media_repo = MediaRepository(self.db)
         self.results_repo = ResultRepository(self.db)
         self.projects_repo = ProjectRepository(self.db)
+        self.stages_repo = StageRepository(self.db)
         self.queue_save_error = None   # the last failure to persist the queue, shown in the window instead of a silent loss
         self.pending_resume = self.load_resume_queue()  # unfinished jobs of an earlier run (asked about at start)
         self.jobs = JobStore(self.save_queue)  # prompt_id -> job dict

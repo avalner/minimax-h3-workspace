@@ -217,12 +217,26 @@ def _projects(db, data_dir, report):
                        (json.dumps(item, ensure_ascii=False), row["id"]))
 
 
+def _stages(db, data_dir, report):
+    """Stages (save points of the sections) belong to a project and live in the database.
+
+    The records of older versions were kept in the browser's localStorage; the window imports them
+    itself on the first start (it is the only side that can read them), so there is nothing to move
+    here — only the table. The files a stage was made from stay in the browser, keyed by the stage id.
+    """
+    db.execute("CREATE TABLE IF NOT EXISTS stages ("
+               "id TEXT PRIMARY KEY, project TEXT NOT NULL DEFAULT '', mode TEXT NOT NULL DEFAULT '', "
+               "auto INTEGER NOT NULL DEFAULT 0, created_at REAL NOT NULL DEFAULT 0, payload TEXT NOT NULL)")
+    db.execute("CREATE INDEX IF NOT EXISTS stages_by_project ON stages(project, mode, created_at)")
+
+
 STEPS = (
     ("0001-schema", 1, _schema, "таблицы"),
     ("1000-import-library", 1, _import_library, "библиотека из library.json"),
     ("1001-import-queue", 1, _import_queue, "очередь из queue.json"),
     ("0002-drafts", 2, _drafts, "долговечные черновики вне Библиотеки"),
     ("0003-projects", 3, _projects, "проекты: рабочее пространство каждой записи"),
+    ("0004-stages", 4, _stages, "этапы разделов: часть проекта, а не браузера"),
 )
 
 

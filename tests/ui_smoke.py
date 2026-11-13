@@ -315,6 +315,48 @@ async def run_page(base: str, browser: str, shots: Path):
                       "Удалить клип из Библиотеки?" in lib_pop["text"]
                       and lib_pop["result"] is False, str(lib_pop))
 
+                # a stage is a record of the project now, not of this browser: it is saved through
+                # the server and the section's list is painted from the answer
+                stage = await cdp.evaluate("""
+                    (async () => {
+                      const saved = await window.postStage({ id: 'ui-stage', mode: 'video',
+                        name: 'Проверка', s: { q: '720p' }, prompt: 'тест',
+                        date: new Date().toISOString(), files: [] });
+                      const shown = document.querySelector('#view-video .st-bar .st-n')?.textContent;
+                      const listed = (await (await fetch('/api/stages')).json()).stages.length;
+                      await window.bmDelete('ui-stage');
+                      const after = document.querySelector('#view-video .st-bar .st-n')?.textContent;
+                      return { saved: saved && saved.id, shown, listed, after };
+                    })()
+                """, await_promise=True)
+                check("a stage is saved to the project and its section shows it",
+                      stage["saved"] == "ui-stage" and stage["shown"] == "1"
+                      and stage["listed"] >= 1 and stage["after"] == "0", str(stage))
+
+                # the previous version kept stages in localStorage: on the first start of this one
+                # they are uploaded to the active project and the browser copy is dropped
+                await cdp.evaluate(
+                    "localStorage.setItem('h3-bookmarks', JSON.stringify([{"
+                    " id: 'legacy-stage', mode: 'video', name: 'Старый этап', auto: false,"
+                    " title: 'старый', date: '2026-11-01T10:00:00', s: { q: '480p' },"
+                    " prompt: 'старый', files: [] }])); true")
+                await cdp.call("Page.reload")
+                await cdp.wait_for("document.readyState === 'complete' && !!window.h3Video", timeout=40)
+                listed = []
+                for _ in range(40):
+                    listed = await cdp.evaluate(
+                        "(async () => (await (await fetch('/api/stages')).json()).stages.map(s => s.id))()",
+                        await_promise=True)
+                    if "legacy-stage" in listed:
+                        break
+                    await asyncio.sleep(0.2)
+                left = await cdp.evaluate("localStorage.getItem('h3-bookmarks')")
+                count = await cdp.evaluate("document.querySelector('#view-video .st-bar .st-n')?.textContent")
+                check("stages of the previous version move into the project on first start",
+                      "legacy-stage" in listed and left is None and count == "1",
+                      str({"ids": listed, "left": left, "count": count}))
+                await cdp.evaluate("window.bmDelete('legacy-stage')", await_promise=True)
+
                 empty_queue = await cdp.evaluate(
                     "(() => { const q = document.querySelector('#qList'); return !!q && /Очередь пуста/.test(q.textContent); })()")
                 check("the queue starts empty with its own message", empty_queue)

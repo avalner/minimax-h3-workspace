@@ -53,8 +53,8 @@ class SchemaTest(DbCase):
         db = self.open_db(folder / "h3studio.db")
         report = migrate(db, folder)
         self.assertEqual(report.applied, ["0001-schema", "1000-import-library", "1001-import-queue", "0002-drafts",
-                                          "0003-projects"])
-        self.assertEqual(db.schema_version(), 3)
+                                          "0003-projects", "0004-stages"])
+        self.assertEqual(db.schema_version(), 4)
         self.assertEqual(db.one("PRAGMA journal_mode")["journal_mode"].lower(), "wal")
 
     def test_a_second_start_imports_nothing_again(self):
@@ -63,7 +63,7 @@ class SchemaTest(DbCase):
         again = migrate(db, folder)
         self.assertEqual(again.applied, [])
         self.assertEqual(again.skipped, ["0001-schema", "1000-import-library", "1001-import-queue", "0002-drafts",
-                                         "0003-projects"])
+                                         "0003-projects", "0004-stages"])
         self.assertEqual(LibraryRepository(db).count(), len(LIBRARY_IDS))
         self.assertEqual(JobRepository(db).count(), 2)
 

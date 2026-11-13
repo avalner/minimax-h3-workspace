@@ -108,9 +108,9 @@ def main():
         storage = payload.get("storage") or {}
         migration = storage.get("migration") or {}
         check("the database is created and the empty folder is imported once",
-              storage.get("schema_version") == 3 and migration.get("applied") == [
+              storage.get("schema_version") == 4 and migration.get("applied") == [
                   "0001-schema", "1000-import-library", "1001-import-queue", "0002-drafts",
-                  "0003-projects"] and not migration.get("problems"),
+                  "0003-projects", "0004-stages"] and not migration.get("problems"),
               str(storage)[:300])
         check("a fresh folder has nothing waiting in the queue", storage.get("waiting") == 0, str(storage)[:200])
         check("the database file is where the data folder is", (data / "h3studio.db").exists())

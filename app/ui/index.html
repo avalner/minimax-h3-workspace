@@ -3183,12 +3183,13 @@ setInterval(memSave, 2000);
 addEventListener('beforeunload', memSave);
 afterModules(memRestore);
 
-/* ---------- закладки: сохранить состояние раздела и вернуться к нему позже ---------- */
-const BM = { KEY: 'h3-bookmarks', MODES: ['video', 'lipsync', 'refs', 'actor', 'action', 'long'], MAX: 15 };
-const bmLoad = () => { try { const a = JSON.parse(localStorage.getItem(BM.KEY) || '[]'); return Array.isArray(a) ? a : []; } catch { return []; } };
-const bmStore = list => { try { localStorage.setItem(BM.KEY, JSON.stringify(list)); } catch { toast('Не удалось сохранить закладку: нет места в браузере'); } };
+/* ---------- этапы: сохранённая точка раздела, часть проекта ---------- */
+// The records live in the database (migration 0004) and belong to the project, so the same project
+// shows the same stages after a restart, in another window and on another day. The files a stage was
+// made from stay in this browser's IndexedDB, keyed by the stage id.
+const BM = { MODES: ['video', 'lipsync', 'refs', 'actor', 'action', 'long'], MAX: 15, list: [], loaded: false };
 function bmRender() {
-  const all = bmLoad();
+  const all = BM.list;
   BM.MODES.forEach(m => {
     const bar = $(`#view-${m} .st-bar`); if (!bar) return;
     const mine = all.filter(b => b.mode === m && (PROJECTS_VIEW.all || !b.project || b.project === PROJECTS_VIEW.active))
@@ -3198,6 +3199,44 @@ function bmRender() {
       `<div class="st-i${b.auto ? ' auto' : ''}" data-id="${esc(b.id)}" title="${esc(b.title || '')}"><span class="t">${b.auto ? '↶ ' : ''}${esc(b.name)}</span><small>${fmtDate(new Date(b.date))}</small><i class="x" data-del title="Удалить этап">✕</i></div>`).join('')
       : '<div class="st-empty">Пока нет этапов. Нажмите «Сохранить этап», когда результат вас устраивает: потом к нему можно вернуться.<br><br>Этап запоминает проект целиком: тексты, настройки, референсы и готовые сцены. Не удаляйте клипы из Библиотеки, пока работаете над проектом.</div>';
   });
+}
+async function loadStages() {
+  try { const reply = await apiGet('/api/stages'); BM.list = reply.stages || []; }
+  catch { BM.list = []; }
+  BM.loaded = true;
+  bmRender();
+  await importLegacyStages();
+}
+async function postStage(stage) {
+  const before = BM.list;
+  const reply = await apiPost('/api/stages', stage);
+  BM.list = reply.stages || BM.list;
+  // a stage the server dropped (the ceiling, or the replaced «Было до открытия этапа») takes its
+  // files with it: they live in this browser's IndexedDB, so only the page can clean them up
+  const alive = new Set(BM.list.map(x => x.id));
+  before.filter(x => !alive.has(x.id)).forEach(x => (x.files || []).forEach(k => memFile('delete', `bm/${x.id}/${k}`)));
+  bmRender();
+  return reply.stage;
+}
+/* Older versions kept the stages in localStorage, with their files in IndexedDB under the stage id:
+   upload the records once, then stop reading the browser copy. The files keep working by the same id. */
+async function importLegacyStages() {
+  let old = [];
+  try { old = JSON.parse(localStorage.getItem('h3-bookmarks') || '[]'); } catch {}
+  if (!Array.isArray(old) || !old.length) return;
+  let failed = 0;
+  for (const b of old) {
+    if (!b || !b.mode) continue;
+    try {
+      await postStage({ id: b.id, mode: b.mode, name: b.name, auto: !!b.auto, title: b.title || '',
+                        date: b.date, s: b.s || {}, prompt: b.prompt || '', files: b.files || [],
+                        ...(b.run ? { run: b.run } : {}), ...(b.project ? { project: b.project } : {}) });
+    } catch { failed++; }
+  }
+  if (failed) { toast('Не удалось перенести этапы: ' + failed + '. Записи остались в браузере'); return; }
+  try { localStorage.removeItem('h3-bookmarks'); } catch {}
+  toast('Этапы перенесены в проект');
+  bmRender();
 }
 async function bmSave(mode, opt = {}) {
   if (mode === 'long') return bmSaveLong(opt);
@@ -3212,33 +3251,32 @@ async function bmSave(mode, opt = {}) {
   if (mode === 'lipsync' && MEM.audio) { await memFile('put', `bm/${id}/lipsync/audio`, MEM.audio); files.push('lipsync/audio'); }
   const text = prompt ? prompt.value.trim() : '';
   const name = opt.auto ? 'Было до открытия этапа' : stageName(text);
-  let list = bmLoad();
-  if (opt.auto) list.filter(b => b.mode === mode && b.auto).forEach(old => { (old.files || []).forEach(k => memFile('delete', `bm/${old.id}/${k}`)); list = list.filter(x => x !== old); });
-  const mine = list.filter(b => b.mode === mode && !b.auto);
-  if (!opt.auto && mine.length >= BM.MAX) { const old = mine[0]; list = list.filter(b => b !== old); (old.files || []).forEach(k => memFile('delete', `bm/${old.id}/${k}`)); }
-  list.push({ id, mode, name, auto: !!opt.auto, project: PROJECTS_VIEW.active || undefined,
-              title: text.slice(0, 200), date: new Date().toISOString(), s: JSON.parse(JSON.stringify(o)), prompt: text, files });
-  bmStore(list); bmRender(); if (!opt.auto) toast('Этап сохранён: «' + name + '». Он лежит в списке «Этапы» вверху раздела');
+  // the server replaces the previous «Было до открытия этапа» and keeps the list at its ceiling
+  try {
+    await postStage({ id, mode, name, auto: !!opt.auto, project: PROJECTS_VIEW.active || undefined,
+                      title: text.slice(0, 200), date: new Date().toISOString(),
+                      s: JSON.parse(JSON.stringify(o)), prompt: text, files });
+  } catch (e) { toast('Не удалось сохранить этап: ' + e.message); return; }
+  if (!opt.auto) toast('Этап сохранён: «' + name + '». Он лежит в списке «Этапы» вверху раздела');
 }
 const stageDrop = b => { if (b && b.mode === 'long' && b.run) apiPost('/api/long/stage', { run: b.run, id: b.id, action: 'delete' }).catch(() => {}); };
 const stageName = text => new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) + ' · ' + ((text || '').replace(/\s+/g, ' ').slice(0, 26) || 'без текста') + ((text || '').length > 26 ? '…' : '');
 async function bmSaveLong(opt = {}) {
   const root = $('#view-long'), proj = root && root._snap && root._snap(); if (!proj || !(proj.scenes || []).length) { if (!opt.auto) toast('В проекте пока нет сцен'); return; }
-  let list = bmLoad();
-  const drop = b => { stageDrop(b); list = list.filter(x => x !== b); };
-  if (opt.auto) list.filter(b => b.mode === 'long' && b.auto).forEach(drop);
-  const mine = list.filter(b => b.mode === 'long' && !b.auto); if (!opt.auto && mine.length >= BM.MAX) drop(mine[0]);
   const first = (proj.scenes.find(x => x.prompt && x.prompt.trim()) || {}).prompt || '';
   const done = proj.scenes.filter(x => x.done || x.draftDone).length;
   const name = opt.auto ? 'Было до открытия этапа' : stageName(first) + ` · сцен ${proj.scenes.length}, готово ${done}`;
   const sid = Math.random().toString(36).slice(2, 10);
   try { await apiPost('/api/long/stage', { run: proj.run, id: sid, action: 'save' }); } catch {}   // the continuation points and pictures are copied on the disk
-  list.push({ id: sid, mode: 'long', run: proj.run, name, auto: !!opt.auto, project: PROJECTS_VIEW.active || undefined,
-              title: first.slice(0, 200), date: new Date().toISOString(), s: proj, prompt: first, files: [] });
-  bmStore(list); bmRender(); if (!opt.auto) toast('Этап сохранён: «' + name + '»');
+  try {
+    await postStage({ id: sid, mode: 'long', run: proj.run, name, auto: !!opt.auto,
+                      project: PROJECTS_VIEW.active || undefined, title: first.slice(0, 200),
+                      date: new Date().toISOString(), s: proj, prompt: first, files: [] });
+  } catch (e) { toast('Не удалось сохранить этап: ' + e.message); return; }
+  if (!opt.auto) toast('Этап сохранён: «' + name + '»');
 }
 async function bmOpen(id) {
-  const b = bmLoad().find(x => x.id === id); if (!b) return;
+  const b = BM.list.find(x => x.id === id); if (!b) return;
   goTo(b.mode);
   if (!b.auto) await bmSave(b.mode, { auto: true });   // what is on the screen now is kept too: the opening can be undone with «↶ Было до открытия этапа»
   // a stage belongs to its project: opening it brings that project (and its lists) back first
@@ -3268,11 +3306,15 @@ async function bmOpen(id) {
   if (b.mode === 'video') window.h3Video?.showItem?.(b.s && b.s.shownId);
   toast('Этап открыт: «' + b.name + '»');
 }
-function bmDelete(id) {
-  const list = bmLoad(), b = list.find(x => x.id === id); if (!b) return;
+async function bmDelete(id) {
+  const b = BM.list.find(x => x.id === id); if (!b) return;
   (b.files || []).forEach(k => memFile('delete', `bm/${id}/${k}`));
   stageDrop(b);
-  bmStore(list.filter(x => x.id !== id)); bmRender();
+  try {
+    const reply = await apiSend('/api/stages/' + encodeURIComponent(id), { method: 'DELETE' });
+    BM.list = reply.stages || BM.list.filter(x => x.id !== id);
+  } catch (e) { toast('Не удалось удалить этап: ' + e.message); return; }
+  bmRender();
 }
 BM.MODES.forEach(m => {
   const view = $('#view-' + m); if (!view) return;
@@ -3679,7 +3721,7 @@ function disposeView(id) {
 });
 
 if (API) afterModules(() => {
-  connectEvents(); loadStatus(); loadCloud(); pollSystem(); loadProjects();
+  connectEvents(); loadStatus(); loadCloud(); pollSystem(); loadProjects(); loadStages();
   apiGet('/api/status').then(s => {
     firstRun(!s.configured || !localStorage.getItem('h3-seen-settings'));
     if (!s.configured) { setNavLocked(true); goTo('models'); return; }
@@ -3913,3 +3955,4 @@ requestAnimationFrame(() => document.documentElement.classList.add('booted'));
 <script src="/ui/js/modes/refs.js"></script>
 </body>
 </html>
+

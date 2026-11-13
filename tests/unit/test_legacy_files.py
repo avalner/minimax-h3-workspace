@@ -59,7 +59,7 @@ class LegacyFilesTest(unittest.TestCase):
         self.assertEqual(len(second.pending_resume), 2)
         self.assertEqual(second.migration.applied, [])
         self.assertEqual(second.migration.skipped, ["0001-schema", "1000-import-library", "1001-import-queue",
-                                                    "0002-drafts", "0003-projects"])
+                                                    "0002-drafts", "0003-projects", "0004-stages"])
 
     def test_the_original_files_are_kept(self):
         self.prepare()
