@@ -33,7 +33,7 @@ setTimeout(() => document.documentElement.classList.add('booted'), 1500);
       </div>
       <div><div class="brand-name">Minimax H3</div><div class="brand-sub">Workspace · локальная генерация</div><div class="brand-sub" id="appVer" style="opacity:.75"></div></div>
     </div>
-    <div class="tb-proj" id="tbProj"></div>
+    <div class="tb-row1"><div class="tb-proj" id="tbProj"></div></div>
     <div class="tb-head" id="tbHead"></div>
   </header>
 
@@ -1042,7 +1042,7 @@ function setEngine(on) {
 })();
 /* pinned top bar with every video and image section */
 (function () {
-  const bar = document.createElement('div'); bar.id = 'modeBar'; $('.topbar').appendChild(bar);
+  const bar = document.createElement('div'); bar.id = 'modeBar'; $('.tb-row1').appendChild(bar);
   const SHORT = { video: 'Видео', lipsync: 'Lipsync', refs: 'Референсы', actor: 'Актёр', swap: 'Замена', long: 'Видеостудия', action: 'Экшн', krea: 'Изображение', qwen: 'Правка', inpaint: 'Инпейнт', upfile: 'Увеличить' };
   const GROUPS = [['presets'], ['video', 'lipsync', 'refs', 'actor', 'swap', 'long', 'action'], ['krea', 'qwen', 'inpaint'], ['upfile']];
   function paint() {
