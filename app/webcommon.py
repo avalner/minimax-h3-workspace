@@ -388,6 +388,19 @@ def freshest_long_run(project):
     return ""
 
 
+def long_film_has_work(film):
+    """Whether a film is a work at all: a scene that says something, or a scene that was made.
+
+    Merely opening the Видеостудия is not a film — it puts two empty scenes on the screen, and they
+    must not turn up in «что оставить» when the project is deleted (or be carried into another
+    project as if there were something to keep).
+    """
+    for scene in film.get("scenes") or []:
+        if str((scene or {}).get("prompt") or "").strip() or (scene or {}).get("done") or (scene or {}).get("draftDone"):
+            return True
+    return False
+
+
 def set_long_project(run, project):
     """The film moves to another project: only its label changes, the folder stays where it is."""
     path = LONG_DIR / str(run) / "project.json"

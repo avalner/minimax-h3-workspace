@@ -375,7 +375,14 @@ function makeRefMode(cfg) {
           scenes: $$('.sc', root).map(c => ({ prompt: $('textarea', c).value, sec: +$('input[type=range]', c).value, fresh: !!$('.sc-fresh', c)?.checked, nimg: c._files.length, var: c._var || 0,
             done: c._dn.final ? { sig: c._dn.final.sig, url: c._dn.final.url, id: c._dn.final.id, text: c._dn.final.text } : null,
             draftDone: c._dn.draft ? { sig: c._dn.draft.sig, url: c._dn.draft.url, id: c._dn.draft.id, text: c._dn.draft.text } : null })) };
-        const all = loadAll(); all[run] = proj;
+        const all = loadAll();
+        // An untouched studio is not a film: it starts with two empty scenes, and saving them would
+        // create a record (and a folder) that is later offered as a work to keep. A film that was
+        // saved once keeps being saved even if the scenes are cleared — the record is already there.
+        const hasWork = proj.scenes.some(x => String(x.prompt || '').trim() || x.done || x.draftDone)
+          || $$('.ref.filled', imgsEl).length > 0 || !!(slotA && slotA._file);
+        if (!hasWork && !all[run]) return;
+        all[run] = proj;
         Object.keys(all).sort((a, b) => all[b].t - all[a].t).slice(8).forEach(k => delete all[k]);   // the 8 latest projects
         localStorage.setItem(PKEY, JSON.stringify(all)); localStorage.setItem('h3-long-last', run);
         apiPost('/api/long/project', { run, project: proj }).catch(() => {});

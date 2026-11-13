@@ -7,7 +7,7 @@ Everything here works without aiohttp routes and without the window.
 from webcommon import (
     BIN_PREVIEW, BIN_PREVIEW_META, CLIENT_ID, DATA_DIR, ENGINE_STOP_TIMEOUT, JobStore, LONG_DIR,
     Library, ROOT, SHUTDOWN_BUDGET, STATE_DB, STORE_ERRORS, _ssl_context, comfy_error_text,
-    drop_long_film, long_films, set_long_project
+    drop_long_film, long_film_has_work, long_films, set_long_project
 )
 
 import asyncio
@@ -230,7 +230,8 @@ class App(StatusRoutes, ModelRoutes, JobRoutes, LibraryRoutes, LoraRoutes, Agent
                        "done": sum(1 for scene in (f.get("scenes") or [])
                                    if scene.get("done") or scene.get("draftDone")),
                        "saved": f.get("saved")}
-                      for f in long_films() if str(f.get("project") or "") == pid],
+                      for f in long_films()
+                      if str(f.get("project") or "") == pid and long_film_has_work(f)],
         }
 
     @staticmethod

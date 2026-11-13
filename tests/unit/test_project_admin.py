@@ -60,11 +60,14 @@ class AdminCase(unittest.IsolatedAsyncioTestCase):
         path.write_bytes(b"frame")
         return stage, path
 
-    def film(self, run, project=None, scenes=2):
+    def film(self, run, project=None, scenes=None, empty=False):
         folder = LONG_DIR / run
         folder.mkdir(parents=True, exist_ok=True)
-        record = {"run": run, "project": project or self.other["id"], "t": 1,
-                  "scenes": [{"prompt": f"сцена {i}", "sec": 10} for i in range(scenes)]}
+        if isinstance(scenes, list):
+            made = scenes
+        else:
+            made = [{"prompt": "" if empty else f"сцена {i}", "sec": 10} for i in range(scenes or 2)]
+        record = {"run": run, "project": project or self.other["id"], "t": 1, "scenes": made}
         (folder / "project.json").write_text(json.dumps(record), encoding="utf-8")
         return record, folder
 
@@ -135,6 +138,19 @@ class AssetsTest(AdminCase):
         self.assertEqual([x["id"] for x in json.loads(reply.text)["library"]], ["lib-a"])
         with self.assertRaises(web.HTTPNotFound):
             await self.app.h_project_assets(support.Req(match_info={"id": "gone"}))
+
+    async def test_a_film_with_nothing_in_it_is_not_offered_to_keep(self):
+        """Opening the studio puts two empty scenes on the screen; that is not a film of the project."""
+        self.film("opened", empty=True)
+        self.film("real")
+        listed = sorted(x["run"] for x in self.app.project_assets(self.other["id"])["films"])
+        self.assertEqual(listed, ["real"])
+
+    async def test_a_film_counts_as_a_work_when_a_scene_was_made(self):
+        self.film("made", scenes=[{"prompt": "", "sec": 10, "done": {"id": "m1", "url": "/x"}}])
+        self.film("typed", scenes=[{"prompt": "  ", "sec": 10}, {"prompt": "герой идёт", "sec": 10}])
+        listed = sorted(x["run"] for x in self.app.project_assets(self.other["id"])["films"])
+        self.assertEqual(listed, ["made", "typed"])
 
 
 class DeleteTest(AdminCase):
@@ -231,6 +247,12 @@ class DeleteTest(AdminCase):
         self.library_item("a")
         reply = await self.app.h_project_delete(support.Req({}, match_info={"id": self.other["id"]}))
         self.assertEqual(json.loads(reply.text)["deleted"]["library"], ["lib-a"])
+
+    async def test_an_untouched_film_goes_with_the_project_without_being_offered(self):
+        _, folder = self.film("opened", empty=True)
+        reply = await self.app.h_project_delete(support.Req(match_info={"id": self.other["id"]}))
+        self.assertEqual(json.loads(reply.text)["deleted"]["films"], ["opened"])
+        self.assertFalse(folder.exists())
 
 
 if __name__ == "__main__":

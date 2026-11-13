@@ -573,6 +573,12 @@ async def run_page(base: str, browser: str, shots: Path):
                                 own: root._project, newFilm: root._run !== runA,
                                 scenes: [...document.querySelectorAll('#view-long .sc textarea')]
                                   .map(t => t.value) };
+                      // a studio that was only opened is not a film: nothing for the delete dialog to offer
+                      await wait(1100);
+                      out.b.filmRecord = Object.keys(await (await fetch(
+                        '/api/long/project?project=' + out.b.project)).json()).length;
+                      out.b.offered = ((await (await fetch(
+                        '/api/projects/' + out.b.project + '/assets')).json()).films || []).length;
                       // and back: the film of this project opens again with its text
                       document.querySelector('#projCur').click();
                       const back = [...document.querySelectorAll('.proj-item')]
@@ -611,6 +617,8 @@ async def run_page(base: str, browser: str, shots: Path):
                       film["b"]["newFilm"] and film["b"]["project"] != film["pA"]
                       and film["b"]["own"] == film["b"]["project"]
                       and [s for s in film["b"]["scenes"] if s.strip()] == [], str(film["b"]))
+                check("an opened but untouched studio is not a film to keep",
+                      film["b"]["filmRecord"] == 0 and film["b"]["offered"] == 0, str(film["b"]))
                 check("coming back to a project opens its film again, with its scenes",
                       film["back"]["run"] == film["runA"] and film["back"]["own"] == film["pA"]
                       and (film["back"]["scenes"] or [""])[0] == "ФИЛЬМ А", str(film["back"]))
