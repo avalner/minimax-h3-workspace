@@ -1959,8 +1959,9 @@ let PD_CARD = null;   // the asset whose card is open over the picker
 const pdItems = () => PD ? PD_GROUPS.flatMap(([group]) =>
   (PD.assets[group] || []).map(it => ({ group, it, key: group + ':' + (group === 'films' ? it.run : it.id) }))) : [];
 const pdByKey = key => pdItems().find(x => x.key === key) || null;
+/* the badge says what the thing is, not where it is: a draft is a draft because of its group */
 const pdBadge = (group, it) => group === 'stages' ? 'этап' : group === 'films' ? 'фильм'
-  : group === 'drafts' ? 'черновик' : it.kind === 'image' ? 'картинка' : 'клип';
+  : it.kind === 'image' ? 'картинка' : 'видео';
 function pdCaption(group, it) {
   if (group === 'stages') return `${MODE_NAME[it.mode] || it.mode || 'раздел'} · ${it.name}`;
   if (group === 'films') return `сцен ${it.scenes} · готово ${it.done}`;
