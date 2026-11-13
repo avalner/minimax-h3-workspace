@@ -26,6 +26,9 @@ let REF_FUSED_CHECK = null;   // the references section re-checks its optional m
 function makeRefMode(cfg) {
   const root = $('#view-' + cfg.mode);
   const S = { aspect: '16:9', q: 'HD+', dur: cfg.dur, steps: 6, refSize: 'max', accel: 'old', unet: 'fast', len: () => S.dur };
+  // this section writes its own markup, while the stage bar («＋ Сохранить этап» / «Этапы ▾») is the
+  // page's and was put there before this module was loaded: keep it, or the section loses its stages
+  const stBar = $('.st-bar', root);
   root.innerHTML = `
     <div class="head"><div><h1>${cfg.title}</h1><p>${cfg.sub}</p></div><div class="mode-pill"><i></i><span class="rm-pill">${cfg.pill}</span></div></div>
     <div class="grid"><div class="col">
@@ -46,6 +49,7 @@ function makeRefMode(cfg) {
       </div>
       <div class="card rm-params"></div>
     </div><div class="preview rm-preview"></div></div>`;
+  if (stBar) root.prepend(stBar);   // the section's stages stay above its own markup
   const imgsEl = $('.rm-imgs', root), vidsEl = $('.rm-vids', root), audsEl = $('.rm-auds', root);
 
   // picture slots (same behaviour as Lipsync)

@@ -3187,7 +3187,9 @@ afterModules(memRestore);
 // The records live in the database (migration 0004) and belong to the project, so the same project
 // shows the same stages after a restart, in another window and on another day. The files a stage was
 // made from stay in this browser's IndexedDB, keyed by the stage id.
-const BM = { MODES: ['video', 'lipsync', 'refs', 'actor', 'action', 'long'], MAX: 15, list: [], loaded: false };
+// «Замена персонажа» is a section of the refs family (`window.RM.swap`), so its state and its slots
+// (`swap/img*`, `swap/vid*`) are already covered by `memStates()` and `memSlots()`.
+const BM = { MODES: ['video', 'lipsync', 'refs', 'actor', 'swap', 'action', 'long'], MAX: 15, list: [], loaded: false };
 function bmRender() {
   const all = BM.list;
   BM.MODES.forEach(m => {

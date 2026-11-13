@@ -342,6 +342,32 @@ async def run_page(base: str, browser: str, shots: Path):
                       and stage["bytes"] == [1, 2, 3] and stage["type"] == "image/png"
                       and stage["gone"] == 404, str(stage))
 
+                # «Замена персонажа» used to have no stages at all: its state and slots are already in
+                # the refs family's maps, so the section only had to join the list of sections with a bar
+                swap_stage = await cdp.evaluate("""
+                    (async () => {
+                      const wait = ms => new Promise(r => setTimeout(r, ms));
+                      document.querySelector('.nav[data-view="swap"]').click();
+                      await wait(300);
+                      const bar = document.querySelector('#view-swap .st-bar');
+                      const out = { bar: !!bar, save: !!(bar && bar.querySelector('.st-save')),
+                                    n0: bar ? bar.querySelector('.st-n').textContent : null };
+                      bar.querySelector('.st-save').click();      // the section's own button, not postStage
+                      await wait(1000);
+                      const mine = (await (await fetch('/api/stages')).json()).stages.filter(s => s.mode === 'swap');
+                      out.mode = mine.length ? mine[0].mode : '';
+                      out.n1 = document.querySelector('#view-swap .st-bar .st-n')?.textContent;
+                      out.item = (document.querySelector('#view-swap .st-bar .st-i') || {}).textContent || '';
+                      if (mine.length) await window.bmDelete(mine[0].id);
+                      out.n2 = document.querySelector('#view-swap .st-bar .st-n')?.textContent;
+                      return out;
+                    })()
+                """, await_promise=True)
+                check("«Замена персонажа» has stages of its own: save, list, delete",
+                      swap_stage["bar"] and swap_stage["save"] and swap_stage["mode"] == "swap"
+                      and swap_stage["n0"] == "0" and swap_stage["n1"] == "1"
+                      and swap_stage["n2"] == "0" and swap_stage["item"].strip() != "", str(swap_stage))
+
                 # the previous version kept stages in localStorage: on the first start of this one
                 # they are uploaded to the active project and the browser copy is dropped
                 await cdp.evaluate(
