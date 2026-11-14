@@ -1,4 +1,4 @@
-"""Minimax H3 Workspace local server: the composition root.
+"""AI Video Studio local server: the composition root.
 
 Builds the application object (`application.App`), lists every route the window and the agent
 API use, and starts aiohttp on the loopback address. The handlers live in `routes/`, the
@@ -190,7 +190,7 @@ def main():
     if not instance.acquire(DATA_DIR):
         other = instance.published(DATA_DIR) or {}
         where = other.get("url") or (f"http://127.0.0.1:{other['port']}" if other.get("port") else "")
-        print("Minimax H3 Workspace уже запущена с этой папкой данных: " + str(DATA_DIR)
+        print("AI Video Studio уже запущена с этой папкой данных: " + str(DATA_DIR)
               + (f"\nОткрытая программа: {where}" if where else ""))
         return 3   # one folder, one copy: a second one would resume the same queue
     try:
@@ -200,7 +200,7 @@ def main():
             async def open_browser(_app):
                 asyncio.get_running_loop().call_later(1, webbrowser.open, f"http://127.0.0.1:{args.port}")
             app.on_startup.append(open_browser)
-        web.run_app(app, host="127.0.0.1", port=args.port, print=lambda *_: print(f"Minimax H3 Workspace: http://127.0.0.1:{args.port}"))
+        web.run_app(app, host="127.0.0.1", port=args.port, print=lambda *_: print(f"AI Video Studio: http://127.0.0.1:{args.port}"))
     finally:
         instance.release()
     return 0

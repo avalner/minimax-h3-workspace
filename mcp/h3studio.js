@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * MCP (Model Context Protocol) stdio server for Minimax H3 Workspace.
+ * MCP (Model Context Protocol) stdio server for AI Video Studio.
  * Dependency-free: newline-delimited JSON-RPC 2.0 over stdin/stdout.
  *
  * It does not render anything itself: it talks to the running app over its local
@@ -30,7 +30,7 @@ const path = require('node:path');
 
 const SERVER_INFO = { name: 'h3studio', version: '1.0.0' };
 const INSTRUCTIONS = [
-  'Minimax H3 Workspace on this computer: local image-to-video with MiniMax H3 through the user\'s own app window.',
+  'AI Video Studio on this computer: local image-to-video with MiniMax H3 through the user\'s own app window.',
   'The app must be running (its window or its server), and "Settings -> Агенты" must be on.',
   'Flow: studio_status -> studio_capabilities -> studio_asset (a frame) -> studio_image_to_video -> studio_wait (repeat, up to 120 s per call) -> the clip path comes back.',
   'A render takes minutes: studio_image_to_video returns at once with a job id, so poll with studio_wait instead of starting the job again. Pass idempotency_key when a retry is possible.',
@@ -57,7 +57,7 @@ function target() {
     data = JSON.parse(fs.readFileSync(file, 'utf8'));
   } catch {
     throw new Error(
-      `Minimax H3 Workspace is not running: ${file} is missing. ` +
+      `AI Video Studio is not running: ${file} is missing. ` +
         'Open the app (its window), then try again — the file appears by itself at start.',
     );
   }
@@ -299,7 +299,7 @@ const TOOLS = [
   {
     name: 'studio_status',
     description:
-      'Is Minimax H3 Workspace running and which instance/port. Call it first: every other tool needs the app open.',
+      'Is AI Video Studio running and which instance/port. Call it first: every other tool needs the app open.',
     inputSchema: { type: 'object', properties: {} },
   },
   {

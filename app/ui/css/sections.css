@@ -142,7 +142,7 @@
 .a-btnrow .btn{padding:9px 13px}
 .a-btnrow .btn:disabled{opacity:.45;cursor:default}
 .refs{display:grid;grid-template-columns:repeat(auto-fill,minmax(118px,1fr));gap:10px}
-.nav.sub{display:none!important}
+.nav-children .nav.sub{display:flex;padding:9px 10px;font-size:12.5px}
 /* refs & action */
 /* reference videos / audios: small squares, video and audio side by side */
 .rm-media{display:flex;flex-wrap:wrap;gap:6px 28px;align-items:flex-start}

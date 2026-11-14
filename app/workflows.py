@@ -1,4 +1,4 @@
-"""ComfyUI API graphs for Minimax H3 Workspace modes.
+"""ComfyUI API graphs for AI Video Studio modes.
 
 Each builder returns (graph, stages): the API-format prompt and a map
 node_id -> UI stage name, so progress can be shown in plain words.

@@ -1,5 +1,5 @@
 @echo off
-rem Minimax H3 Workspace - run from sources (window mode).
+rem AI Video Studio - run from sources (window mode).
 rem Needs Python 3.10+ on this computer and a ComfyUI server at http://127.0.0.1:8188.
 rem
 rem "python" is not always on PATH: the Microsoft Store installs it as an alias that Windows can

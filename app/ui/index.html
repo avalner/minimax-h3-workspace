@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Minimax H3 Workspace</title>
+<title>AI Video Studio</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
 <script>
@@ -33,7 +33,7 @@ setTimeout(() => document.documentElement.classList.add('booted'), 1500);
       <div class="brand-mark">
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M3 12h2M7 7v10M11 4v16M15 8v8M19 10v4M21 12h0"/></svg>
       </div>
-      <div><div class="brand-name">Minimax H3</div><div class="brand-sub">Workspace · локальная генерация</div><div class="brand-sub" id="appVer" style="opacity:.75"></div></div>
+      <div><div class="brand-name">AI Video Studio</div><div class="brand-sub">Локальная генерация</div><div class="brand-sub" id="appVer" style="opacity:.75"></div></div>
     </div>
     <div class="tb-row1"><div class="tb-proj" id="tbProj"></div></div>
     <div class="tb-head" id="tbHead"></div>
@@ -50,6 +50,9 @@ setTimeout(() => document.documentElement.classList.add('booted'), 1500);
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.8 4.2L18 9l-4.2 1.8L12 15l-1.8-4.2L6 9l4.2-1.8z"/><path d="M19 15l.8 1.9 1.9.8-1.9.8L19 20.4l-.8-1.9-1.9-.8 1.9-.8z" opacity=".6"/></svg>
       Агент
     </button>
+    <details class="nav-group" id="navVideo" open>
+      <summary class="nav"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="13" height="14" rx="2"/><path d="m16 10 5-3v10l-5-3"/></svg><span>Видео</span><span class="nav-chevron" aria-hidden="true">›</span></summary>
+      <div class="nav-children">
     <button class="nav sub active" data-view="video">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="13" height="14" rx="2"/><path d="m16 10 5-3v10l-5-3"/></svg>
       Image-to-Video
@@ -83,6 +86,15 @@ setTimeout(() => document.documentElement.classList.add('booted'), 1500);
       Экшн-видеостудия
     </button>
 
+    <button class="nav sub" data-view="upfile">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M20 4l-7 7M10 20H4v-6M4 20l7-7"/></svg>
+      Увеличить
+    </button>
+      </div>
+    </details>
+    <details class="nav-group" id="navImage">
+      <summary class="nav"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="1.6"/><path d="m21 16-5-5L6 20"/></svg><span>Изображение</span><span class="nav-chevron" aria-hidden="true">›</span></summary>
+      <div class="nav-children">
     <button class="nav sub" data-view="krea">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="1.6"/><path d="m21 16-5-5L6 20"/></svg>
       Изображение по тексту
@@ -92,6 +104,8 @@ setTimeout(() => document.documentElement.classList.add('booted'), 1500);
       Редактирование изображений
     </button>
 
+      </div>
+    </details>
     <button class="nav" data-view="custom" id="navCustom" hidden>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><path d="M10 6.5h4a3 3 0 0 1 3 3V14"/></svg>
       Свои workflow
@@ -109,10 +123,6 @@ setTimeout(() => document.documentElement.classList.add('booted'), 1500);
     <button class="nav" data-view="montage">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="6" height="14" rx="1.5"/><rect x="9" y="5" width="6" height="14" rx="1.5"/><rect x="16" y="5" width="6" height="14" rx="1.5"/></svg>
       Монтаж
-    </button>
-    <button class="nav sub" data-view="upfile">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M20 4l-7 7M10 20H4v-6M4 20l7-7"/></svg>
-      Увеличение видео и фото
     </button>
     <button class="nav" data-view="models" title="Здесь выбирается, как работает программа: «Я новичок» или «У меня уже есть ComfyUI», а также модели и файлы">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8 12 3 3 8l9 5 9-5Z"/><path d="m3 13 9 5 9-5M3 18l9 5 9-5" opacity=".5"/></svg>
@@ -1072,31 +1082,18 @@ function setEngine(on) {
   try { if (localStorage.getItem('h3-sb-hidden')) app.classList.add('nosb'); } catch {}
   paint();
 })();
-/* pinned top bar with every video and image section */
-(function () {
-  const bar = document.createElement('div'); bar.id = 'modeBar'; $('.tb-row1').appendChild(bar);
-  const SHORT = { video: 'Видео', lipsync: 'Lipsync', refs: 'Референсы', actor: 'Актёр', swap: 'Замена', long: 'Видеостудия', action: 'Экшн', actionsc: 'Экшн-студия', krea: 'Изображение', imgedit: 'Редактирование', upfile: 'Увеличить' };
-  const GROUPS = [['presets'], ['video', 'lipsync', 'refs', 'actor', 'swap', 'long', 'action', 'actionsc'], ['krea', 'imgedit'], ['upfile']];
-  function paint() {
-    const view = ($('.view.active')?.id || '').replace('view-', '');
-    // the task screens of the editor have no button of their own: they belong to «Редактирование»
-    const cur = view === 'qwen' || view === 'inpaint' ? 'imgedit' : view;
-    let html = '';
-    GROUPS.forEach(g => {
-      const part = g.map(v => {
-        const n = $(`.nav[data-view="${v}"]`); if (!n || n.hidden) return '';
-        return `<button type="button" class="mb${v === cur ? ' on' : ''}" data-go="${v}" title="${n.textContent.trim().replace(/["<>&]/g, '')}">${n.querySelector('svg')?.outerHTML || ''}${v === 'presets' ? 'Главная' : SHORT[v]}</button>`;
-      }).join('');
-      if (part) html += (html ? '<i class="mb-sep"></i>' : '') + part;
-    });
-    if (bar.innerHTML !== html) bar.innerHTML = html;
-    const on = bar.querySelector('.on'); if (on && on.offsetLeft + on.offsetWidth > bar.scrollLeft + bar.clientWidth) bar.scrollLeft = on.offsetLeft - 20;
-  }
-  bar.addEventListener('click', e => { const b = e.target.closest('[data-go]'); if (b) goTo(b.dataset.go); });
-  new MutationObserver(paint).observe($('.main'), { attributes: true, attributeFilter: ['class'], subtree: true });
-  new MutationObserver(paint).observe($('aside') || document.body, { attributes: true, attributeFilter: ['hidden', 'class'], subtree: true });
-  paint();
-})();
+/* Keep the selected mode visible when opened from the library or home. */
+function syncNavGroups() {
+  const view = ($('.view.active')?.id || '').replace('view-', '');
+  const mode = view === 'qwen' || view === 'inpaint' ? 'imgedit' : view;
+  $$('.nav-group').forEach(group => {
+    const active = !!group.querySelector(`.nav[data-view="${mode}"]`);
+    group.querySelector('summary').classList.toggle('active', active);
+    if (active) group.open = true;
+  });
+}
+new MutationObserver(syncNavGroups).observe($('.main'), { attributes: true, attributeFilter: ['class'], subtree: true });
+syncNavGroups();
 let SQ_ASKED = false;
 async function askSavedQueue() {
   if (SQ_ASKED) return; SQ_ASKED = true;
@@ -1216,7 +1213,7 @@ let navByUser = false;
 $$('.nav[data-view]').forEach(b => b.onclick = () => {
   navByUser = true;
   if (b.dataset.view !== 'custom') { try { localStorage.setItem('h3-last-view', b.dataset.view); } catch {} }   // the program opens on the page where the user was last
-  $$('.nav').forEach(n => n.classList.toggle('active', n === b || (b.classList.contains('sub') && n.dataset.view === 'presets')));   // a section opened from the start page keeps it lit
+  $$('.nav').forEach(n => n.classList.toggle('active', n === b));   // highlight the selected mode within its group
   $$('.view').forEach(v => v.classList.toggle('active', v.id === 'view-' + b.dataset.view));
   window.h3Modes?.activate(b.dataset.view);   // the section that was open gives back what it started
 });

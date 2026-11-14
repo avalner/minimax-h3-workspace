@@ -14,12 +14,12 @@ VSVersionInfo(
   kids=[
     StringFileInfo([
       StringTable('040904B0', [
-        StringStruct('CompanyName', 'Minimax H3 Workspace'),
-        StringStruct('FileDescription', 'Minimax H3 Workspace - video generation workspace'),
+        StringStruct('CompanyName', 'AI Video Studio'),
+        StringStruct('FileDescription', 'AI Video Studio - video generation workspace'),
         StringStruct('FileVersion', '{_v[0]}.{_v[1]}.{_v[2]}.0'),
         StringStruct('InternalName', 'MinimaxH3Workspace'),
         StringStruct('OriginalFilename', 'MinimaxH3Workspace.exe'),
-        StringStruct('ProductName', 'Minimax H3 Workspace'),
+        StringStruct('ProductName', 'AI Video Studio'),
         StringStruct('ProductVersion', '{_v[0]}.{_v[1]}.{_v[2]}'),
         StringStruct('LegalCopyright', 'Open source'),
       ])

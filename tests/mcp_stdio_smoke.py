@@ -2,7 +2,7 @@
 """Smoke test of the MCP server (mcp/h3studio.js): protocol, tools, and — optionally — a real render.
 
 The server is a plain stdio MCP server, so it can be driven directly, without DSH:
-it talks to the running Minimax H3 Workspace app through its agent API.
+it talks to the running AI Video Studio app through its agent API.
 
     python tests/mcp_stdio_smoke.py                 # protocol and tools that do not render
     python tests/mcp_stdio_smoke.py --render        # also starts a 3 s 480p job and waits for it

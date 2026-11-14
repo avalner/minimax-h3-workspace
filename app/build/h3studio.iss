@@ -1,5 +1,5 @@
 ﻿; Inno Setup script: ISCC.exe app\build\h3studio.iss  (after the PyInstaller build)
-#define AppName "Minimax H3 Workspace"
+#define AppName "AI Video Studio"
 #define AppVersion "1.1.13"
 #define AppExe "MinimaxH3Workspace.exe"
 
@@ -8,7 +8,8 @@ AppId={{6B0E3C1E-5D7A-4C64-9A0B-7E2B1C9F4A31}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppPublisher={#AppName}
-DefaultDirName={localappdata}\Programs\{#AppName}
+; Keep the existing install location so upgrades retain settings and data.
+DefaultDirName={localappdata}\Programs\Minimax H3 Workspace
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 ; always show the folder page (by default Inno skips it on a re-install and silently reuses the old folder)

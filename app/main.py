@@ -1,4 +1,4 @@
-"""Minimax H3 Workspace desktop entry point: runs the local server and shows it in its own window.
+"""AI Video Studio desktop entry point: runs the local server and shows it in its own window.
 
 Falls back to the default browser if the WebView2 window cannot be created.
 """
@@ -105,7 +105,7 @@ def start_failed(text):
                "\n\nЕсли это повторяется, пришлите этот текст автору (раздел «Помощь»).")
     try:
         import ctypes
-        ctypes.windll.user32.MessageBoxW(0, message, "Minimax H3 Workspace", 0x10)
+        ctypes.windll.user32.MessageBoxW(0, message, "AI Video Studio", 0x10)
     except Exception:
         print(message, file=sys.stderr)
 
@@ -196,13 +196,13 @@ def already_running():
     """The program is open already: say so, and let this copy close itself."""
     other = instance.published(server.DATA_DIR) or {}
     url = other.get("url") or (f"http://127.0.0.1:{other['port']}" if other.get("port") else "")
-    text = ("Minimax H3 Workspace уже запущена.\n\n"
+    text = ("AI Video Studio уже запущена.\n\n"
             "Одна папка данных не может обслуживаться двумя копиями: вторая запустила бы те же "
             "незавершённые задания заново, а библиотека и настройки перезаписывались бы друг другом."
             + (f"\n\nОткрытая программа: {url}" if url else ""))
     try:
         import ctypes
-        ctypes.windll.user32.MessageBoxW(0, text, "Minimax H3 Workspace", 0x40)
+        ctypes.windll.user32.MessageBoxW(0, text, "AI Video Studio", 0x40)
     except Exception:
         print(text)
 
@@ -241,7 +241,7 @@ def _run_window():
                 0, "Не найден компонент Windows «Microsoft Edge WebView2», он рисует окно программы.\n\n"
                    "Скачайте и установите «WebView2 Runtime» (бесплатно, с сайта Microsoft: microsoft.com/edge/webview2), "
                    "затем запустите программу снова.\n\nПока программа откроется в обычном браузере.",
-                "Minimax H3 Workspace", 0x40)
+                "AI Video Studio", 0x40)
         except Exception:
             pass
 
@@ -260,7 +260,7 @@ def _run_window():
         except Exception:
             pass
         api = JsApi(port)
-        api._window = webview.create_window("Minimax H3 Workspace", url, width=1440, height=920, min_size=(1000, 680), maximized=True,   # opens on the whole screen (the taskbar stays visible)
+        api._window = webview.create_window("AI Video Studio", url, width=1440, height=920, min_size=(1000, 680), maximized=True,   # opens on the whole screen (the taskbar stays visible)
                                            background_color="#12070a", js_api=api,
                                            draggable=True)  # pywebview blocks dragging of every picture by default; the app drags pictures into slots
         # watchdog for a half-broken WebView2 (e.g. Edge removed by hand): the version check above passes,
@@ -282,7 +282,7 @@ def _run_window():
                            "Да — открыть интерфейс в обычном браузере (так можно работать прямо сейчас)\n"
                            "Нет — закрыть программу\n\n"
                            "Чтобы окно работало как положено, установите WebView2 Runtime: microsoft.com/edge/webview2",
-                        "Minimax H3 Workspace", 0x40 | 0x4)
+                        "AI Video Studio", 0x40 | 0x4)
                     if r == 6:
                         state["browser"] = True
                         webbrowser.open(url)

@@ -114,7 +114,7 @@ def build(info):
     def sec(title):
         L.extend(["", "=== " + title + " ==="])
 
-    L.append("ОТЧЁТ ДЛЯ РАЗРАБОТЧИКА — Minimax H3 Workspace")
+    L.append("ОТЧЁТ ДЛЯ РАЗРАБОТЧИКА — AI Video Studio")
     L.append("Создан: " + datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
     sec("ПРИЛОЖЕНИЕ")

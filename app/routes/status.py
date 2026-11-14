@@ -314,7 +314,15 @@ class StatusRoutes:
         return ws
 
     async def h_index(self, _req):
-        return web.FileResponse(UI_DIR / "index.html", headers={"Cache-Control": "no-store"})
+        return await self._ui_code(UI_DIR / "index.html", UI_TYPES[".html"])
+
+    @staticmethod
+    async def _ui_code(path, content_type):
+        # FileResponse can return 304 for a browser's cached copy. Always send
+        # current UI code, even when reload carries old conditional headers.
+        data = await asyncio.to_thread(path.read_bytes)
+        return web.Response(body=data, headers={"Content-Type": content_type,
+                                               "Cache-Control": "no-store"})
 
     async def h_ui(self, req):
         """A file of the window (`/ui/...`) with its own content type; nothing outside these types."""
@@ -326,4 +334,6 @@ class StatusRoutes:
         content_type = UI_TYPES.get(path.suffix.lower())
         if content_type is None:
             raise web.HTTPNotFound()
+        if path.suffix.lower() in {".html", ".css", ".js", ".json"}:
+            return await self._ui_code(path, content_type)
         return web.FileResponse(path, headers={"Content-Type": content_type, "Cache-Control": "no-cache"})
