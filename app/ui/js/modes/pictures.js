@@ -33,6 +33,11 @@ const h3Size = (aspect, mp) => {
   return [r(Math.sqrt(px * aw / ah)), r(Math.sqrt(px * ah / aw))];
 };
 const h3Mp = v => (H3IMG_MPS.includes(String(v)) ? String(v) : '8');
+/* The active section's header is moved into the top bar («one header for the whole window», index.html), so a pill
+   lives in its own section only while that section is away. It is optional on purpose: the paint goes on without it,
+   and a missing pill used to throw in the middle of `upd()` — the panel switch of the character sheet sat after it
+   and never moved to «6 панелей», while the header stayed out of reach. */
+const imgPill = root => $('.mode-pill span', root) || (root.classList.contains('active') ? $('#tbHead .mode-pill span') : null);
 // ComfyUI 0.45 is the first with MiniMaxH3ImageConditioning: an older engine cannot run this model at all
 const comfyTooOld = v => {
   const m = /^(\d+)\.(\d+)/.exec(String(v || ''));
@@ -299,7 +304,8 @@ function buildKrea(scope) {
     $$('.kr-eng button', root).forEach(b => b.classList.toggle('on', b.dataset.e === S.engine));
     $('.kr-stylerow', root).hidden = S.engine !== 'krea'; $('.kr-neg', root).hidden = S.engine !== 'qwen';
     $('.kr-h3hint', root).hidden = !h3;
-    $('.mode-pill span', root).textContent = h3 ? `MiniMax-H3-Image · ${S.mp} МП`
+    const pill = imgPill(root);
+    if (pill) pill.textContent = h3 ? `MiniMax-H3-Image · ${S.mp} МП`
       : { krea: 'Krea 2 · 1 МП', flux: 'FLUX.2 klein · 1 МП', qwen: 'Qwen Image 2.1 · 1 МП' }[S.engine];
   };
   const H3_FILE_HINT = 'Положите в папки моделей вашего ComfyUI: minimax_h3_image_pruned_w4a8.safetensors (diffusion_models), minimax_h3_image_vae_fp16.safetensors (vae) и энкодер qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors (text_encoders). Потом обновите раздел «Модели». Для этой модели нужен ComfyUI 0.45 или новее.';
@@ -665,7 +671,8 @@ function buildQwen(scope) {
     $$('.qw-head button', root).forEach(b => b.classList.toggle('on', (b.dataset.h === '1') === S.headless));
     $$('.qw-bg button', root).forEach(b => b.classList.toggle('on', b.dataset.b === S.bg));
     $$('.qw-eng button', root).forEach(b => b.classList.toggle('on', b.dataset.e === S.engine));
-    $('.mode-pill span', root).textContent = { qwen: 'Qwen Image 2.1', flux: 'FLUX.2 klein',
+    const pill = imgPill(root);
+    if (pill) pill.textContent = { qwen: 'Qwen Image 2.1', flux: 'FLUX.2 klein',
       h3img: `MiniMax-H3-Image · ${S.mp} МП` }[S.engine];
     $$('.qw-pn button', root).forEach(b => b.classList.toggle('on', +b.dataset.p === S.panels));
     if (S.kind === 'sheet') {
@@ -754,7 +761,13 @@ function buildQwen(scope) {
     const sub = String(it.sub || '');
     if (sub.startsWith('Раскадровка по кадрам')) S.frames = true; else if (sub.startsWith('Раскадровка')) S.frames = false;
     if (it.kind === 'story' || sub.startsWith('Раскадровка')) { S.kind = 'story'; $('.qw-prompt', root).value = it.prompt || ''; }
-    else if (sub === 'Лист персонажа') S.kind = 'sheet';
+    else if (sub === 'Лист персонажа') {   // the number of panels is not a field of the job: the prompt says it
+      S.kind = 'sheet';
+      const p = String(it.prompt || '');
+      S.panels = /6\s*панел/i.test(p) ? 6 : 4;
+      const marks = /:\s*(.+)$/.exec(p);   // «Лист персонажа (6 панелей): жёлтые очки» keeps its own marks
+      $('.qw-marks', root).value = marks ? marks[1].trim() : '';
+    }
     else if (sub === 'Убрать фон') S.kind = 'bg';
     else if (sub.startsWith('Расширение')) { S.kind = 'outpaint'; $('.qw-prompt', root).value = outText(it.prompt); }
     else { S.kind = 'edit'; $('.qw-prompt', root).value = it.prompt || ''; }

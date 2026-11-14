@@ -822,6 +822,32 @@ async def run_page(base: str, browser: str, shots: Path):
                 check("the way back leads to the cards", back_home and back_home["toHub"] == "view-imgedit", str(back_home))
                 check("the inpaint card opens the inpaint screen", back_home and back_home["inpaint"] == "view-inpaint", str(back_home))
 
+                # The character sheet: its screen switches between four and six panels, and the panel
+                # count drives the shape of the preview. The section's header (with the model pill) has
+                # already been moved to the top bar by then: a lookup that searched only the section threw
+                # in the middle of the paint, and the switch stayed on four panels for good.
+                sheet = await cdp.evaluate(
+                    "(() => { document.querySelector('#view-imgedit [data-task=\"sheet\"]').click();"
+                    " const q = document.querySelector('#view-qwen'), n = (q.querySelector('.qw-prev .ip-frame') || {}).style;"
+                    " const ratio = () => (n ? n.aspectRatio : '');"
+                    " const out = {kind: (q.querySelector('.qw-kind button.on') || {}).dataset?.k || '',"
+                    "  pill: (document.querySelector('#tbHead .mode-pill span') || {}).textContent || '',"
+                    "  four: !!q.querySelector('.qw-pn button[data-p=\"4\"].on'), ratio4: ratio()};"
+                    " q.querySelector('.qw-pn button[data-p=\"6\"]').click();"
+                    " out.six = !!q.querySelector('.qw-pn button[data-p=\"6\"].on');"
+                    " out.fourAfter = !!q.querySelector('.qw-pn button[data-p=\"4\"].on');"
+                    " out.ratio6 = ratio();"
+                    " q.querySelector('.qw-pn button[data-p=\"4\"]').click();"
+                    " out.back = !!q.querySelector('.qw-pn button[data-p=\"4\"].on');"
+                    " out.ratioBack = ratio();"
+                    " return out; })()")
+                check("the character sheet opens from its card as a four-panel sheet",
+                      sheet and sheet["kind"] == "sheet" and sheet["four"] and sheet["ratio4"] == "1920 / 1088"
+                      and "Qwen" in sheet["pill"], str(sheet))
+                check("«6 панелей» switches the sheet and widens the preview, and «4 панели» brings it back",
+                      sheet and sheet["six"] and not sheet["fourAfter"] and sheet["ratio6"] == "2112 / 960"
+                      and sheet["back"] and sheet["ratioBack"] == "1920 / 1088", str(sheet))
+
                 # The lipsync editor is a module too, but its audio lives outside the panel: a
                 # generated WAV goes through the same `loadAudio` the page's restore uses.
                 lips = await cdp.evaluate(
