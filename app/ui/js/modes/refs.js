@@ -746,6 +746,7 @@ function makeRefMode(cfg) {
       colL.append(modeRow, how2, sndRow); colR.append(fmt, qual); grid.append(colL, colR);
       (how || hdr).after(grid); grid.after(qh);
       if (ACT) {   // the action studio has one quality and no song: the model, its speed-up, and what the section needs
+        colL.hidden = true;
         modeRow.hidden = true; how2.hidden = true; sndRow.hidden = true;
         const mr = mk('row', '<div class="row-l">Модель <span class="hint">чем считать сцены</span></div>');
         mr.insertAdjacentHTML('beforeend', `<div class="seg rm-amodel" style="grid-template-columns:1fr 1fr">
@@ -789,6 +790,14 @@ function makeRefMode(cfg) {
       const more = document.createElement('details'); more.className = 'st-more'; more.innerHTML = '<summary>Ещё: свой размер, seed</summary>';
       [own, $('.vwarn', top), ...$$(':scope > details:not(.agvar)', top)].filter(Boolean).forEach(n => more.append(n));
       top.append(more);
+      $('summary', more).textContent = 'Дополнительно';
+      const fields = document.createElement('div'); fields.className = 'video-advanced-fields';
+      fields.append(own);
+      $$(':scope > details', more).forEach(details => {
+        fields.append(...$$(':scope > .row', details));
+        details.remove();
+      });
+      $('summary', more).after(fields);
       // pictures right after the settings, then the scenes
       $('h3', refsCard).innerHTML = '<span class="n">2</span>Изображения героя и места <span class="hint" style="font-weight:400">(необязательно)</span>';
       top.after(refsCard);
@@ -1001,7 +1010,7 @@ function makeRefMode(cfg) {
   const extraRow = cfg.swap ? `<div class="row"><div class="row-l">Скорость и качество</div>
       <div class="seg rm-acc" style="grid-template-columns:1fr 1fr"><button data-x="pika">Pika Flex<small>8 шагов, рекомендуется</small></button><button data-x="old">Прежнее<small>другое ускорение</small></button></div>
       <div class="hint rm-acc-hint"></div></div>
-    <div class="row"><div class="row-l">Звук и губы</div>
+    <div class="row params-wide"><div class="row-l">Звук и губы</div>
       <div class="seg sw-snd" style="grid-template-columns:1fr 1fr 1fr"><button data-v="original">Звук видео<small>основной вариант</small></button><button data-v="lock">Подгонка губ<small>пробный, может сломать замену</small></button><button data-v="model">Звук модели<small>если в видео нет звука</small></button></div>
       <div class="hint sw-snd-hint"></div>
       <div class="sw-aend-row" hidden style="margin-top:8px"><label style="font-size:12.5px">Где первый герой замолкает, секунды <input class="sw-aend" inputmode="decimal" placeholder="например 1.75" style="width:110px"></label>
@@ -1034,10 +1043,10 @@ function makeRefMode(cfg) {
       Каждая следующая сцена по умолчанию продолжает конец прошлой, но при долгой цепочке изображение портится, поэтому смену плана программа ставит сама (знак ✂ на ленте). Ориентир по времени: около минуты расчёта на секунду на RTX 4060 Ti 16 ГБ.</div></details>`
     : cfg.mode === 'actor' ? `<details class="agvar"><summary>Как работает</summary><div class="hint" style="font-size:12.5px;line-height:1.5">Один проход, 10 шагов — настройки из вашего workflow «Direct AI Actor» (ER-SDE, разреженное внимание). Первое изображение — стартовый кадр. Голос берётся из загруженного аудио только как тембр, а слова — те, что вы напишете в промпте в &lt;d&gt;[Язык] …&lt;/d&gt;.</div></details>
     <div class="rm-loras"></div>`
-    : `<div class="row"><div class="row-l">Как запускается</div><div class="status-box rm-act"><span class="hint">Проверяем ComfyUI…</span></div></div>
+    : `<div class="row params-wide"><div class="row-l">Как запускается</div><div class="status-box rm-act"><span class="hint">Проверяем ComfyUI…</span></div></div>
     <div class="rm-loras"></div>`;
   const upd = paramsCard($('.rm-params', root), S, {
-    n: cfg.scenes ? 2 : 3, duration: !cfg.scenes, extraRow,
+    n: cfg.scenes ? 2 : 3, compact: !cfg.scenes, duration: !cfg.scenes, extraRow,
     onChange: () => {
       prev();
       $$('.rm-steps button', root).forEach(b => b.classList.toggle('on', +b.dataset.s === S.steps));
@@ -1136,6 +1145,15 @@ function makeRefMode(cfg) {
     root._check = check;
     $(`.nav[data-view="action"]`).addEventListener('click', check);
     afterModules(check);
+  }
+  if (!cfg.scenes) {
+    const description = $('.rm-prompt', root);
+    const promptCard = description.closest('.card'), sceneCard = imgsEl.closest('.card');
+    $('.card-h', promptCard).classList.add('editor-scene-head');
+    $('.card-h h3', promptCard).textContent = 'Описание сцены';
+    description.classList.add('scene-description');
+    sceneCard.append(...promptCard.childNodes);
+    promptCard.remove();
   }
   return { root, S, upd, prev, voice: () => files('.rm-auds .slot').length, prompt: () => promptEl(), imgSlots: () => $$('.ref input', imgsEl) };
 }

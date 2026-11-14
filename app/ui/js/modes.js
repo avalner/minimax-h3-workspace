@@ -34,7 +34,12 @@
     if (!mode) return null;
     if (!mode.mounted) {
       mode.scope = window.h3Lifecycle.scope(id);
-      try { mode.mount && mode.mount(mode.scope); }
+      try {
+        mode.mount && mode.mount(mode.scope);
+        const root = document.getElementById('view-' + id);
+        root?.querySelectorAll(':scope > .grid:has(> .preview)').forEach(grid => window.gridResize?.(grid));
+        window.h3Components?.compactChoices(root, mode.scope);
+      }
       catch (e) { console.error(`modes: ${id} did not mount`, e); }
       mode.mounted = true;
     }

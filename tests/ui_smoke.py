@@ -719,16 +719,21 @@ async def run_page(base: str, browser: str, shots: Path):
                     " const prompt = document.querySelector('#vPrompt');"
                     " prompt.value = 'проверка кадра'; prompt.dispatchEvent(new Event('input'));"
                     " params.querySelector('.chip[data-a=\"9:16\"]').click();"
+                    " const quality = params.querySelector('.video-quality-select');"
+                    " quality.value = '480p'; quality.dispatchEvent(new Event('change'));"
                     " params.querySelector('.seed-seg button[data-sf=\"1\"]').click();"
                     " const st = window.h3Video.state;"
                     " return {frame: !!document.querySelector('#vPreview .frame'),"
                     " chips: params.querySelectorAll('.chip[data-a]').length,"
-                    " aspect: st.aspect, seedFixed: !!st.seedFixed,"
+                    " aspect: st.aspect, q: st.q, qualityLabel: quality.selectedOptions[0].textContent,"
+                    " seedFixed: !!st.seedFixed,"
                     " count: document.querySelector('#vCount').textContent, plen: prompt.value.length,"
                     " seedRow: !!params.querySelector('.seed-row') && !params.querySelector('.seed-row').hidden}; })()")
                 check("the video section builds its preview and parameters on the first visit",
                       video and video["frame"] and video["chips"] >= 5, str(video))
                 check("a format click in the panel reaches the module's state", video["aspect"] == "9:16", str(video))
+                check("the resolution picker updates state and uses the selected portrait format",
+                      video["q"] == "480p" and video["qualityLabel"].startswith("480 × 864"), str(video))
                 check("a fixed seed opens the seed row", video["seedFixed"] and video["seedRow"], str(video))
                 check("the prompt counter follows the input",
                       f"{video.get('plen')} символов" in (video.get("count") or ""), str(video))
@@ -915,7 +920,8 @@ async def run_page(base: str, browser: str, shots: Path):
 
                 # The same two sections twice more, with the screenshots a human can look at.
                 for view, name in (("video", "video"), ("krea", "krea"), ("imgedit", "imgedit"), ("lipsync", "lipsync"),
-                                   ("refs", "refs"), ("long", "long"), ("actionsc", "actionsc"),
+                                   ("refs", "refs"), ("actor", "actor"), ("swap", "swap"), ("action", "action"),
+                                   ("long", "long"), ("actionsc", "actionsc"),
                                    ("montage", "montage"), ("library", "library"), ("settings", "settings")):
                     opened = await cdp.evaluate(
                         f"(() => {{ const b = document.querySelector('.nav[data-view=\"{view}\"]');"
@@ -923,6 +929,38 @@ async def run_page(base: str, browser: str, shots: Path):
                     await asyncio.sleep(0.4)
                     if opened:
                         await cdp.screenshot(shots / f"{name}.png")
+                        params_opened = await cdp.evaluate(
+                            "(() => { const root = document.querySelector('.view.active');"
+                            " const params = root.querySelector('.compact-params, .rm-params');"
+                            " if (!params) return false;"
+                            " const more = params.querySelector('details:has(.video-advanced-fields)');"
+                            " if (more) more.open = true;"
+                            " params.scrollIntoView({block: 'start'}); return true; })()")
+                        if params_opened:
+                            await cdp.screenshot(shots / f"{name}-settings.png")
+                            await cdp.evaluate(
+                                "(() => { document.querySelector('.main').scrollTop = 0; })()")
+                # Compact settings and their expanded fields fit a narrow desktop window too.
+                await cdp.call("Emulation.setDeviceMetricsOverride",
+                               {"width": 740, "height": 900, "deviceScaleFactor": 1, "mobile": False})
+                for view in ("video", "lipsync", "refs", "actor", "swap", "action", "long", "actionsc", "krea"):
+                    layout = await cdp.evaluate(
+                        f"(() => {{ document.querySelector('.nav[data-view=\"{view}\"]').click();"
+                        " const root = document.querySelector('.view.active');"
+                        " const params = root.querySelector('.compact-params, .rm-params');"
+                        " const more = params.querySelector('details:has(.video-advanced-fields)');"
+                        " if (more) more.open = true;"
+                        " params.scrollIntoView({block: 'start'});"
+                        " const fields = params.querySelector('.video-advanced-fields');"
+                        " return {fits: params.scrollWidth <= params.clientWidth + 1,"
+                        " columns: getComputedStyle(fields).gridTemplateColumns.split(' ').length}; })()")
+                    check(f"{view}: expanded settings fit and stack in a narrow window",
+                          layout and layout["fits"] and layout["columns"] == 1, str(layout))
+                await asyncio.sleep(0.3)
+                await cdp.screenshot(shots / "krea-settings-narrow.png")
+                await cdp.call("Emulation.setDeviceMetricsOverride",
+                               {"width": 1440, "height": 900, "deviceScaleFactor": 1, "mobile": False})
+                await cdp.evaluate("document.querySelector('.nav[data-view=\"imgedit\"]').click()")
                 # and the editor as one task (a card of the page above opened): the switch is gone, the way back is there
                 opened = await cdp.evaluate(
                     "(() => { const c = document.querySelector('#view-imgedit [data-task=\"outpaint\"]');"
@@ -943,6 +981,39 @@ async def run_page(base: str, browser: str, shots: Path):
                     " document.querySelector('#view-qwen .qw-eng button[data-e=\"h3img\"]')?.click(); })()")
                 await asyncio.sleep(0.4)
                 await cdp.screenshot(shots / "imgedit-h3img.png")
+
+                # Lazy-built modes get the same working divider as Video, exactly once.
+                for view in ("video", "lipsync", "refs", "actor", "swap", "action", "long", "actionsc",
+                             "krea", "qwen", "inpaint", "montage"):
+                    divider = await cdp.evaluate(
+                        f"(() => {{ goTo('{view}'); document.querySelector('.main').scrollTop = 0;"
+                        " const grid = document.querySelector('.view.active > .grid');"
+                        " const handle = grid.querySelector(':scope > .gresize');"
+                        " if (!handle) return null;"
+                        " const r = handle.getBoundingClientRect();"
+                        " return {x: r.x + r.width / 2, y: r.y + 80,"
+                        " width: grid.querySelector(':scope > .preview').getBoundingClientRect().width,"
+                        " count: grid.querySelectorAll(':scope > .gresize').length}; })()")
+                    check(f"{view}: exactly one preview divider", divider and divider["count"] == 1, str(divider))
+                    if not divider:
+                        continue
+                    await cdp.call("Input.dispatchMouseEvent", {"type": "mousePressed", "x": divider["x"],
+                                   "y": divider["y"], "button": "left", "clickCount": 1})
+                    await cdp.call("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": divider["x"] - 60,
+                                   "y": divider["y"], "button": "left", "buttons": 1})
+                    await cdp.call("Input.dispatchMouseEvent", {"type": "mouseReleased", "x": divider["x"] - 60,
+                                   "y": divider["y"], "button": "left", "clickCount": 1})
+                    resized = await cdp.evaluate(
+                        "(() => { const grid = document.querySelector('.view.active > .grid');"
+                        " const width = grid.querySelector(':scope > .preview').getBoundingClientRect().width;"
+                        " const saved = +localStorage.getItem('h3.pw');"
+                        " grid.querySelector('.gresize').dispatchEvent(new MouseEvent('dblclick'));"
+                        " return {width, saved, reset: !document.documentElement.style.getPropertyValue('--pw')"
+                        " && localStorage.getItem('h3.pw') === null}; })()")
+                    check(f"{view}: dragging resizes preview, remembers width and double-click resets",
+                          resized["width"] > divider["width"] + 30
+                          and abs(resized["width"] - resized["saved"]) < 2 and resized["reset"], str(resized))
+                await cdp.evaluate("goTo('qwen')")
 
                 # The mask editor on the whole window: the same canvas and the same tools as a fixed layer over the
                 # program window, the wheel zooms around the pointer (no Shift needed there) and Space or the middle

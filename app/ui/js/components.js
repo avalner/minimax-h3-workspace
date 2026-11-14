@@ -120,24 +120,68 @@ function paramsCard(el, st, opts) {
       <summary>Дополнительно</summary>
       <div class="row" style="margin-top:14px">
         <div class="row-l">Seed — «номер варианта»</div>
-        <div class="seg seed-seg" style="grid-template-columns:1fr 1fr">
+        <div class="video-seed-controls">
+        <div class="seg seed-seg" role="group" aria-label="Выбор seed">
           <button data-sf="0">Случайный<small>каждый раз новое видео</small></button>
           <button data-sf="1">Фиксированный<small>тот же вариант снова</small></button>
         </div>
         <div class="path on seed-row" hidden>
-          <input class="seed-in" inputmode="numeric" spellcheck="false" placeholder="число, например 123456789">
+          <input class="seed-in" inputmode="numeric" spellcheck="false" aria-label="Число seed" placeholder="Например, 123456789">
+        </div>
+        </div>
+        <div class="seed-tools">
           <button class="btn seed-new" type="button">🎲 Новый</button>
           <button class="btn seed-copy" type="button">Копировать</button>
         </div>
         <div class="hint seed-hint"></div>
       </div>
     </details>`;
+  // Studios arrange the primary rows themselves; resolution controls are shared by every mode.
+  let qualitySelect = null;
+  {
+    const qualityButtons = $('.seg-q', el);
+    const qualityRow = qualityButtons.closest('.row');
+    qualityButtons.hidden = true;
+    qualitySelect = document.createElement('select');
+    qualitySelect.className = 'video-quality-select';
+    qualitySelect.setAttribute('aria-label', 'Разрешение видео');
+    qualitySelect.innerHTML = QUALITY_ALL.map(q => `<option value="${q.id}"></option>`).join('');
+    qualityButtons.after(qualitySelect);
+    $('.hint', qualityRow).textContent = 'Больше разрешение — дольше расчёт и выше расход видеопамяти.';
+    qualitySelect.onchange = () => {
+      if (st.lockedQ ? st.lockedQ() : st.locked && st.locked()) { upd(); return; }
+      const changed = st.q !== qualitySelect.value;
+      st.q = qualitySelect.value; upd();
+      if (changed) st.onSizeChange?.('q');
+    };
+  }
+  if (opts.compact !== false) {
+    el.classList.add('compact-params');
+    $('.card-h h3', el).textContent = 'Настройки';
+    const customRow = $('.cw-w', el).closest('.row');
+    const advanced = $(':scope > details:last-of-type', el);
+    const advancedFields = document.createElement('div');
+    advancedFields.className = 'video-advanced-fields';
+    advancedFields.append(customRow, ...advanced.querySelectorAll(':scope > .row'));
+    advanced.append(advancedFields);
+    const durationRow = $('.dur', el)?.closest('.row');
+    if (durationRow) qualitySelect.closest('.row').before(durationRow);
+  }
   const upd = () => {
     $$('.chip', el).forEach(c => c.classList.toggle('on', c.dataset.a === st.aspect));
     $$('.seg button[data-q]', el).forEach(c => c.classList.toggle('on', c.dataset.q === st.q));
     $$('.seg button[data-r]', el).forEach(c => c.classList.toggle('on', c.dataset.r === st.refSize));
     const [w, h] = st.cw && st.ch ? [st.cw, st.ch] : resFor(st.aspect, st.q);
     $('.resv', el).textContent = `${w}×${h}` + (st.cw && st.ch ? ' · свой' : '');
+    if (qualitySelect) {
+      [...qualitySelect.options].forEach(option => {
+        const q = QUALITY_ALL.find(q => q.id === option.value);
+        option.hidden = !q.show && q.id !== st.q;
+        option.textContent = resFor(st.aspect, q.id).join(' × ') + (q.sub && q.id !== '0.5' ? ` · ${q.sub}` : '');
+      });
+      qualitySelect.value = st.q;
+      qualitySelect.disabled = !!(st.cw && st.ch) || !!(st.lockedQ ? st.lockedQ() : st.locked && st.locked());
+    }
     $('.cw-reset', el).hidden = !(st.cw || st.ch);
     $$('.seg button[data-q]', el).forEach(c => c.style.opacity = st.cw && st.ch ? .45 : '');
     if (opts.duration) {
@@ -146,8 +190,9 @@ function paramsCard(el, st, opts) {
       $('.durv', el).textContent = `${st.dur} с · ${frames(st.dur)} кадров` + (st.dur > 15 ? ' · дольше 15 с модель держит качество хуже' : '');
     }
     $('.vwarn', el).hidden = !(st.q === '1080p' && st.len() > 8);
-    $$('.seed-seg button', el).forEach(b => b.classList.toggle('on', (b.dataset.sf === '1') === !!st.seedFixed));
+    $$('.seed-seg button', el).forEach(b => { const selected = (b.dataset.sf === '1') === !!st.seedFixed; b.classList.toggle('on', selected); b.setAttribute('aria-pressed', String(selected)); });
     $('.seed-row', el).hidden = !st.seedFixed;
+    $('.seed-tools', el).hidden = !st.seedFixed;
     if ($('.seed-in', el) !== document.activeElement) $('.seed-in', el).value = st.seed || '';
     $('.seed-hint', el).textContent = st.seedFixed
       ? 'Одинаковый seed + одинаковые настройки и промпт = одинаковое видео. Удобно менять что-то одно и сравнивать. Понравившийся seed можно взять из библиотеки или сразу после генерации.'
@@ -844,7 +889,42 @@ function wireSlotSwap(zones, onSwap) {
 const clearSlots = zones => zones.forEach(z => { const x = $('.x', z); if (x) x.click(); });
 
 
+  // Compact choices retain the original buttons and handlers. Their selected descriptions
+  // follow programmatic restores as well as clicks, including the studio's dynamic labels.
+  function compactChoices(root, scope) {
+    if (!root?.querySelector('.preview')) return;
+    const wired = new Set(), observers = [];
+    const attach = group => {
+      if (wired.has(group) || group.matches('.seed-seg, .seg-q, .kr-bm, .kr-eng, .kr-stylerow .seg')) return;
+      wired.add(group);
+      group.classList.add('compact-choice');
+      const hint = document.createElement('div'); hint.className = 'hint choice-description';
+      group.after(hint);
+      const paint = () => {
+        const selected = $(':scope > button.on', group);
+        const text = selected ? $$('small', selected).map(s => s.textContent.trim()).filter(Boolean).join(' · ') : '';
+        if (hint.textContent !== text) hint.textContent = text;
+        hint.hidden = !text || group.hidden || group.style.display === 'none';
+        $$(':scope > button', group).forEach(b => { b.type = 'button'; b.setAttribute('aria-pressed', String(b === selected)); });
+      };
+      const observer = new MutationObserver(paint);
+      observer.observe(group, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['class', 'hidden', 'style'] });
+      observers.push(observer); paint();
+    };
+    $$('.seg', root).forEach(attach);
+    const additions = new MutationObserver(records => {
+      records.forEach(record => record.addedNodes.forEach(node => {
+        if (node.nodeType !== 1) return;
+        if (node.matches('.seg')) attach(node);
+        $$('.seg', node).forEach(attach);
+      }));
+    });
+    additions.observe(root, { childList: true, subtree: true });
+    scope.add(() => { additions.disconnect(); observers.forEach(observer => observer.disconnect()); });
+  }
+
   window.h3Components = {
+    compactChoices,
     configure,
     ASPECTS, QUALITY_ALL, QUALITY, qLabel, r32, resFor, frames,
     paramsCard, SZ_ROW, szWire, sizeForm, newSeed, seedForm, useSeed,

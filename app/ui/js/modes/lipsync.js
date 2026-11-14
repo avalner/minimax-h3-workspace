@@ -335,6 +335,13 @@ function stop() {
     onShow: item => { L.shownId = item.id; },   // the stage remembers the clip that was on the screen
     validate: () => !L.dur0 ? 'Загрузите аудио' : !L.refs ? 'Добавьте хотя бы один референс — лицо персонажа' : L.len() > MAX_LEN ? `Фрагмент длиннее ${MAX_LEN} с — укоротите` : !$('#lPrompt').value.trim() ? 'Напишите промпт' : '',
   });
+  const promptCard = $('#lPrompt').closest('.card');
+  const sceneCard = $('#refs').closest('.card');
+  $('.card-h', promptCard).classList.add('editor-scene-head');
+  $('.card-h h3', promptCard).textContent = 'Описание сцены';
+  $('#lPrompt').classList.add('scene-description');
+  sceneCard.append(...promptCard.childNodes);
+  promptCard.remove();
   const lUpd = paramsCard($('#lParams'), L, {
     n: 4, duration: false, onChange: () => {
       lPrev();

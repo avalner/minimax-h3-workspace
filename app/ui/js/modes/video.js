@@ -48,15 +48,15 @@
     onShow: item => { V.shownId = item.id; },
   });
   $('#vLoop').onchange = () => { $('#dLast').style.opacity = $('#vLoop').checked ? .4 : ''; vPrev(); };
-  const vUpd = paramsCard($('#vParams'), V, { n: 3, duration: true, onChange: () => { vPrev(); vMode(); },
+  const vUpd = paramsCard($('#vParams'), V, { n: 3, compact: true, duration: true, onChange: () => { vPrev(); vMode(); },
     extraRow: `<div class="row">
       <div class="row-l">Модель <span class="hint">чем генерировать</span></div>
       <div class="seg v-unet" style="grid-template-columns:1fr 1fr"><button type="button" data-un="fast">FastH3<small>обычная · 8 шагов</small></button><button type="button" data-un="fused">Fused Turbo<small>4 шага · звук ярче</small></button></div>
       <div class="hint v-unhint" hidden></div>
-      <div class="hint">Fused Turbo — одна модель на 21 ГБ: LoRA ускорения и сглаживания движения уже внутри, поэтому хватает 4 шагов. Скачивается отдельно, в установку не входит.</div></div>
+      <details class="video-model-help"><summary>О моделях</summary><div class="hint">FastH3 — 8 шагов. Fused Turbo — 4 шага, звук ярче; ускорение уже внутри. Файл 21 ГБ скачивается отдельно.</div></details></div>
     <div class="row v-accel-row"><div class="row-l">Ускорение <span class="hint">для слабых видеокарт</span></div>
       <div class="seg v-accel" style="grid-template-columns:1fr 1fr"><button type="button" data-ac="normal">Обычное<small>как раньше</small></button><button type="button" data-ac="sla">Быстрый черновик<small>в 1,3 раза быстрее, качество ниже</small></button></div>
-      <div class="hint v-achint" hidden></div><div class="hint" style="margin-top:6px">«Быстрый черновик» нужен для проб: это скорость, а не увеличение размера. Для готового ролика выбирайте «Обычное».</div></div>` });
+      <div class="hint v-achint" hidden></div><div class="hint" style="margin-top:6px">Черновик быстрее, детализация ниже.</div></div>` });
   function vAccUpd() { $$('.v-accel button').forEach(b => b.classList.toggle('on', (b.dataset.ac === 'sla') === (V.accel === 'sla'))); }
   function vUnetUpd() {
     $$('.v-unet button').forEach(b => b.classList.toggle('on', b.dataset.un === V.unet));

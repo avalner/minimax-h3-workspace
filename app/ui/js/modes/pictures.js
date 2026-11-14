@@ -217,12 +217,39 @@ function imgPanel(el, o) {
 function imgSeedBox(S) {
   return `<details style="margin-top:16px"><summary>Дополнительно</summary>
     <div class="row" style="margin-top:14px"><div class="row-l">Seed — «номер варианта»</div>
-      <div class="seg" style="grid-template-columns:1fr 1fr"><button data-sf="0">Случайный<small>каждый раз новое изображение</small></button><button data-sf="1">Фиксированный<small>тот же вариант снова</small></button></div>
-      <div class="path on" data-seedrow hidden><input data-seedin inputmode="numeric" spellcheck="false" placeholder="число, например 123456789"></div>
+      <div class="img-seed-controls">
+        <div class="seg seed-seg" role="group" aria-label="Выбор seed"><button type="button" data-sf="0">Случайный</button><button type="button" data-sf="1">Фиксированный</button></div>
+        <div class="path on" data-seedrow hidden><input data-seedin inputmode="numeric" spellcheck="false" aria-label="Число seed" placeholder="Например, 123456789"></div>
+      </div>
+      <div class="hint img-seed-hint" aria-live="polite"></div>
     </div></details>`;
 }
 function imgSeedWire(root, S) {
-  const paint = () => { $$('[data-sf]', root).forEach(b => b.classList.toggle('on', (b.dataset.sf === '1') === !!S.seedFixed)); $('[data-seedrow]', root).hidden = !S.seedFixed; };
+  const advanced = $('[data-seedin]', root).closest('details');
+  const fields = document.createElement('div'); fields.className = 'video-advanced-fields';
+  const custom = $('.qw-szwrap', root) || $('.sz-row', root);
+  if (custom) fields.append(custom);
+  fields.append(...$$(':scope > .row', advanced));
+  advanced.append(fields);
+  const kreaParams = $('.kr-eng', root)?.closest('.card');
+  if (kreaParams) {
+    kreaParams.classList.add('compact-params');
+    $('.card-h h3', kreaParams).textContent = 'Настройки';
+    $('.kr-eng', root).closest('.row').classList.add('params-wide');
+    const modelRow = $('.kr-eng', root).closest('.row');
+    const license = $(':scope > .hint:last-child', modelRow);
+    const modelInfo = document.createElement('details'); modelInfo.className = 'kr-model-info';
+    modelInfo.innerHTML = '<summary>Лицензии моделей</summary>';
+    modelInfo.append(license); modelRow.append(modelInfo);
+    $('.kr-neg', root).classList.add('params-wide');
+  }
+  const editParams = $('.qw-edit', root);
+  if (editParams) editParams.classList.add('image-edit-params');
+  const paint = () => {
+    $$('[data-sf]', root).forEach(b => { const selected = (b.dataset.sf === '1') === !!S.seedFixed; b.classList.toggle('on', selected); b.setAttribute('aria-pressed', String(selected)); });
+    $('[data-seedrow]', root).hidden = !S.seedFixed;
+    $('.img-seed-hint', root).textContent = S.seedFixed ? 'Тот же вариант снова' : 'Каждый раз новое изображение';
+  };
   root.addEventListener('click', e => { const b = e.target.closest('[data-sf]'); if (b) { S.seedFixed = b.dataset.sf === '1'; paint(); } });
   $('[data-seedin]', root).oninput = e => { S.seed = e.target.value.replace(/\D/g, ''); e.target.value = S.seed; };
   paint();
@@ -245,7 +272,7 @@ function buildKrea(scope) {
       <div class="mode-pill"><i></i><span>Krea 2 · 1 МП</span></div></div>
     <div class="grid"><div class="col">
       <div class="card"><div class="card-h"><h3><span class="n">1</span>Промпт</h3><span class="counter kr-count">0 символов</span></div>
-        <div class="seg kr-bm" style="grid-template-columns:1fr 1fr;margin-bottom:8px"><button type="button" data-b="0" class="on">Один промпт</button><button type="button" data-b="1">Список промптов<small>серия изображений</small></button></div>
+        <div class="seg kr-bm" role="group" aria-label="Количество промптов"><button type="button" data-b="0" class="on" aria-pressed="true">Один промпт</button><button type="button" data-b="1" aria-pressed="false">Серия</button></div>
         <textarea class="kr-prompt" placeholder="Опишите изображение: кто или что в кадре, где, какой свет, какой стиль (фото, иллюстрация, постер)…"></textarea>
         <div class="kr-batch" hidden style="margin-top:10px">
           <div class="hint" style="margin-bottom:6px">Вставьте промпты одним куском: каждый отделите <b>пустой строкой</b> (или пронумеруйте: «1.», «Кадр 2:»). Приложение само разделит текст и поставит каждое изображение в очередь. Модель, формат и размер общие для всех.</div>
@@ -259,20 +286,22 @@ function buildKrea(scope) {
         <div class="ta-foot"><span class="hint">Лучше писать подробно, одним абзацем. Помощник в разделе «Агент» умеет писать такие промпты</span></div></div>
       <div class="card"><div class="card-h"><h3><span class="n">2</span>Параметры</h3></div>
         <div class="row"><div class="row-l">Модель</div>
-          <div class="seg kr-eng" style="grid-template-columns:repeat(2,1fr)"><button data-e="krea">Krea 2<small>лучшее качество, можно в коммерцию</small></button><button data-e="flux">FLUX.2 klein<small>можно в коммерцию</small></button><button data-e="qwen">Qwen 2.1<small>текст на изображении, не для коммерции</small></button><button data-e="h3img">MiniMax-H3-Image<small>крупно, до 16 МП</small></button></div>
+          <div class="seg kr-eng" role="group" aria-label="Модель изображения"><button type="button" data-e="krea">Krea 2</button><button type="button" data-e="flux">FLUX.2 klein</button><button type="button" data-e="qwen">Qwen 2.1</button><button type="button" data-e="h3img">MiniMax H3 Image</button></div>
+          <div class="hint kr-eng-description" aria-live="polite"></div>
           <div class="hint kr-enghint" hidden></div>
           <div class="hint" style="margin-top:6px">Лицензии: <b>Krea 2</b> и <b>FLUX.2 klein</b> можно использовать в коммерции (Krea 2 — если годовой доход компании меньше 1 млн $). <b>Qwen 2.1</b> только для творчества, не для коммерции. <b>MiniMax-H3-Image</b> — открытая community-лицензия: коммерческое использование до 1 млн $ годовой выручки (иначе нужно отдельное разрешение MiniMax), в ЕС, Великобритании, Южной Корее и США модель не лицензирована.</div></div>
         <div class="row kr-neg" hidden><div class="row-l">Негативный промпт <span class="hint">что не должно быть на изображении</span></div>
           <textarea class="kr-negtxt" rows="2" placeholder="Пусто — быстрее и легче для видеокарты. Если нужно, впишите, например: blurry, low quality, extra fingers, text, watermark"></textarea><div class="hint" style="margin-top:4px">Негативный промпт замедляет Qwen примерно вдвое и требует больше видеопамяти. Заполняйте, только если без него не получается.</div></div>
-        <div class="row kr-stylerow"><div class="row-l">Стиль</div>
-          <div class="seg" style="grid-template-columns:1fr 1fr"><button data-st="plain">Обычный<small>быстро, любые изображения</small></button><button data-st="real">Реализм<small>люди и фото как с камеры, 2 прохода</small></button></div>
+        <div class="row kr-stylerow params-wide"><div class="row-l">Стиль</div>
+          <div class="seg" role="group" aria-label="Стиль изображения"><button type="button" data-st="plain">Обычный</button><button type="button" data-st="real">Реализм</button></div>
+          <div class="hint kr-style-description" aria-live="polite"></div>
           <div class="hint kr-realhint" hidden></div></div>
+        <div class="row params-wide"><div class="row-l">Формат <span class="resv"></span></div><div class="chips kr-asp"></div></div>
         <div class="row kr-scale" hidden><div class="row-l">Размер результата</div>
           <div class="seg" style="grid-template-columns:1fr 1fr"><button data-sc="2k">Около 2K<small>быстрее</small></button><button data-sc="4k">4K<small>дольше и нужно больше видеопамяти</small></button></div></div>
         <div class="row kr-mprow" hidden><div class="row-l">Размер результата</div>
           <div class="seg kr-mp" style="grid-template-columns:repeat(3,1fr)"><button data-mp="4">4 МП<small>быстрее, видно зерно</small></button><button data-mp="8">8 МП<small>чисто</small></button><button data-mp="16">16 МП<small>самое чистое, дольше</small></button></div>
           <div class="hint">Модель рассчитана на 4–16 МП: ниже 8 МП заметно зерно. Площадь считается по выбранному формату, свой размер можно задать ниже.</div></div>
-        <div class="row"><div class="row-l">Формат <span class="resv"></span></div><div class="chips kr-asp"></div></div>
         ${SZ_ROW}
         <div class="note kr-h3hint" hidden style="margin-top:10px"><span>В промпте картинки называются <b>&lt;Picture 1&gt;</b>…<b>&lt;Picture 5&gt;</b>, и первая задаёт форму результата. <b>Негативного промпта у MiniMax-H3-Image нет</b> — всё нужное пишите в положительной форме. Модель: MiniMax-H3-Image (Powered by MiniMax-H3-Image).</span></div>
         ${imgSeedBox()}</div>
@@ -295,13 +324,20 @@ function buildKrea(scope) {
     $$('.kr-asp .chip', root).forEach(c => c.classList.toggle('on', c.dataset.a === S.aspect));
     const [w, h] = S.cw && S.ch ? [S.cw, S.ch] : base, k = S.style === 'real' ? (S.scale === '4k' ? 2.5 : 1.5) : 1;
     $('.resv', root).textContent = `${Math.round(w * k)}×${Math.round(h * k)}`; P.ratio(w, h);
-    $$('[data-st]', root).forEach(b => b.classList.toggle('on', b.dataset.st === S.style));
+    $$('[data-st]', root).forEach(b => { const selected = b.dataset.st === S.style; b.classList.toggle('on', selected); b.setAttribute('aria-pressed', String(selected)); });
+    $('.kr-style-description', root).textContent = S.style === 'real' ? 'Люди и фото как с камеры · 2 прохода' : 'Быстро, подходит для любых изображений';
     $$('[data-sc]', root).forEach(b => b.classList.toggle('on', b.dataset.sc === S.scale));
     $('.kr-scale', root).hidden = !(S.engine === 'krea' && S.style === 'real');
     $('.kr-mprow', root).hidden = !h3;
     $$('.kr-mp button', root).forEach(b => b.classList.toggle('on', b.dataset.mp === S.mp));
     $$('.sz-p', root).forEach(b => b.hidden = h3);   // «Эскиз» и «2К» — это про 1-2 МП, у H3 Image другой счёт
-    $$('.kr-eng button', root).forEach(b => b.classList.toggle('on', b.dataset.e === S.engine));
+    $$('.kr-eng button', root).forEach(b => { const selected = b.dataset.e === S.engine; b.classList.toggle('on', selected); b.setAttribute('aria-pressed', String(selected)); });
+    $('.kr-eng-description', root).textContent = {
+      krea: 'Лучшее качество · коммерческое использование с ограничениями по выручке',
+      flux: 'Можно использовать в коммерции',
+      qwen: 'Хорошо рисует текст на изображении · только некоммерческое использование',
+      h3img: 'Крупные изображения до 16 МП · ограничения по выручке и территории',
+    }[S.engine];
     $('.kr-stylerow', root).hidden = S.engine !== 'krea'; $('.kr-neg', root).hidden = S.engine !== 'qwen';
     $('.kr-h3hint', root).hidden = !h3;
     const pill = imgPill(root);
@@ -375,7 +411,7 @@ function buildKrea(scope) {
   };
   const kbMode = on => {
     K.batch = on; root.classList.toggle('kr-batching', on);
-    $$('.kr-bm button', root).forEach(b => b.classList.toggle('on', (b.dataset.b === '1') === on));
+    $$('.kr-bm button', root).forEach(b => { const selected = (b.dataset.b === '1') === on; b.classList.toggle('on', selected); b.setAttribute('aria-pressed', String(selected)); });
     $('.kr-batch', root).hidden = !on;
     $('.kr-prompt', root).placeholder = on ? 'Вставьте сюда список промптов. Каждый промпт отделите пустой строкой: из каждого получится отдельное изображение.' : 'Опишите изображение: кто или что в кадре, где, какой свет, какой стиль (фото, иллюстрация, постер)…';
     if (on) kbRender();
@@ -653,7 +689,7 @@ function buildQwen(scope) {
     $('.qw-mprow', root).hidden = !h3 || isBg || isOut;
     $$('.qw-mp button', root).forEach(b => b.classList.toggle('on', b.dataset.mp === S.mp));
     $$('.sz-p', root).forEach(b => b.hidden = h3);
-    $('.qw-szwrap', root).hidden = isOut || isBg;
+    $('.qw-szwrap', root).hidden = isOut || isBg || S.kind === 'sheet';
     // the outpaint LoRA wants a description of the scene, not an instruction: the hint under the field says so
     $('.qw-tahint', root).textContent = isOut
       ? 'Опишите сцену: что уже есть в кадре и что естественно продолжается по краям — без слов «расширь» и «дорисуй».'

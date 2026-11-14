@@ -167,8 +167,8 @@ setTimeout(() => document.documentElement.classList.add('booted'), 1500);
 
       <div class="grid">
         <div class="col">
-          <div class="card">
-            <div class="card-h"><h3><span class="n">1</span>Кадры</h3><span class="hint">необязательно — без изображений видео создаётся по тексту</span></div>
+          <div class="card video-scene">
+            <div class="card-h"><h3>Сцена</h3><span class="hint">Кадры необязательны</span></div>
             <div class="frames">
               <label class="drop" id="dFirst">
                 <input type="file" accept="image/*">
@@ -190,14 +190,11 @@ setTimeout(() => document.documentElement.classList.add('booted'), 1500);
                 <button class="x" type="button" aria-label="Убрать">✕</button>
               </label>
             </div>
-            <label class="cw-chk" style="margin-top:10px;cursor:pointer" title="Видео закончится тем же кадром, с которого началось: его можно крутить по кругу без шва (живые обои)">
-              <input type="checkbox" id="vLoop"> <span><b>Зациклить</b> (для живых обоев): последний кадр будет таким же, как первый <small style="color:var(--muted)" id="vLoopHint">· нужен первый кадр</small></span>
+            <label class="cw-chk video-loop" title="Видео закончится тем же кадром, с которого началось: его можно крутить по кругу без шва (живые обои)">
+              <input type="checkbox" id="vLoop"> <span>Зациклить видео <small style="color:var(--muted)" id="vLoopHint">· нужен первый кадр</small></span>
             </label>
             <div class="hresize" id="frameResize" title="Потяните вниз или вверх, чтобы изменить высоту кадров. Двойной клик — вернуть как было"></div>
-          </div>
-
-          <div class="card">
-            <div class="card-h"><h3><span class="n">2</span>Промпт</h3><span class="hint" id="vCount">0 символов</span></div>
+            <div class="card-h video-prompt-head"><h3><label for="vPrompt">Описание сцены</label></h3><span class="hint" id="vCount">0 символов</span></div>
             <textarea id="vPrompt" placeholder="Опишите сцену: кто в кадре, что происходит, как движется камера, свет, звук…"></textarea>
           </div>
 
@@ -3275,6 +3272,7 @@ async function clipText() {   // the browser's clipboard, with the app's own fal
   const root = document.documentElement;
   // [grid, css variable, storage key, half the gap, space the rest must keep]
   const attach = (g, VAR, KEY, half, keep) => {
+    if (!g) return;
     {
       if ($(':scope > .gresize', g)) return;
       const h = document.createElement('div');
