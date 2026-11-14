@@ -487,25 +487,41 @@ const IMG_TASKS = [
     text: 'История в кадрах по изображениям героя и места: одним листом или по кадрам.', need: 'изображения героя и места' },
 ];
 
+// Expose each editing task directly beside image generation in the sidebar.
+const imageNav = $('#navImage .nav-children');
+IMG_TASKS.forEach(task => {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'nav sub';
+  button.dataset.imageTask = task.id;
+  button.innerHTML = `${IMG_TASK_ICONS[task.id]}<span>${task.title}</span>`;
+  button.onclick = () => {
+    goTo(task.id === 'inpaint' ? 'inpaint' : 'qwen', task.id === 'inpaint' ? '' : task.id);
+  };
+  imageNav.appendChild(button);
+});
+
 function buildImgEdit(scope) {
   const root = $('#view-imgedit');
   root.innerHTML = `
-    <div class="pr-head"><h1>Редактирование изображений</h1><p>Выберите, что сделать с готовым изображением. У каждой задачи свой экран — программа откроет его с уже выбранным делом</p></div>
-    <div class="pr-grid">${IMG_TASKS.map(t => `<div class="pr-card" role="button" tabindex="0" data-task="${t.id}">
+    <div class="pr-head"><h1>Изображение</h1><p>Создайте изображение по тексту или выберите, что сделать с готовой картинкой</p></div>
+    <div class="pr-grid"><div class="pr-card" role="button" tabindex="0" data-image-mode="krea">
+      <div class="pr-pic">${$('#navImage .nav[data-view="krea"] svg').outerHTML}</div>
+      <div class="pr-body"><b>Изображение по тексту</b><p>Создайте изображение по описанию, выбрав модель, формат и разрешение.</p><div class="pr-tags"><span>Изображение</span><span>нужно: описание</span></div></div></div>
+      ${IMG_TASKS.map(t => `<div class="pr-card" role="button" tabindex="0" data-task="${t.id}">
       <div class="pr-pic">${IMG_TASK_ICONS[t.id]}</div>
       <div class="pr-body"><b>${t.title}</b><p>${t.text}</p><div class="pr-tags"><span>Изображение</span><span>нужно: ${t.need}</span></div></div></div>`).join('')}</div>
     <div class="note ie-miss" hidden style="margin-top:18px"><span></span></div>`;
   const open = id => {
+    if (id === 'krea') { goTo('krea'); return; }
     if (id === 'inpaint') { goTo('inpaint'); return; }
-    goTo('qwen');               // builds the editor on the first visit and shows it
-    const q = $('#view-qwen');
-    if (q._solo) q._solo(id);   // the task is already chosen: the «Что делаем» switch is not shown
+    goTo('qwen', id);
   };
-  root.onclick = e => { const c = e.target.closest('[data-task]'); if (c) open(c.dataset.task); };
+  root.onclick = e => { const c = e.target.closest('[data-task], [data-image-mode]'); if (c) open(c.dataset.task || c.dataset.imageMode); };
   root.onkeydown = e => {
     if (e.key !== 'Enter' && e.key !== ' ') return;
-    const c = e.target.closest('[data-task]');
-    if (c) { e.preventDefault(); open(c.dataset.task); }
+    const c = e.target.closest('[data-task], [data-image-mode]');
+    if (c) { e.preventDefault(); open(c.dataset.task || c.dataset.imageMode); }
   };
   // «← Все варианты редактирования» on every task screen
   scope.listen(document, 'click', e => { if (e.target.closest('[data-imgedit]')) { e.preventDefault(); goTo('imgedit'); } });
@@ -732,12 +748,14 @@ function buildQwen(scope) {
   };
   root._solo = id => {
     if (!TASK_HEAD[id]) return;
+    root.dataset.imageTask = id;
     S.kind = id; root.classList.add('solo');
     head.textContent = TASK_HEAD[id][0]; headSub.textContent = TASK_HEAD[id][1];
     if (stepH) stepH.innerHTML = `<span class="n">2</span>${TASK_HEAD[id][0]}`;
     upd();
   };
   root._plain = () => {   // back to the whole editor (opened from the Library, the queue or «Использовать в…»)
+    delete root.dataset.imageTask;
     if (!root.classList.contains('solo')) return;
     root.classList.remove('solo');
     head.textContent = HEAD0.h1; headSub.textContent = HEAD0.sub;

@@ -1571,6 +1571,23 @@ async def run_page(base: str, browser: str, shots: Path):
                       second_pass["current"] == views[-1] if views else True,
                       f"{second_pass['current']} vs {views[-1] if views else '-'}")
 
+                categories = await cdp.evaluate("""(() => {
+                  document.querySelector('#navImage summary').click();
+                  const image = document.querySelector('.view.active')?.id === 'view-imgedit'
+                    && location.hash === '#/image' && document.querySelector('#navImage').open
+                    && document.querySelectorAll('#view-imgedit [data-task], #view-imgedit [data-image-mode]').length === 7;
+                  document.querySelector('#view-imgedit [data-image-mode="krea"]').click();
+                  const text = document.querySelector('.view.active')?.id === 'view-krea';
+                  document.querySelector('#navVideo summary').click();
+                  const cards = [...document.querySelectorAll('#view-videos [data-video-mode]')];
+                  const video = document.querySelector('.view.active')?.id === 'view-videos'
+                    && location.hash === '#/videos' && document.querySelector('#navVideo').open
+                    && cards.length === document.querySelectorAll('#navVideo .nav[data-view]').length;
+                  const allOpen = cards.every(card => { card.click(); return document.querySelector('.view.active')?.id === 'view-' + card.dataset.videoMode; });
+                  return image && text && video && allOpen;
+                })()""")
+                check('category menus show every mode and their cards open the selected screen', categories)
+
                 disposed = await cdp.evaluate(
                     "(() => { window.h3Modes.disposeAll(); return window.h3Modes.stats(); })()")
                 check("closing the window releases every mode scope",
@@ -1583,6 +1600,51 @@ async def run_page(base: str, browser: str, shots: Path):
                       hooks_after and hooks_after["download"] == "undefined"
                       and hooks_after["hooks"] < hooks_before,
                       f"{hooks_before} -> {hooks_after}")
+
+                # Every editor task has a stable URL; a fresh load must prefer it over
+                # localStorage, including when two tasks share the same Qwen screen.
+                routes = [(v, v, '') for v in views]
+                routes += [('image', 'imgedit', ''), ('videos', 'videos', '')]
+                routes += [('image/' + t, 'inpaint' if t == 'inpaint' else 'qwen',
+                            '' if t == 'inpaint' else t)
+                           for t in ('edit', 'inpaint', 'bg', 'outpaint', 'sheet', 'story')]
+                for route, view, task in routes:
+                    await cdp.evaluate("localStorage.setItem('h3-last-view', '/krea')")
+                    # Change the query too, so this is a fresh document rather than
+                    # a same-document hash event racing the following reload.
+                    await cdp.call('Page.navigate', {'url': base + '/?route-check=' + route.replace('/', '-') + '#/' + route})
+                    await cdp.wait_for(
+                        "document.readyState === 'complete' && document.documentElement.classList.contains('booted') && "
+                        f"typeof START_ROUTE !== 'undefined' && START_ROUTE === {json.dumps('/' + route)}", timeout=40)
+                    await cdp.call('Page.reload')
+                    await asyncio.sleep(0.15)
+                    restored = False
+                    for _ in range(100):
+                        restored = await cdp.evaluate(
+                            "(() => { const v = document.querySelector('.view.active'); return "
+                            "document.documentElement.classList.contains('booted') && "
+                            f"v?.id === {json.dumps('view-' + view)} && "
+                            f"(v.dataset.imageTask || '') === {json.dumps(task)} && "
+                            f"location.hash === {json.dumps('#/' + route)}; }})()")
+                        if restored:
+                            break
+                        await asyncio.sleep(0.05)
+                    check(f'{route}: URL survives reload and overrides the saved section', restored)
+                history_ok = await cdp.evaluate("""(async () => {
+                  const wait = () => new Promise(r => setTimeout(r, 120));
+                  document.querySelector('[data-image-task="edit"]').click();
+                  document.querySelector('[data-image-task="sheet"]').click();
+                  history.back(); await wait();
+                  if (location.hash !== '#/image/edit' || document.querySelector('#view-qwen').dataset.imageTask !== 'edit') return false;
+                  history.forward(); await wait();
+                  return location.hash === '#/image/sheet' && document.querySelector('#view-qwen').dataset.imageTask === 'sheet'
+                    && document.querySelector('[data-image-task="sheet"]').classList.contains('active');
+                })()""", await_promise=True)
+                check('browser back and forward restore the exact image task', history_ok)
+                await cdp.evaluate("location.hash = 'lipsync'")
+                await asyncio.sleep(0.15)
+                check('legacy section links still open and get a canonical URL', await cdp.evaluate(
+                    "location.hash === '#/lipsync' && document.querySelector('.view.active')?.id === 'view-lipsync'"))
 
                 errors = cdp.exceptions()
                 check("no uncaught exception or console error in the window", not errors,

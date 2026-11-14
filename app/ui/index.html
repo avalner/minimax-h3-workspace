@@ -99,7 +99,7 @@ setTimeout(() => document.documentElement.classList.add('booted'), 1500);
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="1.6"/><path d="m21 16-5-5L6 20"/></svg>
       Изображение по тексту
     </button>
-    <button class="nav sub" data-view="imgedit">
+    <button class="nav sub" data-view="imgedit" hidden style="display:none">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
       Редактирование изображений
     </button>
@@ -327,6 +327,7 @@ setTimeout(() => document.documentElement.classList.add('booted'), 1500);
     <section class="view" id="view-montage"></section>
     <section class="view" id="view-krea"></section>
     <section class="view" id="view-imgedit"></section>
+    <section class="view" id="view-videos"></section>
     <section class="view" id="view-qwen"></section>
     <section class="view" id="view-inpaint"></section>
 
@@ -978,9 +979,10 @@ const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 // the section that was open before the reload: read before anything overwrites it, and the same
 // key the app already keeps for its own "open where the user was last" timer
-const START_VIEW = (() => {   // the task screens of the picture editor belong to its page of tasks
-  try { const v = localStorage.getItem('h3-last-view') || ''; return v === 'qwen' || v === 'inpaint' ? 'imgedit' : v; } catch { return ''; }
+const START_VIEW = (() => {
+  try { return localStorage.getItem('h3-last-view') || ''; } catch { return ''; }
 })();
+const START_ROUTE = location.hash.slice(1);
 
 /* ---------- local server (real ComfyUI) or offline demo ---------- */
 const API = location.protocol.startsWith('http');
@@ -1086,8 +1088,10 @@ function setEngine(on) {
 function syncNavGroups() {
   const view = ($('.view.active')?.id || '').replace('view-', '');
   const mode = view === 'qwen' || view === 'inpaint' ? 'imgedit' : view;
+  const task = view === 'inpaint' ? 'inpaint' : view === 'qwen' ? $('#view-qwen').dataset.imageTask : '';
+  $$('.nav[data-image-task]').forEach(button => button.classList.toggle('active', button.dataset.imageTask === task));
   $$('.nav-group').forEach(group => {
-    const active = !!group.querySelector(`.nav[data-view="${mode}"]`);
+    const active = !!group.querySelector(`.nav[data-view="${mode}"]`) || (group.id === 'navVideo' && view === 'videos');
     group.querySelector('summary').classList.toggle('active', active);
     if (active) group.open = true;
   });
@@ -1208,23 +1212,53 @@ setInterval(pollSystem, 2000);
 const normItem = it => ({ ...it, date: new Date(it.date) });
 
 /* ---------- navigation ---------- */
-// the user has already gone somewhere themselves: the late "open the page you were on last time" must not take them back
-let navByUser = false;
+// Fragment routes work on the existing server and preserve links when hosted remotely.
+let restoringRoute = false;
+let pendingImageTask = '';
+const IMAGE_ROUTES = new Set(['edit', 'inpaint', 'bg', 'outpaint', 'sheet', 'story']);
+function routeFor(view, task = '') {
+  if (view === 'imgedit') return '/image';
+  return task ? `/image/${task}` : view === 'inpaint' ? '/image/inpaint' : `/${view}`;
+}
+function finishNavigation(view) {
+  const task = view === 'qwen' ? pendingImageTask : '';
+  if (task) $('#view-qwen')._solo?.(task);
+  else if (view === 'qwen') $('#view-qwen')._plain?.();
+  const route = routeFor(view, task);
+  try { localStorage.setItem('h3-last-view', route); } catch {}
+  if (location.hash !== '#' + route) {
+    history[restoringRoute ? 'replaceState' : 'pushState'](null, '', '#' + route);
+  }
+  syncNavGroups();
+}
 $$('.nav[data-view]').forEach(b => b.onclick = () => {
-  navByUser = true;
-  if (b.dataset.view !== 'custom') { try { localStorage.setItem('h3-last-view', b.dataset.view); } catch {} }   // the program opens on the page where the user was last
   $$('.nav').forEach(n => n.classList.toggle('active', n === b));   // highlight the selected mode within its group
   $$('.view').forEach(v => v.classList.toggle('active', v.id === 'view-' + b.dataset.view));
   window.h3Modes?.activate(b.dataset.view);   // the section that was open gives back what it started
+  finishNavigation(b.dataset.view);
+});
+$$('.nav-group').forEach(group => {
+  group.querySelector('summary').onclick = e => {
+    if (e.target.closest('.nav-chevron')) return;
+    e.preventDefault();
+    goTo(group.id === 'navImage' ? 'imgedit' : 'videos');
+    group.open = true;
+  };
 });
 // a link to one section (#montage, #loras, #library…): useful for bookmarks, shortcuts and the test scripts
-const openSection = () => {
-  const h = location.hash.slice(1);
-  const b = h && document.querySelector(`.nav[data-view="${h}"]`);
-  if (b) b.click();
-};
+function openRoute(route) {
+  const value = route.replace(/^\//, '');
+  const task = value.startsWith('image/') ? value.slice(6) : '';
+  const view = task ? (task === 'inpaint' ? 'inpaint' : 'qwen') : value === 'image' ? 'imgedit' : value;
+  if ((task && !IMAGE_ROUTES.has(task)) || !/^[a-z]+$/.test(view) || !$('#view-' + view)) return false;
+  const nav = $(`.nav[data-view="${view}"]`);
+  if (nav?.disabled) return false;
+  restoringRoute = true;
+  try { goTo(view, task === 'inpaint' ? '' : task); } finally { restoringRoute = false; }
+  return true;
+}
+const openSection = () => { if (!openRoute(location.hash.slice(1))) openRoute('/presets'); };
 addEventListener('hashchange', openSection);
-setTimeout(openSection, 0);
 
 /* ---------- one header for the whole window ---------- */
 // Every section owns a .head with its title, hint and action. The active one is moved into the
@@ -1798,7 +1832,7 @@ let SET_LOCK = false;
 function setNavLocked(lock) {
   SET_LOCK = lock; firstRun(lock || !localStorage.getItem('h3-seen-settings'));
   // the appearance settings stay reachable while the engine is not set up yet
-  $$('.nav[data-view]').forEach(n => { if (n.dataset.view !== 'models' && n.dataset.view !== 'settings') n.disabled = lock; });
+  $$('.nav[data-view], .nav[data-image-task]').forEach(n => { if (n.dataset.view !== 'models' && n.dataset.view !== 'settings') n.disabled = lock; });
 }
 $('.nav[data-view="models"]').addEventListener('click', async () => {
   try { localStorage.setItem('h3-seen-settings', '1'); } catch {}
@@ -2932,13 +2966,16 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape' && $('#cmpFul
 $('#vwCmpBtn').onclick = () => { const it = byId(openId); if (it) cmpSet($('#vwCmp').hidden, it); };
 const dimTxt = (w, h) => `${w}×${h} · ${(w * h / 1e6).toFixed(1).replace('.', ',')} МП`;
 function closeViewer() { cmpCloseFull(false); clearInterval(CMP_TIMER); $('#vwCmp').innerHTML = ''; $('#vwCmp').hidden = true; $('#viewer').hidden = true; openId = null; const v = $('#viewer video'); v.pause(); v.removeAttribute('src'); }
-function goTo(view) {
-  navByUser = true;
+function goTo(view, task = '') {
   const n = $(`.nav[data-view="${view}"]`);
-  if (n) { n.click(); return; }
+  if (!$('#view-' + view) || n?.disabled) return;
+  pendingImageTask = IMAGE_ROUTES.has(task) ? task : '';
+  if (n) { try { n.click(); } finally { pendingImageTask = ''; } return; }
   $$('.nav').forEach(x => x.classList.remove('active'));   // a page that has no button of its own (a preset)
   $$('.view').forEach(v => v.classList.toggle('active', v.id === 'view-' + view));
   window.h3Modes?.activate(view);
+  finishNavigation(view);
+  pendingImageTask = '';
   if (view === 'swap') swapCheck();
 }
 
@@ -3051,6 +3088,25 @@ const PRESETS = [
   { id: 'qwen', kind: 'image', title: 'Редактирование изображений', need: 'изображение + что изменить',
     text: 'Править по описанию, инпейнт, убрать фон, расширить картинку, лист персонажа и раскадровка.' },
 ];
+// The category page shares the same destinations and icons as its sidebar submenu.
+const videoHub = $('#view-videos');
+videoHub.innerHTML = `<div class="pr-head"><h1>Видео</h1><p>Выберите режим генерации видео или увеличьте готовый ролик</p></div>
+  <div class="pr-grid">${$$('#navVideo .nav[data-view]').map(nav => {
+    const id = nav.dataset.view;
+    const preset = PRESETS.find(item => item.id === id);
+    const text = preset?.text || (id === 'actionsc'
+      ? 'Соберите динамичный ролик из нескольких экшн-сцен.'
+      : 'Увеличьте разрешение готового видео или изображения и добавьте чёткости.');
+    return `<div class="pr-card" role="button" tabindex="0" data-video-mode="${id}">
+      <div class="pr-pic">${nav.querySelector('svg').outerHTML}</div>
+      <div class="pr-body"><b>${nav.textContent.trim()}</b><p>${text}</p></div></div>`;
+  }).join('')}</div>`;
+videoHub.onclick = e => { const card = e.target.closest('[data-video-mode]'); if (card) goTo(card.dataset.videoMode); };
+videoHub.onkeydown = e => {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  const card = e.target.closest('[data-video-mode]');
+  if (card) { e.preventDefault(); goTo(card.dataset.videoMode); }
+};
 const PR = { tab: '', have: {}, q: '', f: 'all', view: 'grid' };
 try { PR.favs = JSON.parse(localStorage.getItem('h3-pfav') || '[]'); } catch { PR.favs = []; }
 const navIcon = id => { const v = $(`.nav[data-view="${id}"] svg`); return v ? v.outerHTML : ''; };
@@ -4122,7 +4178,7 @@ function disposeView(id) {
   });
 }
 ['library', 'queue',
- 'presets', 'models', 'settings', 'upfile'].forEach(id => {
+ 'presets', 'videos', 'models', 'settings', 'upfile'].forEach(id => {
   window.h3Modes.register(id, { leave: () => leaveView(id), dispose: () => disposeView(id) });
 });
 
@@ -4131,12 +4187,6 @@ if (API) afterModules(() => {
   apiGet('/api/status').then(s => {
     firstRun(!s.configured || !localStorage.getItem('h3-seen-settings'));
     if (!s.configured) { setNavLocked(true); goTo('models'); return; }
-    setTimeout(() => {   // back to the page where the user was last time (unless they have already opened another one)
-      if (navByUser) return;
-      let v = ''; try { v = localStorage.getItem('h3-last-view') || ''; } catch {}
-      const n = v && $(`.nav[data-view="${v}"]`);
-      if (n && !n.hidden && !n.disabled && v !== 'models') goTo(v); else if (!v) goTo('presets');   // a first start opens the start page
-    }, 700);
   });
   apiGet('/api/library').then(items => { items.forEach(it => LIB.push(normItem(it))); refreshProjectLists(); });
 }); else
@@ -4261,12 +4311,11 @@ addEventListener('keydown', e => {
 
 /* come back to the section that was open before the reload: the click runs its usual handlers,
    and only then the window is shown (html.booted), so the default video page never flashes */
-if (START_VIEW && START_VIEW !== 'models') {
-  const back = $(`.nav[data-view="${START_VIEW}"]`);
-  if (back && !back.disabled) back.click();
-}
-// show the window on the next frame, once the header of the restored section has moved up as well
-requestAnimationFrame(() => document.documentElement.classList.add('booted'));
+afterModules(() => {
+  if (!openRoute(START_ROUTE || START_VIEW)) openRoute('/presets');
+  // Restore after deferred HTTP modules load, then show the selected section's header.
+  requestAnimationFrame(() => document.documentElement.classList.add('booted'));
+});
 
 // Saving video memory: looping previews/library videos play only while they are on screen (and the window is visible).
 // WebView2 keeps a decoder on the video card for every playing <video>; dozens of hidden ones ate gigabytes next to ComfyUI.
