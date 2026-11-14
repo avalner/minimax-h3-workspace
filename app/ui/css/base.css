@@ -5,60 +5,57 @@
  * had in the old single app.css, so the cascade did not change when the file was split.
  */
 /* ---------- theme tokens: colours, sizes, shadows, the six themes ---------- */
+/* the default theme (no data-theme on <html>): neutral charcoal with an amber accent */
 :root{
-  --bg:#12070a;
-  --bg-2:#1a0a0f;
-  --surface:#221016;
-  --surface-2:#2c141c;
-  --line:#3d1d27;
-  --line-2:#55283a;
-  --text:#f6e9ec;
-  --muted:#b48d97;
-  --dim:#7d5a64;
-  --accent:#e8264f;
-  --accent-2:#ff7a45;
-  --accent-soft:rgba(var(--accent-rgb),.14);
+  --bg:#121317;--bg-2:#181a1f;--surface:#1d1f24;--surface-2:#26282e;--line:#2b2e35;--line-2:#3c4048;
+  --text:#f1f2f4;--muted:#a3a9b3;--dim:#6f7580;--accent:#f7ab3c;--accent-2:#ffc76b;--accent-soft:rgba(247,171,60,.15);
+  /* the letters and icons on an accent-filled button, a chip, a round step: the amber fill of the
+     default theme is light and takes dark letters, so the other five themes set white themselves */
+  --on-accent:#1c1710;
   --ok:#3fd18b;
-  --warn:#ffb547;
+  --warn:#f2c14e;
   --grad:linear-gradient(135deg,var(--accent) 0%,var(--accent-2) 100%);
   --radius:16px;
   --mono:'JetBrains Mono',ui-monospace,monospace;
 }
 :root{
-  --accent-rgb:232,38,79;--accent2-rgb:255,122,69;--bg2-rgb:26,10,15;--surface-rgb:34,16,22;--ov-rgb:18,7,10;
-  --screen:#0b0406;--pink:#ff9fb2;--warn-text:#ffd9a3;--cloud:#9fd4ff;--glow:.18;color-scheme:dark;
+  --accent-rgb:247,171,60;--accent2-rgb:255,199,107;--bg2-rgb:24,26,31;--surface-rgb:29,31,36;--ov-rgb:12,13,16;
+  --screen:#0c0d10;--pink:#ff9fb2;--warn-text:#ffd9a3;--cloud:#9fd4ff;--glow:.07;color-scheme:dark;
   /* the page itself: the window paints it, and the stage bar repeats it so it can hide content without looking like a bar */
   --page-bg:radial-gradient(1200px 600px at 85% -10%,rgba(var(--accent-rgb),var(--glow)),transparent 60%),radial-gradient(900px 500px at -10% 110%,rgba(var(--accent2-rgb),.08),transparent 60%),var(--bg);
+}
+/* the theme the window had before: bordeaux, now one of the six instead of the default */
+:root[data-theme=bordeaux]{
+  --bg:#12070a;--bg-2:#1a0a0f;--surface:#221016;--surface-2:#2c141c;--line:#3d1d27;--line-2:#55283a;
+  --text:#f6e9ec;--muted:#b48d97;--dim:#7d5a64;--accent:#e8264f;--accent-2:#ff7a45;--accent-soft:rgba(232,38,79,.14);
+  --ok:#3fd18b;--warn:#ffb547;--accent-rgb:232,38,79;--accent2-rgb:255,122,69;--bg2-rgb:26,10,15;--surface-rgb:34,16,22;--ov-rgb:18,7,10;
+  --screen:#0b0406;--pink:#ff9fb2;--warn-text:#ffd9a3;--cloud:#9fd4ff;--glow:.18;
+  /* a deep red fill takes white letters, unlike the amber of the default theme */
+  --on-accent:#fff;
 }
 :root[data-theme=light]{
   --bg:#f3f4f6;--bg-2:#eaecef;--surface:#ffffff;--surface-2:#e8eaee;--line:#dcdfe4;--line-2:#c5cad1;
   --text:#22262b;--muted:#59616c;--dim:#8a919b;--accent:#d63a5c;--accent-2:#e8744a;--accent-soft:rgba(214,58,92,.1);
   --ok:#1f9d63;--warn:#b7791f;--accent-rgb:214,58,92;--accent2-rgb:232,116,74;--bg2-rgb:234,236,239;--surface-rgb:255,255,255;--ov-rgb:255,255,255;
-  --screen:#dfe2e7;--pink:#b3243f;--warn-text:#7a4b0b;--cloud:#1d6fb8;--glow:.05;color-scheme:light;
+  --screen:#dfe2e7;--pink:#b3243f;--warn-text:#7a4b0b;--cloud:#1d6fb8;--glow:.05;--on-accent:#fff;color-scheme:light;
 }
 :root[data-theme=gray]{
   --bg:#d9dce1;--bg-2:#cfd3d9;--surface:#e9ebee;--surface-2:#dde0e5;--line:#c3c8cf;--line-2:#aab1ba;
   --text:#1f2328;--muted:#4d5560;--dim:#767e89;--accent:#4a6fa5;--accent-2:#6a8fc4;--accent-soft:rgba(74,111,165,.14);
   --ok:#1f8f5b;--warn:#a86a10;--accent-rgb:74,111,165;--accent2-rgb:106,143,196;--bg2-rgb:207,211,217;--surface-rgb:233,235,238;--ov-rgb:233,235,238;
-  --screen:#c1c6ce;--pink:#a3243c;--warn-text:#6e4309;--cloud:#1d5fa3;--glow:.04;color-scheme:light;
+  --screen:#c1c6ce;--pink:#a3243c;--warn-text:#6e4309;--cloud:#1d5fa3;--glow:.04;--on-accent:#fff;color-scheme:light;
 }
 :root[data-theme=graphite]{
   --bg:#1b1d21;--bg-2:#212429;--surface:#272a30;--surface-2:#30343b;--line:#383c44;--line-2:#4a4f59;
   --text:#e8eaed;--muted:#a0a6b0;--dim:#6f7681;--accent:#5b8def;--accent-2:#7aa7ff;--accent-soft:rgba(91,141,239,.15);
   --accent-rgb:91,141,239;--accent2-rgb:122,167,255;--bg2-rgb:33,36,41;--surface-rgb:39,42,48;--ov-rgb:20,22,25;
-  --screen:#131518;--pink:#ff9fb2;--glow:.06;
+  --screen:#131518;--pink:#ff9fb2;--glow:.06;--on-accent:#fff;
 }
 :root[data-theme=night]{
   --bg:#0f1520;--bg-2:#141c2a;--surface:#1a2333;--surface-2:#222d41;--line:#2a3750;--line-2:#3a4a69;
   --text:#e6ecf5;--muted:#93a2bb;--dim:#62718b;--accent:#2fb5a8;--accent-2:#4fd1c5;--accent-soft:rgba(47,181,168,.15);
   --accent-rgb:47,181,168;--accent2-rgb:79,209,197;--bg2-rgb:20,28,42;--surface-rgb:26,35,51;--ov-rgb:10,15,24;
-  --screen:#090d15;--pink:#ff9fb2;--glow:.07;
-}
-:root[data-theme=forest]{
-  --bg:#171d1a;--bg-2:#1d2521;--surface:#232d28;--surface-2:#2b3731;--line:#33433b;--line-2:#455a4f;
-  --text:#e7eee9;--muted:#9fb0a6;--dim:#6c7f74;--accent:#d4a24c;--accent-2:#e6bf70;--accent-soft:rgba(212,162,76,.14);
-  --accent-rgb:212,162,76;--accent2-rgb:230,191,112;--bg2-rgb:29,37,33;--surface-rgb:35,45,40;--ov-rgb:12,16,14;
-  --screen:#0e1311;--pink:#ff9fb2;--glow:.06;
+  --screen:#090d15;--pink:#ff9fb2;--glow:.07;--on-accent:#fff;
 }
 /* the sidebar can be dragged wider or narrower and hidden altogether: --sbw is its width in pixels */
 :root{--sbw:248px}
@@ -159,7 +156,7 @@ body.cloud-on #mdCloudBox{display:block!important}
 /* the navigation scrolls on its own; the computer panel under it never leaves the screen */
 .side-scroll{display:flex;flex-direction:column;gap:6px;flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:20px 14px 8px}
 .brand{display:flex;align-items:center;gap:12px;padding:4px 8px 22px}
-.brand-mark{width:38px;height:38px;border-radius:12px;background:var(--grad);display:grid;place-items:center;box-shadow:0 8px 24px rgba(var(--accent-rgb),.35)}
+.brand-mark{width:38px;height:38px;border-radius:12px;background:var(--grad);color:var(--on-accent);display:grid;place-items:center;box-shadow:0 8px 24px rgba(var(--accent-rgb),.35)}
 .brand-name{font-weight:800;font-size:17px;letter-spacing:-.01em}
 .brand-sub{font-size:11.5px;color:var(--muted)}
 .nav-label{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);padding:14px 10px 6px}
@@ -237,9 +234,9 @@ html.bg-hidden *{animation-play-state:paused!important}
    and once the section scrolls it keeps that same gap under the header — it never presses against it
    (the sections with a stage bar move it lower, below that bar) */
 .preview{position:sticky;top:var(--vpt);display:grid;gap:14px}
-.starthere{display:none;margin-left:auto;white-space:nowrap;font-size:10px;font-weight:700;letter-spacing:.2px;padding:3px 8px;border-radius:99px;background:#fff;color:var(--accent,#c0405a)}
-body.first-run .nav[data-view="models"]{background:var(--accent,#c0405a);color:#fff;box-shadow:0 0 0 0 rgba(232,38,79,.55);animation:hpulse 2.2s infinite}
-body.first-run .nav[data-view="models"] svg{stroke:#fff}
+.starthere{display:none;margin-left:auto;white-space:nowrap;font-size:10px;font-weight:700;letter-spacing:.2px;padding:3px 8px;border-radius:99px;background:var(--on-accent);color:var(--accent,#c0405a)}
+body.first-run .nav[data-view="models"]{background:var(--accent,#c0405a);color:var(--on-accent);box-shadow:0 0 0 0 rgba(var(--accent-rgb),.55);animation:hpulse 2.2s infinite}
+body.first-run .nav[data-view="models"] svg{stroke:currentColor}
 body.first-run .nav[data-view="models"] .starthere{display:inline-block}
 body.first-run .nav[data-view="models"] .badge{display:none}
 body.first-run .pr-first{display:flex}
@@ -250,7 +247,7 @@ body.first-run .pr-first{display:flex}
 .q-row{display:grid;grid-template-columns:34px 1fr auto;gap:14px;align-items:center;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:12px 14px}
 .q-row.run{border-color:var(--accent)}
 .q-n{width:34px;height:34px;border-radius:50%;background:var(--surface-2);display:grid;place-items:center;font-weight:800;color:var(--muted)}
-.q-row.run .q-n{background:var(--grad);color:#fff}
+.q-row.run .q-n{background:var(--grad);color:var(--on-accent)}
 .q-t{display:flex;align-items:center;gap:8px;font-weight:700}
 .q-tt{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .q-proj{flex:0 0 auto;padding:1px 7px;border-radius:99px;background:var(--surface-2);border:1px solid var(--line);font-size:11px;font-weight:600;color:var(--muted);white-space:nowrap}
@@ -279,7 +276,7 @@ body.first-run .pr-first{display:flex}
 .cmp-l.r{right:10px}
 .cmp-hint{font-size:12px;color:var(--muted);text-align:center;margin-top:6px}
 .cmp-fs{position:absolute;right:10px;bottom:10px;z-index:3;width:38px;height:38px;border-radius:10px;border:0;background:rgba(0,0,0,.7);color:#fff;font-size:19px;cursor:pointer}
-.cmp-fs:hover{background:var(--accent)}
+.cmp-fs:hover{background:var(--accent);color:var(--on-accent)}
 #cmpFull{position:fixed;inset:0;z-index:80;background:rgba(0,0,0,.96);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:2vh 2vw}
 #cmpFull .cmp-in{height:88vh;width:auto;max-width:96vw;max-height:none;margin:0}
 .tl{display:flex;gap:5px;align-items:stretch;margin:6px 0 12px;overflow-x:auto;padding-bottom:4px}

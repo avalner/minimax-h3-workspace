@@ -7,8 +7,10 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
 <script>
-// the saved theme has to be on <html> before the first style is computed, otherwise the window starts red
-try { const t = localStorage.getItem('h3-theme'); if (t) document.documentElement.dataset.theme = t; } catch {}
+// the saved theme has to be on <html> before the first style is computed, otherwise the window starts
+// with the default theme and then fades into the saved one
+// (the amber theme is the default now: the names it used to be chosen by are read as "no name")
+try { const s = localStorage.getItem('h3-theme'); const t = (s === 'amber' || s === 'forest') ? '' : s; if (t) document.documentElement.dataset.theme = t; } catch {}
 // the window stays empty until the app has opened the section the user was in: no flash of the video page
 setTimeout(() => document.documentElement.classList.add('booted'), 1500);
 </script>
@@ -29,7 +31,7 @@ setTimeout(() => document.documentElement.classList.add('booted'), 1500);
   <header class="topbar">
     <div class="brand">
       <div class="brand-mark">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"><path d="M3 12h2M7 7v10M11 4v16M15 8v8M19 10v4M21 12h0"/></svg>
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M3 12h2M7 7v10M11 4v16M15 8v8M19 10v4M21 12h0"/></svg>
       </div>
       <div><div class="brand-name">Minimax H3</div><div class="brand-sub">Workspace · локальная генерация</div><div class="brand-sub" id="appVer" style="opacity:.75"></div></div>
     </div>
@@ -756,16 +758,16 @@ equirements.txt</code><br>
 
       <div class="set-wrap">
         <div class="card">
-          <div class="card-h"><h3>Оформление</h3><span class="hint" id="themeName">Бордо</span></div>
+          <div class="card-h"><h3>Оформление</h3><span class="hint" id="themeName">Янтарь</span></div>
           <div class="set-row">
             <div class="set-lbl"><b>Тема</b><small>цвет кнопок, подсветки и фона</small></div>
             <div class="themes themes-set" id="themes" title="Тема оформления">
-              <button data-t="" style="background:#e8264f" title="Бордо"></button>
+              <button data-t="" style="background:#f7ab3c" title="Янтарь"></button>
               <button data-t="light" style="background:#f3f4f6" title="Светлая"></button>
               <button data-t="gray" style="background:#b7bcc4" title="Серая"></button>
               <button data-t="graphite" style="background:#272a30" title="Графит"></button>
               <button data-t="night" style="background:#2fb5a8" title="Ночь"></button>
-              <button data-t="forest" style="background:#d4a24c" title="Лес"></button>
+              <button data-t="bordeaux" style="background:#e8264f" title="Бордо"></button>
             </div>
           </div>
           <div class="set-row">
@@ -774,7 +776,7 @@ equirements.txt</code><br>
           </div>
           <div class="set-acts">
             <button class="btn" id="setReset" type="button">Вернуть по умолчанию</button>
-            <span class="hint">тема «Бордо», масштаб 100 %</span>
+            <span class="hint">тема «Янтарь», масштаб 100 %</span>
           </div>
         </div>
 
@@ -4158,7 +4160,7 @@ if (API) afterModules(() => {
 // theme switcher
 (() => {
   const KEY = 'h3-theme', root = document.documentElement, box = document.getElementById('themes');
-  const NAMES = { '': 'Бордо', light: 'Светлая', gray: 'Серая', graphite: 'Графит', night: 'Ночь', forest: 'Лес' };
+  const NAMES = { '': 'Янтарь', light: 'Светлая', gray: 'Серая', graphite: 'Графит', night: 'Ночь', bordeaux: 'Бордо' };
   const apply = t => {
     if (t) root.setAttribute('data-theme', t); else root.removeAttribute('data-theme');
     box.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.t === (t || '')));
@@ -4166,6 +4168,7 @@ if (API) afterModules(() => {
     if (typeof drawWave === 'function' && typeof peaks !== 'undefined' && peaks && peaks.length) { try { drawWave(); } catch {} }
   };
   let cur = ''; try { cur = localStorage.getItem(KEY) || ''; } catch {}
+  if (cur === 'amber' || cur === 'forest') { cur = ''; try { localStorage.setItem(KEY, ''); } catch {} }   // the amber theme is the default now, by no name
   apply(cur);
   box.addEventListener('click', e => {
     const b = e.target.closest('button'); if (!b) return;
