@@ -836,7 +836,7 @@ function buildInpaint(scope) {
         </div></div>
       <div class="card"><div class="card-h"><h3><span class="n">2</span>Что должно быть на закрашенном месте</h3></div>
         <textarea class="ip-prompt" placeholder="Например: белая майка вместо красной куртки. Лицо, фон и свет оставить как было."></textarea>
-        <div class="ta-foot"><span class="hint">Скажите и что нарисовать, и что оставить прежним — так результат точнее</span></div>
+        <div class="ta-foot"><span class="hint">Скажите и что нарисовать, и что оставить прежним — так результат точнее. Просьбу продолжить линии и штриховку вокруг программа добавит сама</span></div>
         <div class="row" style="margin-top:12px"><div class="row-l">Размер результата</div>
           <div class="seg ip-q" style="grid-template-columns:1fr 1fr"><button data-s="1">Обычный<small>~1 МП, быстро</small></button><button data-s="2">Крупный<small>~2 МП, дольше</small></button></div></div>
         ${imgSeedBox(S)}

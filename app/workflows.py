@@ -1724,14 +1724,32 @@ def qwen_edit_graph(m, prompt, image, megapixels, seed, size=None, extras=()):
     return _qwen_base(m, image, megapixels, prompt, seed, size, extras)
 
 
-def qwen_inpaint_graph(m, prompt, image, crop, mask, x, y, megapixels, seed, size=None, feather=8):
+# The redrawn area used to end exactly on the brush stroke: the lines and hatching of the neighbourhood stopped dead at
+# its edge and the seam showed as a break in the strokes. The sentence asks the model to carry the surrounding drawing
+# into the painted area; it goes after the user's text, so the user still says what to draw there.
+INPAINT_PROMPT = ("Continue the lines, hatching and shading of the surrounding picture into the redrawn area, "
+                  "keeping their direction, density and style; leave no visible edge.")
+
+
+def inpaint_prompt(text):
+    """The user's text plus the sentence about the surroundings (never twice: the agent may already have written it)."""
+    text = (text or "").strip()
+    if not text:
+        return INPAINT_PROMPT
+    return text if INPAINT_PROMPT in text else f"{text} {INPAINT_PROMPT}"
+
+
+def qwen_inpaint_graph(m, prompt, image, crop, mask, x, y, megapixels, seed, size=None, feather=8, grow=6):
     """Local edit on Qwen Image 2.1: `crop` is the picture cut around the painted region (client-side), `mask` its
     brush strokes, `x`/`y` the crop's place in the original `image`, `size` the crop's own width and height.
 
     Three things keep the result honest:
     * the crop is never blown up beyond its own pixels — a small crop is generated at its own size, so the model
       does not invent detail that is thrown away on the way back (that upscale-and-squeeze made flowers look plastic);
-    * the painted area becomes a soft mask (ImageBlur) both for the sampler and for the paste, so there is no seam;
+    * the painted area is grown by `grow` pixels and only then blurred (ImageBlur), so the soft edge lies outside the
+      stroke: the model redraws a little of the neighbouring drawing and joins its line up instead of cutting it, which
+      is what removes the break at the junction of the hatching; the same soft mask is used for the sampler and the
+      paste, so there is no seam;
     * the latent carries a noise mask, so only the brushed part is denoised and the rest of the crop stays exactly
       as it is: the model works against the real neighbours instead of inventing a whole new picture around them.
     The redrawn crop is scaled back to the crop's own size and pasted into the untouched original."""
@@ -1740,7 +1758,9 @@ def qwen_inpaint_graph(m, prompt, image, crop, mask, x, y, megapixels, seed, siz
         mp = max(0.25, min(megapixels, size[0] * size[1] / 1048576))
     g, stages = _qwen_base(m, crop, mp, prompt, seed)
     g["12"] = {"class_type": "InvertMask", "inputs": {"mask": ["21", 1]}}   # LoadImage's MASK is 1-alpha
-    g["13"] = {"class_type": "MaskToImage", "inputs": {"mask": ["12", 0]}}
+    g["24"] = {"class_type": "GrowMask", "inputs": {   # +6 px before the blur: the soft edge must lie outside the stroke
+        "mask": ["12", 0], "expand": grow, "tapered_corners": False}}
+    g["13"] = {"class_type": "MaskToImage", "inputs": {"mask": ["24", 0]}}
     g["14"] = {"class_type": "ImageBlur", "inputs": {"image": ["13", 0], "blur_radius": feather, "sigma": feather / 2.0}}
     g["15"] = {"class_type": "ImageToMask", "inputs": {"channel": "red", "image": ["14", 0]}}   # soft mask, crop scale
     g["16"] = {"class_type": "ImageScaleToTotalPixels", "inputs": {   # the same mask at the model's scale
@@ -1759,7 +1779,7 @@ def qwen_inpaint_graph(m, prompt, image, crop, mask, x, y, megapixels, seed, siz
     g["23"] = {"class_type": "ImageCompositeMasked", "inputs": {
         "destination": ["20", 0], "source": src, "mask": ["15", 0], "x": x, "y": y, "resize_source": False}}
     g["11"]["inputs"]["images"] = ["23", 0]
-    stages.update({"12": "encode", "13": "encode", "14": "encode", "15": "encode", "16": "encode",
+    stages.update({"12": "encode", "24": "encode", "13": "encode", "14": "encode", "15": "encode", "16": "encode",
                    "17": "encode", "18": "encode", "19": "encode", "20": "load", "21": "load",
                    "22": "decode", "23": "decode"})
     return g, stages

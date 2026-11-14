@@ -478,6 +478,9 @@ class GenerateRoutes:
         prompt = form.get("prompt", "").strip()
         if not prompt:
             raise web.HTTPBadRequest(text="Напишите, что должно быть в закрашенном месте")
+        # the sentence about the surroundings goes after the user's text: it is what joins the lines and hatching of the
+        # neighbourhood to the redrawn area instead of cutting them at the edge of the stroke
+        prompt = wf.inpaint_prompt(prompt)
         def whole(key):
             """A whole number out of the form. The browser can send "123.4" (mouse coordinates are fractional):
             it must be rounded, never dropped — a dropped offset used to paste the crop at the corner."""
